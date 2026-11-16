@@ -1,0 +1,44 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "step_us_b1",
+  "value": 4520,
+  "note": "15.14 GB of weights read once per step at 3350 GB/s; nothing can be faster at B=1"
+ },
+ {
+  "name": "target: 1.10x the fastest general engine",
+  "metric": "step_us_b1",
+  "value": 5515,
+  "note": "6066 / 1.10 (SGLang 0.5.18 with torch.compile); also required at B=8: 6215 us per step (6836 / 1.10); judged on the like-for-like workload (prompt 64, 1024 greedy tokens)"
+ },
+ {
+  "name": "SGLang 0.5.18 + torch.compile (fastest general engine)",
+  "metric": "step_us_b1",
+  "value": 6066,
+  "note": "server end to end, trial of 2026-11-10; B=8: 6836 us per step"
+ },
+ {
+  "name": "SGLang 0.5.23",
+  "metric": "step_us_b1",
+  "value": 6689,
+  "note": "server end to end, 1e6 / decode tok/s, trial of 2026-11-09; B=8: 7115 us per step"
+ },
+ {
+  "name": "vLLM 0.32.0",
+  "metric": "step_us_b1",
+  "value": 6789,
+  "note": "server end to end, trial of 2026-11-09; B=8: 7077 us per step"
+ },
+ {
+  "name": "MPK (megakernel compiler) @ 97de2592",
+  "metric": "step_us_b1",
+  "value": 7252,
+  "note": "server end to end, trial of 2026-11-09; B=8: 7486 us per step"
+ },
+ {
+  "name": "ForgeMegakernel, as reported in its paper",
+  "metric": "step_us_b1",
+  "value": 5601,
+  "note": "5601-5847 us per token inside SGLang on the same GPU model (arXiv 2609.12379); not reproduced here"
+ }
+]

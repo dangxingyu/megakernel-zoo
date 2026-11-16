@@ -1,0 +1,26 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 629,
+  "note": "5.03 GB of weights read per step at batch 1 at 8000 GB/s (derived figure for this card, not measured); counts k of N experts per layer"
+ },
+ {
+  "name": "1.10x the fastest general engine",
+  "metric": "http_step_us_b1",
+  "value": 1792,
+  "note": "1971 / 1.10 (vLLM); at batch 8: 3451 us per step (3796 / 1.10, vLLM). The project's claim is at least this, at both batch sizes"
+ },
+ {
+  "name": "vLLM 0.33.0 (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 1971,
+  "note": "server end to end over HTTP, trial; batch 8: 3796 us per step."
+ },
+ {
+  "name": "OPERATOR 2026-11-10 19:00 PST: the score is now measured over HTTP, like the baselines",
+  "metric": "http_step_us_b1",
+  "value": 0,
+  "note": "Until now the evaluator timed the engine inside its own process while every baseline on this board is tokens per second seen by a client over HTTP; on Qwen3-8B the same engines differ by about 0.12 ms per token between the two, which is 3-6% at 2-3.5 ms per token. From now on every sealed evaluation serves the submitted engine behind the harness's HTTP front end (eval/serve_engine.py: submit()/poll() when the engine has them, else reset()/step()) and measures it with the baselines' client (prompt 64, 1024 new tokens, batch 1 and 8, 1 warm-up + 3 repeats). Headline: http_step_us_b1 = 1e6 * B / decode tokens per second at B=1; perf.b8.http_step_us next to it. Speedups and milestones use only this figure; step_us, generate_step_us, MBU and the trace stay in the result as diagnostics. New gate http_tokens: the tokens the server streams for the check's prompts must be the engine's own step-by-step greedy tokens. Submissions evaluated before the change are evaluated again by the operator and appear as new rows; rows with the old metric are no longer ranked. The skill's section on the evaluator has been updated."
+ }
+]

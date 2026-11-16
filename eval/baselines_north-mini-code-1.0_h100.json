@@ -1,0 +1,24 @@
+{
+ "model": "CohereLabs/North-Mini-Code-1.0",
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "hw": "h100",
+ "provisional": true,
+ "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy; 2 server starts x 3 repeats, eval/client.py through scripts/compare.sh). Both systems were measured by the same client on one H100 each, in two jobs. The engine under test is timed in its own process (step, no sampling, no HTTP): the easier calibre, so a speedup here is an upper bound on the end-to-end one until the engine is measured behind the same client.",
+ "source": "megakernel-mm-compare-north-1 (Cohere's server: 276.6 tok/s at B=1, 1114.9 at B=8) and megakernel-mm-compare-north-2 (vLLM: 198.1 / 862.3), 2026-11-10. Cohere's server streams only on its chat endpoint: its requests carry the chat template (180 prompt tokens instead of 64) and at B=8 it sends several tokens per chunk. vLLM needed --max-model-len 32768 (the model's own 500000 does not leave room for the KV cache next to 61 GB of weights). SGLang does not list this model. Earlier bring-up trial megakernel-bringup-cohere-3 (512 tokens): 286.2 / 1113.3 tok/s; Cohere's own decode-only runner: 287 / 977",
+ "systems": {
+  "vllm": {
+   "version": "0.32.0, default flags plus --max-model-len 32768",
+   "general_engine": true,
+   "b1": 5049,
+   "b8": 9277
+  },
+  "cohere": {
+   "version": "@ 67d0b9ca, its own server at batch size 8",
+   "general_engine": false,
+   "b1": 3616,
+   "b8": 7176,
+   "note": "hand-written megakernel for this model by its authors"
+  }
+ },
+ "eval_timeout_scale": 3
+}

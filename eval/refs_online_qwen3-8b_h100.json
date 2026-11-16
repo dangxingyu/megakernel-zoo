@@ -1,0 +1,6 @@
+[
+ {"name": "SGLang 0.5.23 on the same requests", "metric": "slo_share_r2", "value": 0.672, "note": "share within service levels (TTFT <= 5 s and mean time between tokens <= 0.1 s) at nominal 2 req/s, 120 s; TTFT p50 1.6 s, p90 5.2 s; time between tokens p99 2.6 s; longest stall 7.1 s; server end to end, one run"},
+ {"name": "vLLM 0.32.0 on the same requests", "metric": "slo_share_r2", "value": 0.640, "note": "TTFT p50 1.8 s, p90 4.9 s; time between tokens p99 0.32 s; longest stall 0.5 s; server end to end, one run"},
+ {"name": "target: clearly above both engines", "metric": "slo_share_r2", "value": 0.80, "note": "and time between tokens p99 under 0.1 s: a prefill must not stall the streams that are decoding"},
+ {"name": "steady decode of the inherited engine (offline, for orientation)", "metric": "slo_share_r2", "value": 0, "note": "5.4 ms per token at B=1 and 6.1 ms at B=8 on a 64-token prompt; 1.12x the fastest general engine. Not an online number"}
+]

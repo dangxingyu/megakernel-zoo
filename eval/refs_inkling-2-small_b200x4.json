@@ -1,0 +1,20 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 603,
+  "note": "19.29 GB of weights read per step at batch 1 at 32000 GB/s (four times the derived per-card figure, not measured); counts k of N experts per layer"
+ },
+ {
+  "name": "1.10x the fastest general engine",
+  "metric": "http_step_us_b1",
+  "value": 4283,
+  "note": "4711 / 1.10 (SGLang); at batch 8: 6004 us per step (6604 / 1.10, SGLang). The project's claim is at least this, at both batch sizes"
+ },
+ {
+  "name": "SGLang PR #50186 image lmsysorg/sglang:dev-inkling-2-small (arm64 sha256:198af079c599) (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 4711,
+  "note": "server end to end over HTTP, trial; batch 8: 6604 us per step. TP4 attention + EP4 experts; 93.5 GB of weights per card in the checkpoint's formats; BF16 K/V"
+ }
+]

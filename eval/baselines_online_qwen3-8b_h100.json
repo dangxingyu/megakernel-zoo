@@ -1,0 +1,20 @@
+{
+ "model": "Qwen/Qwen3-8B",
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "provisional": true,
+ "workload": "Mooncake FAST'25 tool & agent trace (commit aaa49180), first 120 s at each nominal rate, inputs cut at 32768 tokens, outputs at 1024, greedy, ignore_eos; prompts synthesized from the trace's 512-token prefix hashes",
+ "service_levels": {"ttft_s": 5.0, "tbt_s": 0.1},
+ "calibre": "server end to end over HTTP, client clock, one 120 s replay per rate from a cold prefix cache (megakernel-e16-vllm-try1, megakernel-e16-sglang-try1, 2026-11-10). The engine under test is measured in process, which is the easier calibre.",
+ "systems": {
+  "vllm": {"version": "0.32.0, default flags",
+   "r0.5": {"offered_req_s": 0.44, "slo_share": 0.642, "ttft_p50_ms": 1253, "ttft_p90_ms": 5344, "tbt_p99_ms": 320.6, "gap_max_ms": 451, "output_tok_s": 135},
+   "r1": {"offered_req_s": 0.86, "slo_share": 0.728, "ttft_p50_ms": 1819, "ttft_p90_ms": 5128, "tbt_p99_ms": 268.9, "gap_max_ms": 449, "output_tok_s": 201},
+   "r2": {"offered_req_s": 1.57, "slo_share": 0.640, "ttft_p50_ms": 1798, "ttft_p90_ms": 4925, "tbt_p99_ms": 320.6, "gap_max_ms": 503, "output_tok_s": 305},
+   "r4": {"offered_req_s": 3.07, "slo_share": 0.418, "ttft_p50_ms": 4126, "ttft_p90_ms": 12369, "tbt_p99_ms": 304.5, "gap_max_ms": 721, "output_tok_s": 554}},
+  "sglang": {"version": "0.5.23, default flags",
+   "r0.5": {"offered_req_s": 0.44, "slo_share": 0.585, "ttft_p50_ms": 2635, "ttft_p90_ms": 5451, "tbt_p99_ms": 1496.6, "gap_max_ms": 7001, "output_tok_s": 135},
+   "r1": {"offered_req_s": 0.86, "slo_share": 0.786, "ttft_p50_ms": 1514, "ttft_p90_ms": 4737, "tbt_p99_ms": 1583.6, "gap_max_ms": 6582, "output_tok_s": 201},
+   "r2": {"offered_req_s": 1.57, "slo_share": 0.672, "ttft_p50_ms": 1636, "ttft_p90_ms": 5166, "tbt_p99_ms": 2598.1, "gap_max_ms": 7050, "output_tok_s": 305},
+   "r4": {"offered_req_s": 3.07, "slo_share": 0.427, "ttft_p50_ms": 5072, "ttft_p90_ms": 14000, "tbt_p99_ms": 1342.3, "gap_max_ms": 7430, "output_tok_s": 546}}
+ }
+}

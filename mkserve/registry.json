@@ -1,0 +1,183 @@
+{
+ "note": "One entry per model and card. An engine is the source a run submitted, as it was scored, except that internal path names in comments were replaced; sha256 is over the source directory. kind online = it has submit()/poll() and admits requests while others decode; offline = step()/generate() only.",
+ "models": {
+  "Qwen/Qwen3-8B": {
+   "h100": {
+    "default": "online-b",
+    "engines": {
+     "online-b": {
+      "track": "B",
+      "kind": "online",
+      "source": "../engines/qwen3-8b_h100/online-b",
+      "sha256": "625f5277a468f285",
+      "from": "run s3-q8b-online-a1, submission s0039",
+      "max_batch": 64,
+      "max_context": 34816,
+      "what": "float32 residual stream (not bit-identical to track A); continuous admission and chunked prefill inside the engine; greedy. A request's tokens are the same alone and under load in every test of the audit. The engine does not check its inputs (mkserve does) and matches shared prefixes by a 64-bit hash without comparing tokens.",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "online-a": {
+      "track": "A",
+      "kind": "online",
+      "source": "../engines/qwen3-8b_h100/online-a",
+      "sha256": "0aa073c9b4102e33",
+      "from": "run s3-q8b-online-a1, submission s0038",
+      "max_batch": 64,
+      "max_context": 34816,
+      "what": "the checkpoint's BF16 weights; continuous admission and chunked prefill inside the engine; greedy. Under load a request's tokens can differ from the same request alone at near-ties. The engine does not check its inputs (mkserve does) and matches shared prefixes by a 64-bit hash without comparing tokens.",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/qwen3-8b_h100/offline-b",
+      "sha256": "96f71fab041ba1c9",
+      "from": "run s10-q8b-h100-f1, submission s0002",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "12-bit lossless weights, float32 residual; the fastest steady decode; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/qwen3-8b_h100/offline-a",
+      "sha256": "f435eaa477a5098e",
+      "from": "run s10-q8b-h100-f1, submission s0003",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the general engines' number formats; step mode",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     }
+    }
+   }
+  },
+  "RecursiveSI/flint": {
+   "b200": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/flint_b200/offline-a",
+      "sha256": "6dd34618b3ad6ee8",
+      "from": "run s4-flint-b200-a2, submission s0077",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's BF16 formats; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/flint_b200/offline-b",
+      "sha256": "1dbc234aa69135a7",
+      "from": "run s4-flint-b200-a2, submission s0055",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "float32 intermediates (outputs differ from offline-a); steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     }
+    }
+   }
+  },
+  "Qwen/Qwen3.8-27B": {
+   "b200": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/qwen3.8-27b_b200/offline-a",
+      "sha256": "c984e27f0200de8b",
+      "from": "run s9-qwen38-27b-b200-f1, submission s0022",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's BF16 weights; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/qwen3.8-27b_b200/offline-b",
+      "sha256": "865d811d7ca068be",
+      "from": "run s9-qwen38-27b-b200-f1, submission s0023",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "12-bit lossless weights, logits bit-identical to offline-a; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     }
+    }
+   }
+  },
+  "CohereLabs/North-Mini-Code-1.0": {
+   "h100": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/north-mini-code-1.0_h100/offline-a",
+      "sha256": "fa002c2081330267",
+      "from": "run s4-north-h100-a1, submission s0022",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's BF16 formats; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/north-mini-code-1.0_h100/offline-b",
+      "sha256": "b287cacbeecd9d1e",
+      "from": "run s4-north-h100-a1, submission s0021",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "12-bit weights, layer-0 tables, certified int8 head; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     }
+    }
+   }
+  },
+  "thinkingmachines/Inkling-2-Small": {
+   "b200x4": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/inkling-2-small_b200x4/offline-a",
+      "sha256": "b334a3f0ded2bcc2",
+      "from": "run s7-inkling2s-b200x4-fb1, submission s0034",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's NVFP4 / MXFP8 experts and BF16 elsewhere; one GB200 node, four cards; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/inkling-2-small_b200x4/offline-b",
+      "sha256": "8c1afeed6ae7e786",
+      "from": "run s7-inkling2s-b200x4-fb1, submission s0036",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "12-bit unembedding and layer-0 tables on the kernel of offline-a; logits bit-identical to offline-a; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "online-a": {
+      "track": "A",
+      "kind": "online",
+      "source": "../engines/inkling-2-small_b200x4/online-a",
+      "sha256": "b748df1f1f975959",
+      "from": "run s8-inkling2s-b200x4-on1, submission s0043",
+      "max_batch": 64,
+      "max_context": 34816,
+      "what": "the checkpoint's formats; requests admitted as they arrive (up to 128 in flight), chunked prompt processing, paged K/V and prefix reuse checked token by token inside the engine; requests beyond its limits are refused; greedy",
+      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     }
+    }
+   }
+  }
+ }
+}
