@@ -1,52 +1,131 @@
+<div align="center">
+
 # megakernel-zoo
 
-A megakernel is an inference engine compiled into one GPU kernel for one model on one type of card: the layers, the choice
-of the next token and the loop over tokens run inside it, and nothing on the GPU waits for a host scheduler between tokens.
+**Model-specific megakernel inference engines for LLM decoding, written by coding agents**
 
-This repository has
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
+[![CUDA](https://img.shields.io/badge/CUDA-13.x-76B900.svg?logo=nvidia&logoColor=white)](#installation)
+[![GPUs](https://img.shields.io/badge/GPU-H100_%7C_B200-76B900.svg)](#supported-models)
+[![Blog](https://img.shields.io/badge/Blog-A_Megakernel_per_Model-1f5db8.svg)](https://dangxingyu.github.io/megakernel-dashboard/)
 
-- **engines** for five open models, each written by Claude in an autonomous run and scored by a fixed evaluator;
-- **`mkserve`**, a small server that puts an engine behind the OpenAI API;
-- **the suite** the engines were tested and timed with, including the comparison with vLLM and SGLang;
-- **the autoresearch kit**: the skill, the prompts and the tools to run such a run on your own card with your own agent;
-- **the record of every run**: each submission's source, the agent's hypothesis for it, and its result.
+[Blog post](https://dangxingyu.github.io/megakernel-dashboard/) | [Benchmark data](https://dangxingyu.github.io/megakernel-dashboard/full.html) | [Quick start](#quick-start) | [Benchmarks](#benchmarks) | [Build your own engine](#build-your-own-engine) | [Contributing](CONTRIBUTING.md)
 
-The write-up, with every measurement and how it was made: https://dangxingyu.github.io/megakernel-dashboard/
+</div>
 
-## Results
+<p align="center"><img src="assets/demo.gif" width="760" alt="The same question answered by a megakernel engine and by the fastest general engine on the same card, replayed at the recorded speed"></p>
 
-Time per token over HTTP with a 64-token prompt and 1,024 greedy new tokens, every system served in turn on the same card,
-three rounds. The factor is the fastest general engine's time over ours, with one sequence and with eight.
+**megakernel-zoo** is a collection of LLM inference engines, each built for exactly one checkpoint on one GPU
+architecture. A megakernel fuses the whole autoregressive decode path (every transformer layer, next-token selection and
+the token feedback loop) into a single GPU program: one persistent CUDA kernel for the steady-decode engines, a
+device-scheduled kernel loop for the serving engines. Steady-state decoding performs no per-operator kernel launch and no
+host–device synchronization, and the kernel's work partitioning, weight layout and memory traffic are fixed at compile
+time for the checkpoint's shapes.
 
-| Model | Card | Fastest general engine, ms | Track A, ms | Track A | Track B, ms | Track B |
-|---|---|---|---|---|---|---|
-| Qwen3-8B | H100 | SGLang 6.13 / 6.84 | 5.38 / 5.64 | **1.14×** / **1.21×** | 4.16 / 4.47 | **1.47×** / **1.53×** |
-| North Mini Code | H100 | Cohere's own megakernel 3.62 / 7.07 | 2.54 / 6.90 | **1.43×** / 1.02× | 2.15 / 6.05 | **1.68×** / **1.17×** |
-| flint | B200 | vLLM 1.99 / 3.79 | 1.48 / 3.40 | **1.35×** / **1.12×** | 1.48 / 3.95 | **1.35×** / 0.96× |
-| Qwen3.8-27B | B200 | SGLang 9.53 / 10.23 | 8.45 / 8.89 | **1.13×** / **1.15×** | 7.71 / 8.18 | **1.24×** / **1.25×** |
-| Inkling-2-Small | 4 × B200 | SGLang 4.74 / 6.55 | 3.30 / 5.39 | **1.43×** / **1.22×** | 3.29 / 5.38 | **1.44×** / **1.22×** |
+Every engine in this repository was written by a coding agent (Claude) in an autonomous optimization run against a fixed
+evaluator, and audited afterwards. The repository contains the engines, an OpenAI-compatible server for them, the
+evaluator and benchmark suite, and the tooling to run the same kind of optimization on another model or GPU.
 
-Track A keeps the checkpoint's number formats and data flow: the same computation, organised differently. Track B may also
-change how the model is stored and what is computed once at load, without changing the function. The track-B engines of
-Qwen3.8-27B and Inkling-2-Small give logits bit-identical to track A; the other three keep intermediate values in float32
-where the standard implementation rounds to BF16, so they are at least as precise but not bit-identical.
+- **Faster steady-state decoding.** With the checkpoint's own number formats (track A), 1.13–1.43× the speed of the
+  fastest general engine (vLLM, SGLang) at batch 1 on five models from 8 B to 594 B parameters; up to 1.68× with
+  model-specific lossless weight storage (track B).
+- **Stall-free serving.** On a production request trace at 8 requests per second, the serving engine for
+  Inkling-2-Small keeps 99.2% of requests within the service levels (SGLang: 81.7%), with a longest stall of 0.15 s
+  (SGLang: 4.4 s).
+- **Drop-in server.** `mkserve` exposes any engine through the OpenAI completions and chat-completions API, with
+  streaming and sampling.
+- **Verified numerics.** An engine is timed only after its logits match a float64 reference of the model at every
+  position; the evaluator, the reference builder and the extended checks are part of the repository.
+- **Reproducible.** The source, hypothesis and score of all 412 submissions of the 12 agent runs are in [`runs/`](runs).
 
-## Serve an engine
+## News
+
+- **2026-11-16** Initial release: 13 engines for 5 models on H100 and B200, `mkserve`, the evaluation suite and the
+  autoresearch kit. Write-up: [A Megakernel per Model](https://dangxingyu.github.io/megakernel-dashboard/).
+
+## Contents
+
+- [Supported models](#supported-models)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Benchmarks](#benchmarks)
+- [Evaluation suite](#evaluation-suite)
+- [Build your own engine](#build-your-own-engine)
+- [Repository layout](#repository-layout)
+- [Limitations](#limitations)
+- [Citation](#citation)
+
+## Supported models
+
+| Model | Parameters | GPU | Steady-decode engines | Serving engines |
+|---|---|---|---|---|
+| [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) | 8.2 B, dense | 1 × H100 | track A, track B | track A, track B |
+| [CohereLabs/North-Mini-Code-1.0](https://huggingface.co/CohereLabs/North-Mini-Code-1.0) | 30.5 B, MoE (128 experts per layer) | 1 × H100 | track A, track B | – |
+| [RecursiveSI/flint](https://huggingface.co/RecursiveSI/flint) | 39.8 B, MoE (256 experts per layer) | 1 × B200 | track A, track B | – |
+| [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | 27.8 B, dense | 1 × B200 | track A, track B | – |
+| [thinkingmachines/Inkling-2-Small](https://huggingface.co/thinkingmachines/Inkling-2-Small) | 594 B, MoE (384 experts per layer, 4-bit experts) | 4 × B200 | track A, track B | track A |
+
+**Track A** keeps the checkpoint's weights, number formats and data flow, and changes only how the computation is
+organized on the card. **Track B** may additionally change how the model is stored and what is precomputed at load time,
+as long as the function is unchanged in exact arithmetic (no quantization, pruning or approximation). The track-B engines
+of Qwen3.8-27B and Inkling-2-Small are bit-identical to track A; the other three keep intermediates in float32 where the
+reference implementation rounds to BF16, so they are at least as accurate but not bit-identical.
+
+A **steady-decode** engine holds up to 8 sequences and a 2,048-token context and is the fastest at decoding. A **serving**
+engine admits requests while others decode, processes prompts in chunks inside the kernel, pages K/V memory and reuses
+shared prompt prefixes (64 sequences, 34,816-token context).
+
+## Installation
+
+**Prerequisites**
+
+- The GPU an engine was built for: NVIDIA H100 (sm_90a) or B200 (sm_100a); Inkling-2-Small needs a node with four B200.
+- CUDA toolkit 13.x with `nvcc` on `PATH` (engines are compiled from source on first use). Tested with CUDA 13.2.
+- Python 3.10 or newer and PyTorch with CUDA support. Tested with Python 3.12 and PyTorch 2.15.
+
+**Install from source**
 
 ```bash
-uv venv && source .venv/bin/activate
-uv pip install torch numpy safetensors tokenizers aiohttp jinja2 huggingface_hub
-python -m mkserve list
-python -m mkserve serve Qwen/Qwen3-8B            # needs the engine's card (here an H100) and nvcc on PATH
+git clone https://github.com/dangxingyu/megakernel-zoo.git
+cd megakernel-zoo
+pip install -e .            # installs the `mkserve` command
 ```
+
+The evaluation scripts create their own environments with [`uv`](https://docs.astral.sh/uv/).
+
+## Quick start
+
+List the engines and serve one (the weights are downloaded from Hugging Face; `--model-dir` uses a local snapshot):
 
 ```bash
-curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model": "Qwen/Qwen3-8B", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 64, "stream": true}'
+mkserve list
+mkserve serve Qwen/Qwen3-8B --port 8000              # the default engine of this model on this card
+mkserve serve Qwen/Qwen3-8B --engine offline-b       # a specific engine
 ```
 
-The engine is built from its CUDA source on first use and the weights come from Hugging Face (`--model-dir` serves a local
-snapshot). An engine exists for one model on one card type, and `mkserve` refuses any other pair.
+Query it with any OpenAI-compatible client:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="none")
+stream = client.chat.completions.create(
+    model="Qwen/Qwen3-8B",
+    messages=[{"role": "user", "content": "Explain how a hash table works."}],
+    max_tokens=512,
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+`mkserve` validates every request before the engine sees it (context length, token ids, `max_tokens`) and implements
+sampling (`temperature`, `top_p`, `top_k`, `seed`) on the engine's logits. An engine is tied to one model and one GPU
+type; any other pair is refused. See [`mkserve/README.md`](mkserve/README.md) for endpoints and options.
+
+<details>
+<summary><b>All registered engines</b></summary>
 
 | Model | Card | Engine | Track | Kind | Sequences | Context | From |
 |---|---|---|---|---|---|---|---|
@@ -64,37 +143,85 @@ snapshot). An engine exists for one model on one card type, and `mkserve` refuse
 | thinkingmachines/Inkling-2-Small | b200x4 | `offline-b` | B | offline | 8 | 2,048 | run s7-inkling2s-b200x4-fb1, submission s0036 |
 | thinkingmachines/Inkling-2-Small | b200x4 | `online-a` | A | online | 64 | 34,816 | run s8-inkling2s-b200x4-on1, submission s0043 |
 
-Engines of kind `online` admit requests while others are decoding, process prompts in chunks and reuse shared prefixes.
-Engines of kind `offline` are the fastest at steady decoding; they hold 8 sequences and a 2,048-token context, and
-`mkserve` feeds them the prompt one token per pass. Sampling (`temperature`, `top_p`, `top_k`, `seed`) is done by
-`mkserve` on the engine's logits. `mkserve` also checks every request before the engine sees it (context, token ids, an empty
-prompt, `max_tokens`), because most engines do not check their inputs themselves.
+</details>
 
-## Test an engine
+## Benchmarks
+
+<p align="center"><img src="assets/speedup.png" width="820" alt="Speed of the megakernel engines relative to the fastest general engine on the same card"></p>
+
+Time per token over HTTP with a 64-token prompt and 1,024 greedy tokens. The factor is the fastest general engine's time
+divided by ours, with one sequence and with eight.
+
+| Model | Card | Fastest general engine, ms | Track A, ms | Track A | Track B, ms | Track B |
+|---|---|---|---|---|---|---|
+| Qwen3-8B | H100 | SGLang 6.13 / 6.84 | 5.38 / 5.64 | **1.14×** / **1.21×** | 4.16 / 4.47 | **1.47×** / **1.53×** |
+| North Mini Code | H100 | Cohere's own megakernel 3.62 / 7.07 | 2.54 / 6.90 | **1.43×** / 1.02× | 2.15 / 6.05 | **1.68×** / **1.17×** |
+| flint | B200 | vLLM 1.99 / 3.79 | 1.48 / 3.40 | **1.35×** / **1.12×** | 1.48 / 3.95 | **1.35×** / 0.96× |
+| Qwen3.8-27B | B200 | SGLang 9.53 / 10.23 | 8.45 / 8.89 | **1.13×** / **1.15×** | 7.71 / 8.18 | **1.24×** / **1.25×** |
+| Inkling-2-Small | 4 × B200 | SGLang 4.74 / 6.55 | 3.30 / 5.39 | **1.43×** / **1.22×** | 3.29 / 5.38 | **1.44×** / **1.22×** |
+
+How the comparison is made:
+
+- **Same card, same job.** All systems of a row run on the same card in the same job, one after another, for three
+  rounds; each round restarts every server.
+- **Same interface and client.** Every system is behind an OpenAI-compatible streaming endpoint and timed by one client
+  ([`eval/client.py`](eval/client.py)) that records the arrival of each token.
+- **Same work.** Prompts are sent as token ids, every request generates exactly 1,024 tokens, and time per token is taken
+  over the window in which all sequences decode.
+- **Released baselines.** vLLM and SGLang are installed from their releases and run with their recommended flags, or a
+  faster setting where we found one. For North Mini Code the reference is the vendor's own hand-written megakernel.
+
+**Serving a production request trace** (300-second replay of the Mooncake tool-and-agent trace, all systems over HTTP on
+the same hardware; a request is within the service levels when its first token arrives within 5 s and its tokens are on
+average at most 0.1 s apart):
+
+| Model, GPU | Rate | Within service levels | Longest stall |
+|---|---|---|---|
+| Inkling-2-Small, 4 × B200 | 1–4 req/s | **100%** vs 83–85% (SGLang) | 0.08–0.09 s vs 2.4–2.6 s |
+| Inkling-2-Small, 4 × B200 | 8 req/s | **99.2%** vs 81.7% (SGLang) | 0.15 s vs 4.4 s |
+| Qwen3-8B, 1 × H100 | 1–2 req/s | **95–97%** vs 68–75% (SGLang, vLLM) | 0.09–0.11 s vs 0.5–6.9 s |
+| Qwen3-8B, 1 × H100 | 3 req/s | **90–93%** vs 59–68% (SGLang, vLLM) | 0.09 s vs 0.6–7.3 s |
+
+<p align="center"><img src="assets/serving-inkling.png" width="820" alt="Inkling-2-Small on four B200 under a production request trace"></p>
+
+The serving engines pay for this with a slower 99th-percentile first token and, on Inkling-2-Small, a slower median time
+between tokens. Every measurement, including batch sizes from 1 to 64, long generations, long prompts, natural-text
+prompts and sampling, is in the [benchmark data tables](https://dangxingyu.github.io/megakernel-dashboard/full.html); the write-up discusses the limits.
+
+To reproduce a comparison on your own card:
 
 ```bash
-bash scripts/eval_selftest.sh Qwen/Qwen3-8B      # once per model: weights, a float64 reference made on this card, the evaluator checked on the starter
+# serves each system in turn on this card and times it with one client
+MK_MODEL=Qwen/Qwen3-8B COMPARE_SYSTEMS="mkserve:offline-a mkserve:offline-b sglang vllm" bash scripts/compare.sh
+```
+
+## Evaluation suite
+
+```bash
+bash scripts/eval_selftest.sh Qwen/Qwen3-8B      # once per model: weights, a float64 reference on this card, the evaluator on the starter
 MK_MODEL=Qwen/Qwen3-8B bash scripts/eval_setup.sh
 python eval/kernel_eval.py --workspace engines/qwen3-8b_h100/offline-a --out result.json
 ```
 
-The evaluator builds the engine and gives it a time only if it is correct:
+[`eval/kernel_eval.py`](eval/kernel_eval.py) builds an engine and reports a time only if it is correct:
 
-- logits against the float64 reference at every position, alone and in a batch of 8, within twice the error of the Hugging
-  Face BF16 implementation; the same along 1,152 positions; top-1 agreement with float64;
-- the engine's own decode loop and its HTTP path give the tokens of stepping it;
-- the timed steps themselves are checked against the reference afterwards.
+| Gate | What is checked |
+|---|---|
+| `numeric`, `numeric_long` | logits against a float64 run of the reference model at every position to 128 and at every 8th position to 1,152, alone and in a batch of 8; relative error within 2× that of the Hugging Face BF16 implementation |
+| `tokens` | top-1 agreement with float64 within one point of the BF16 implementation's |
+| `batch` | a sequence alone and inside a batch give the same logits |
+| `generate`, `http_tokens` | the engine's own decode loop and its HTTP path reproduce its step-by-step greedy tokens |
+| `timed_steps` | the steps that were timed are checked against the reference afterwards |
 
-The reference is computed on your card, on the token sequences in `eval/refs/` (the ones our runs were scored on), so a
-result is comparable with ours. `MK_REF_OWN_SEQUENCES=1` generates new sequences instead; expect the limit on the largest
-error to move with them, since the largest of a thousand errors comes from a heavy tail (the write-up has the numbers).
+The reference is computed on your card for the token sequences in [`eval/refs/`](eval/refs) (the ones our runs were
+scored on), so results are comparable with ours. [`eval/release_check.py`](eval/release_check.py) adds every batch size
+from 1 to 8, slot permutation, neighbour independence, repetition, state after a full context, and a process restart;
+[`scripts/mkserve_check.py`](scripts/mkserve_check.py) tests a served engine through the API.
 
-`eval/release_check.py` adds every batch size from 1 to 8, slot order, other neighbours in the batch, repetition, the state
-left by a full context, and a process restart. `scripts/compare.sh` serves vLLM, SGLang and any engines in turn on this card
-and times them with one client (`eval/client.py`): steady decoding, sampled decoding, natural-text prompts, 1 to 64 requests,
-long generations, long prompts, and the replay of a production request trace.
+## Build your own engine
 
-## Run your own
+The engines were produced by an agent that edits one engine directory, measures on the GPU, and submits to the evaluator
+above. The same loop runs on a single machine:
 
 ```bash
 bash scripts/eval_selftest.sh Qwen/Qwen3-8B
@@ -102,32 +229,59 @@ python autoresearch/start.py my-run --model Qwen/Qwen3-8B --card h100 --hours 12
 cd my-run/workspace && claude -p "$(cat ../PROMPT.md)" --dangerously-skip-permissions
 ```
 
-`start.py` makes a workspace with an engine to start from (the Hugging Face model behind the engine contract, or any zoo
-engine with `--engine`), installs the skill, writes the prompt, and gives the agent one tool: `mk submit` evaluates the
-engine as it is and records the result, `mk board` shows every submission and the time left. Any coding agent that has a
-shell works. The prompts state the goal, the rules and the two tracks; they name no optimization technique.
+`start.py` creates a workspace with a starting engine (the Hugging Face model behind the engine contract, or any engine
+of this repository with `--engine`), installs the skill, writes the prompt, and gives the agent one tool: `mk submit`
+evaluates the engine and records the result, `mk board` shows every submission and the time left. Any coding agent with
+a shell can drive it. The prompts state the goal, the rules and the two tracks; they name no optimization technique.
 
-`autoresearch/skills/megakernel` is the skill every run starts from. `autoresearch/skills_by_model` has the skills of our
-runs, with the facts of each model and card. For a model that is not in Hugging Face `transformers`, the reference has to
-be written first; `eval/inkling2_ref.py` is the one we wrote for Inkling-2-Small.
+- [`autoresearch/skills/megakernel`](autoresearch/skills/megakernel): the skill every run starts from (the engine
+  contract, how the evaluator scores, how to log).
+- [`autoresearch/skills_by_model`](autoresearch/skills_by_model): the skills of our runs, with the facts of each model
+  and card.
+- [`runs/`](runs): every submission of our 12 runs (source, hypothesis, score) and the agents' notes, as worked examples.
 
-Our own runs kept the agent on one machine and sent everything that needs the GPU to pods on a cluster. That loop depends
-on our scheduler and is not included; the tools here are its single-machine equivalent.
+For a model that is not in Hugging Face `transformers`, a reference implementation has to be written first;
+[`eval/inkling2_ref.py`](eval/inkling2_ref.py) is the one for Inkling-2-Small. To add an engine to this repository, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Limits
+## Repository layout
 
-- An engine is tied to one model and one card type, and is rebuilt from source on the machine that serves it.
-- The offline engines do steady decoding only: 8 sequences, 2,048 tokens of context.
-- The serving engines remove the stalls a general engine shows under load. The one for Inkling-2-Small decodes about a
-  third as fast as the offline engine; the write-up has its capacity against SGLang's at each arrival rate.
-- Decoding inside the kernel is greedy; sampling runs outside it and costs 1 to 11%.
-- Use the engines through `mkserve`. Called directly, most of them do not validate requests: an invalid token id or an
-  oversized request can crash an engine or corrupt another request. The serving engines for Qwen3-8B match shared prompt
-  prefixes by a 64-bit hash without comparing the tokens.
-- Every engine was audited by an independent agent; the audit reports' findings are summarised in the write-up.
-- Numbers are from single nodes and two to three rounds.
+```
+engines/        one directory per engine: CUDA source, build script, Python binding (engine/api.py)
+mkserve/        OpenAI-compatible server and the engine registry
+eval/           evaluator, reference builder, benchmark client, extended checks
+scripts/        environment setup, same-card comparison, server tests
+baselines/      how the general engines were installed and launched
+autoresearch/   the local optimization loop: tools, skills, prompts
+starter/        the reference model behind the engine contract (where a run starts)
+runs/           the record of every agent run
+```
 
-## Licence
+## Limitations
 
-Apache-2.0. `eval/inkling2_ref.py` began as a transcription of model code from NovaSky-AI/SkyRL (Apache-2.0), which is
-noted in the file.
+- An engine is specific to one checkpoint and one GPU type, and is compiled on the machine that serves it.
+- Steady-decode engines hold 8 sequences and a 2,048-token context and read the prompt one token per pass.
+- Decoding inside the kernel is greedy; sampling runs in `mkserve` and costs 1 to 11%.
+- Use the engines through `mkserve`: called directly, most of them do not validate requests. The serving engines for
+  Qwen3-8B match shared prompt prefixes by a 64-bit hash without comparing tokens.
+- Benchmark numbers are from single nodes and two to three rounds.
+
+The findings of the independent audit of every engine are summarized in the [write-up](https://dangxingyu.github.io/megakernel-dashboard/#limits).
+
+## Citation
+
+```bibtex
+@misc{dang2026megakernel,
+  title        = {A Megakernel per Model},
+  author       = {Dang, Xingyu},
+  year         = {2026},
+  howpublished = {\url{https://dangxingyu.github.io/megakernel-dashboard/}},
+  note         = {Code: \url{https://github.com/dangxingyu/megakernel-zoo}}
+}
+```
+
+## License and acknowledgements
+
+Apache-2.0. `eval/inkling2_ref.py` began as a transcription of model code from NovaSky-AI/SkyRL (Apache-2.0), as noted in
+the file. The baselines are [vLLM](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang)
+and Cohere's megakernel for North Mini Code; the request trace is Mooncake's tool-and-agent trace.

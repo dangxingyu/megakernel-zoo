@@ -48,7 +48,7 @@ for system in "${systems[@]}"; do
   if wait_http "http://127.0.0.1:$MK_PORT/v1/models" "${MK_SERVER_WAIT:-1800}" $server; then
     stage "server $system up" ok $t
     grep -h -a -E "MK_FLAGS|MKSERVE" "$MK_ROOT/logs/server-$tag.log" | sort -u | cut -c1-260 | head -4
-    taskset -c "$CLIENT_CPUS" "$MK_TOOLS_PY" scripts/demo_capture.py --port "$MK_PORT" --served "$served" --system "$system" --out "$MK_ROOT/demo/$tag.json" 2>&1 | cut -c1-900
+    taskset -c "$CLIENT_CPUS" "$MK_TOOLS_PY" scripts/demo_capture.py --port "$MK_PORT" --served "$served" --system "$system" --max-tokens "${DEMO_ANSWER_LEN:-400}" --out "$MK_ROOT/demo/$tag.json" 2>&1 | cut -c1-900
   else
     stage "server $system up" failed $t; tail -n 15 "$MK_ROOT/logs/server-$tag.log" | cut -c1-300
   fi

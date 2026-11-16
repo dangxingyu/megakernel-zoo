@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """mkserve: serve a model through its megakernel engine behind the OpenAI API, the way `vllm serve` is used.
 
-    python -m mkserve list
-    python -m mkserve serve Qwen/Qwen3-8B [--engine NAME | --track A|B] [--port 8000] [--host 127.0.0.1]
+    mkserve list                      (or: python -m mkserve list)
+    mkserve serve Qwen/Qwen3-8B [--engine NAME | --track A|B] [--port 8000] [--host 127.0.0.1]
                                           [--model-dir DIR] [--mode auto|native|step] [--workdir DIR]
 
 `serve` finds the engine written for this model on this card (mkserve/registry.json), unpacks and builds it (nvcc
