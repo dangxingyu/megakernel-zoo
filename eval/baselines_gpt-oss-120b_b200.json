@@ -1,0 +1,84 @@
+{
+ "model": "openai/gpt-oss-120b",
+ "gpu": "NVIDIA B200 (one card of a GB200 node)",
+ "hw": "b200",
+ "provisional": false,
+ "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, one SSE chunk per token; 3 server starts x 3 repeats per system, eval/client.py through scripts/compare.sh, both systems in turns on one card in one job). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
+ "source": "megakernel-mm2-oss120-compare-1: sglang B=1 455.2 tok/s, vllm B=1 407.7 tok/s, sglang B=8 2336.4 tok/s, vllm B=8 2134.9 tok/s; megakernel-mm2-oss120-vlrecipe-1: vllm_blackwell_recipe B=1 398.0 tok/s, vllm_blackwell_recipe B=8 2064.1 tok/s. SGLang and vLLM in turns on one card in megakernel-mm2-oss120-compare-1; the full-recipe vLLM line alone in megakernel-mm2-oss120-vlrecipe-1",
+ "systems": {
+  "sglang": {
+   "version": "0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on; SGLang picks its gpt-oss kernels itself); SGLang's gpt-oss page gives no single-card flags",
+   "general_engine": true,
+   "b1": 2197,
+   "decode_tok_s": {
+    "b1": 455.2,
+    "b8": 2336.4
+   },
+   "per_round_tok_s": {
+    "b1": [
+     455.5,
+     455.1,
+     455.1
+    ],
+    "b8": [
+     2322.4,
+     2343.6,
+     2343.3
+    ]
+   },
+   "job": "megakernel-mm2-oss120-compare-1",
+   "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --log-level info",
+   "b8": 3424
+  },
+  "vllm": {
+   "version": "0.32.0 (torch 2.13.0+cu132), vLLM recipe flags for gpt-oss (GPT-OSS_Blackwell.yaml) without the ones that change number formats or streaming: --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192; left out: --kv-cache-dtype fp8, VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1 (MXFP8 activations in the MoE), --stream-interval 20 (20 tokens per SSE chunk: the client times one chunk per token). MXFP4 experts as stored, BF16 activations and KV: track A",
+   "general_engine": true,
+   "b1": 2453,
+   "decode_tok_s": {
+    "b1": 407.7,
+    "b8": 2134.9
+   },
+   "per_round_tok_s": {
+    "b1": [
+     407.3,
+     408.0,
+     407.9
+    ],
+    "b8": [
+     2136.5,
+     2134.3,
+     2133.8
+    ]
+   },
+   "job": "megakernel-mm2-oss120-compare-1",
+   "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90 --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens",
+   "b8": 3747
+  },
+  "vllm_blackwell_recipe": {
+   "version": "0.32.0, the whole Blackwell recipe except --stream-interval 20: VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1 --kv-cache-dtype fp8 --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192",
+   "general_engine": true,
+   "b1": 2513,
+   "decode_tok_s": {
+    "b1": 398.0,
+    "b8": 2064.1
+   },
+   "per_round_tok_s": {
+    "b1": [
+     398.8,
+     397.4,
+     397.9
+    ],
+    "b8": [
+     2065.5,
+     2063.4,
+     2063.5
+    ]
+   },
+   "job": "megakernel-mm2-oss120-vlrecipe-1",
+   "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90 --kv-cache-dtype fp8 --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --ma",
+   "note": "NOT track-A aligned (FP8 KV cache, MXFP8 activations in the MoE if the environment variable took effect; the server log is in the store, not in the job log). Measured in its own job on another B200 card: slower than the aligned vLLM line at both batch sizes",
+   "b8": 3876
+  }
+ },
+ "eval_timeout_scale": 3
+}

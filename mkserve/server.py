@@ -278,6 +278,10 @@ async def frontend_main(args) -> int:
     queues: dict[int, asyncio.Queue] = {}
     counter = itertools.count(1)
     warned = {"sampling": False}
+    # Prometheus-style counters (GET /metrics): what a user needs to see the engine at work
+    stats = {"requests_total": 0, "requests_running": 0, "requests_failed_total": 0, "prompt_tokens_total": 0,
+             "generation_tokens_total": 0, "time_to_first_token_seconds_sum": 0.0, "time_to_first_token_seconds_count": 0,
+             "time_per_output_token_seconds_sum": 0.0, "time_per_output_token_seconds_count": 0}
 
     async def pump() -> None:
         while True:
@@ -295,6 +299,20 @@ async def frontend_main(args) -> int:
     async def models(_request):
         return web.json_response({"object": "list", "data": [{"id": args.name, "object": "model", "owned_by": "mkserve",
                                                                  "engine": args.engine_name, "mode": hello["mode"]}]})
+
+    async def metrics(_request):
+        lines = []
+        for key, value in stats.items():
+            name = "mkserve_" + key
+            kind = "gauge" if key == "requests_running" else "counter"
+            lines += [f"# TYPE {name} {kind}", f"{name} {value}"]
+        return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
+
+    @web.middleware
+    async def auth(request, handler):  # --api-key: the OpenAI routes need "Authorization: Bearer KEY"; /health and /metrics stay open
+        if args.api_key and request.path.startswith("/v1/") and request.headers.get("Authorization", "") != f"Bearer {args.api_key}":
+            return web.json_response({"error": {"message": "invalid or missing API key", "type": "authentication_error"}}, status=401)
+        return await handler(request)
 
     async def health(_request):
         return web.json_response({"status": "ok", "engine": args.engine_name, "mode": hello["mode"], "max_batch": hello["max_batch"],
@@ -334,6 +352,8 @@ async def frontend_main(args) -> int:
         if sampling:
             msg.update(temperature=float(temperature), top_p=float(body.get("top_p") or 1.0), top_k=int(body.get("top_k") or 0), seed=body.get("seed"))
         writer.write((json.dumps(msg, separators=(",", ":")) + "\n").encode())
+        t_start, t_first = time.perf_counter(), None
+        stats["requests_total"] += 1; stats["requests_running"] += 1; stats["prompt_tokens_total"] += len(ids)
         created, kind = int(time.time()), ("chat.completion" if chat else "text_completion")
         head = {"id": f"{'chatcmpl' if chat else 'cmpl'}-{rid}", "object": kind + (".chunk" if chat and stream else ""), "created": created, "model": args.name}
 
@@ -357,6 +377,9 @@ async def frontend_main(args) -> int:
             done = False
             while not done and finish is None:
                 tokens, done = await q.get()
+                if t_first is None and tokens:
+                    t_first = time.perf_counter()
+                    stats["time_to_first_token_seconds_sum"] += t_first - t_start; stats["time_to_first_token_seconds_count"] += 1
                 for token in tokens:
                     if token in stop_ids:
                         finish = "stop"
@@ -393,7 +416,15 @@ async def frontend_main(args) -> int:
                 await resp.write(b"data: " + json.dumps(dict(head, choices=[], usage=usage)).encode() + b"\n\n")
             await resp.write(b"data: [DONE]\n\n")
             return resp
+        except BaseException:
+            stats["requests_failed_total"] += 1
+            raise
         finally:
+            stats["requests_running"] -= 1
+            stats["generation_tokens_total"] += len(out)
+            if t_first is not None and len(out) > 1:
+                stats["time_per_output_token_seconds_sum"] += (time.perf_counter() - t_first) / (len(out) - 1)
+                stats["time_per_output_token_seconds_count"] += 1
             queues.pop(rid, None)
             if not done:  # ended early: a step-mode batch can drop the row; a native engine decodes it to the end
                 writer.write((json.dumps({"cancel": rid}) + "\n").encode())
@@ -428,8 +459,8 @@ async def frontend_main(args) -> int:
             return error(f"chat template: {exc}")
         return await generate(request, body, tok.encode(text, add_special_tokens=False).ids, chat=True)
 
-    app = web.Application(client_max_size=1 << 26)
-    app.add_routes([web.get("/v1/models", models), web.get("/health", health),
+    app = web.Application(client_max_size=1 << 26, middlewares=[auth])
+    app.add_routes([web.get("/v1/models", models), web.get("/health", health), web.get("/metrics", metrics),
                     web.post("/v1/completions", completions), web.post("/v1/chat/completions", chat_completions)])
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
@@ -455,6 +486,7 @@ def main(argv=None) -> int:
     parser.add_argument("--engine-name", default="")
     parser.add_argument("--default-max-tokens", type=int, default=512)
     parser.add_argument("--strict-sampling", action="store_true", help="refuse sampling requests in native mode instead of decoding greedily")
+    parser.add_argument("--api-key", default=None, help="front end: require this key as a Bearer token on /v1/*")
     parser.add_argument("--wait-s", type=float, default=1800.0, help="front end: how long to wait for the engine worker's socket")
     args = parser.parse_args(argv)
     if args.role == "engine":

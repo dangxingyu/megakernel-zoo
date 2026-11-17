@@ -67,6 +67,8 @@ sha = HfApi().model_info(repo).sha
 names = [s.rfilename for s in HfApi().model_info(repo, revision=sha).siblings]
 skip = [n for n in names if n.endswith((".bin", ".pth", ".gguf", ".onnx", ".msgpack", ".h5", ".ot"))] if any(n.endswith(".safetensors") for n in names) else []
 skip += ["consolidated.safetensors"] if any(n.startswith("model-0") or n == "model.safetensors" for n in names) else []
+# gpt-oss also ships its weights again under original/ (another layout) and metal/: the top-level index is the checkpoint.
+skip += [n for n in names if "/" in n and n.endswith((".safetensors", ".bin"))] if "model.safetensors.index.json" in names else []
 snapshot_download(repo, revision=sha, local_dir=f"{snaps}/{sha}", max_workers=16, ignore_patterns=skip or None)
 PY
       rm -rf "$snaps"/*/.cache

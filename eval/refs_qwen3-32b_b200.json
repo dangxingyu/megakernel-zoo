@@ -1,0 +1,26 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 8002,
+  "note": "64.02 GB read per step at batch 1 (every BF16 weight but the input embedding, plus K/V at context 192) at 8000 GB/s (derived figure for this card, not measured)"
+ },
+ {
+  "name": "1.10x the fastest general engine",
+  "metric": "http_step_us_b1",
+  "value": 10400,
+  "note": "11440 / 1.10 (sglang); at batch 8: 10629 us per step (11692 / 1.10, sglang). The project's claim is at least this, at both batch sizes"
+ },
+ {
+  "name": "sglang (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 11440,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm2-q32-compare-1; batch 8: 11692 us per step. 0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on); Qwen3 has no separate SGLang recipe flags for one card"
+ },
+ {
+  "name": "vllm (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 12270,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm2-q32-compare-1; batch 8: 12242 us per step. 0.32.0 (torch 2.13.0+cu132), default flags (the Qwen3 recipe serves with defaults)"
+ }
+]

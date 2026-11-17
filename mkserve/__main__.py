@@ -1,9 +1,14 @@
 #!/usr/bin/env python
 """mkserve: serve a model through its megakernel engine behind the OpenAI API, the way `vllm serve` is used.
 
+    mkserve doctor [MODEL]            is this machine ready? (card, CUDA toolkit, Python packages, engines)
     mkserve list                      (or: python -m mkserve list)
+    mkserve pull Qwen/Qwen3-8B        build the engine and fetch the weights ahead of time
+    mkserve chat                      chat with a running server in the terminal
+    mkserve bench [--url URL]         time any OpenAI-compatible server on the project's workload
     mkserve serve Qwen/Qwen3-8B [--engine NAME | --track A|B] [--port 8000] [--host 127.0.0.1]
                                           [--model-dir DIR] [--mode auto|native|step] [--workdir DIR]
+                                          [--served-model-name NAME] [--api-key KEY]
 
 `serve` finds the engine written for this model on this card (mkserve/registry.json), unpacks and builds it (nvcc
 must be on PATH), takes the weights from --model-dir or downloads the Hugging Face snapshot, starts the engine worker
@@ -69,7 +74,9 @@ def source_digest(source: Path) -> str:
     return h.hexdigest()
 
 
-def cmd_serve(args) -> int:
+def prepare(args):
+    """Find the engine for (model, card), unpack and build it, and find or fetch the weights.
+    Returns (work dir, model dir, engine entry, engine name) or an exit code."""
     reg = json.loads((HERE / "registry.json").read_text())
     cards = reg["models"].get(args.model)
     if cards is None:
@@ -116,6 +123,8 @@ def cmd_serve(args) -> int:
             return rc
 
     model_dir = args.model_dir
+    if not model_dir and getattr(args, "skip_weights", False):
+        return work, None, eng, name
     if not model_dir:
         from huggingface_hub import snapshot_download
         print(f"mkserve: fetching {args.model} from Hugging Face (use --model-dir to serve a local snapshot)", flush=True)
@@ -123,6 +132,25 @@ def cmd_serve(args) -> int:
     if not (Path(model_dir) / "tokenizer.json").exists():
         print(f"mkserve: {model_dir} has no tokenizer.json: not a model snapshot", file=sys.stderr)
         return 2
+    return work, model_dir, eng, name
+
+
+def cmd_pull(args) -> int:
+    got = prepare(args)
+    if isinstance(got, int):
+        return got
+    work, model_dir, _eng, name = got
+    print(f"mkserve: ready: engine {name} built in {work}; weights in {model_dir}. Start it with: mkserve serve {args.model}"
+          + (f" --engine {args.engine}" if args.engine else "") + (f" --model-dir {args.model_dir}" if args.model_dir else ""))
+    return 0
+
+
+def cmd_serve(args) -> int:
+    got = prepare(args)
+    if isinstance(got, int):
+        return got
+    work, model_dir, eng, name = got
+    served = args.served_model_name or args.model
 
     sock = Path(tempfile.mkdtemp(prefix="mkserve-")) / "engine.sock"
     common = ["--model-dir", str(model_dir), "--sock", str(sock)]
@@ -132,7 +160,8 @@ def cmd_serve(args) -> int:
     worker = subprocess.Popen([sys.executable, "-m", "mkserve.server", "engine", "--workspace", str(work), "--mode", mode,
                                "--max-batch", str(args.max_batch or eng["max_batch"]), "--max-context", str(args.max_context or eng["max_context"]), *common],
                               cwd=HERE.parent, env=dict(os.environ, PYTHONPATH=f"{HERE.parent}:{os.environ.get('PYTHONPATH', '')}"))
-    front = subprocess.Popen([sys.executable, "-m", "mkserve.server", "frontend", "--host", args.host, "--port", str(args.port), "--name", args.model,
+    front = subprocess.Popen([sys.executable, "-m", "mkserve.server", "frontend", "--host", args.host, "--port", str(args.port), "--name", served,
+                              *(["--api-key", args.api_key] if args.api_key else []),
                               "--engine-name", name, "--default-max-tokens", str(args.default_max_tokens), *(["--strict-sampling"] if args.strict_sampling else []), *common],
                              cwd=HERE.parent, env=dict(os.environ, PYTHONPATH=f"{HERE.parent}:{os.environ.get('PYTHONPATH', '')}"))
 
@@ -165,13 +194,33 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="mkserve", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="the models, cards and engines that can be served")
+    d = sub.add_parser("doctor", help="check this machine: card, CUDA toolkit, Python packages, engines for this card")
+    d.add_argument("model", nargs="?", default=None)
+    b = sub.add_parser("bench", help="time a running OpenAI-compatible server (ours, vLLM, SGLang) on the project's workload")
+    b.add_argument("--url", default="http://127.0.0.1:8000")
+    b.add_argument("--model", default=None, help="model id to send (default: the server's first model)")
+    b.add_argument("--batch", type=int, nargs="+", default=[1, 8], help="requests in flight at once")
+    b.add_argument("--prompt-tokens", type=int, default=64)
+    b.add_argument("--max-tokens", type=int, default=1024)
+    b.add_argument("--rounds", type=int, default=3)
+    b.add_argument("--api-key", default=None)
+    c = sub.add_parser("chat", help="chat with a running server in the terminal")
+    c.add_argument("--url", default="http://127.0.0.1:8000")
+    c.add_argument("--model", default=None)
+    c.add_argument("--max-tokens", type=int, default=1024)
+    c.add_argument("--temperature", type=float, default=0.0)
+    c.add_argument("--api-key", default=None)
+    pl = sub.add_parser("pull", help="build the engine and fetch the weights now, so that `serve` starts at once")
     s = sub.add_parser("serve", help="serve one model through its megakernel engine")
-    s.add_argument("model", help="the model id, e.g. Qwen/Qwen3-8B")
-    s.add_argument("--engine", default=None, help="an engine name from `list` (default: the model's default engine)")
-    s.add_argument("--track", default=None, choices=["A", "B", "a", "b"], help="A: the general engines' number formats; B: lossless model-specific formats")
-    s.add_argument("--card", default=None, help="registry key of the card (default: detected with nvidia-smi)")
-    s.add_argument("--model-dir", default=None, help="a local Hugging Face snapshot of the model (default: download)")
-    s.add_argument("--workdir", default=None, help="where engines are unpacked and built (default ~/.cache/mkserve)")
+    for q in (pl, s):
+        q.add_argument("model", help="the model id, e.g. Qwen/Qwen3-8B")
+        q.add_argument("--engine", default=None, help="an engine name from `list` (default: the model's default engine)")
+        q.add_argument("--track", default=None, choices=["A", "B", "a", "b"], help="A: the general engines' number formats; B: lossless model-specific formats")
+        q.add_argument("--card", default=None, help="registry key of the card (default: detected with nvidia-smi)")
+        q.add_argument("--model-dir", default=None, help="a local Hugging Face snapshot of the model (default: download)")
+        q.add_argument("--workdir", default=None, help="where engines are unpacked and built (default ~/.cache/mkserve)")
+    s.add_argument("--served-model-name", default=None, help="the model id the API reports (default: the model id)")
+    s.add_argument("--api-key", default=None, help="require this key as a Bearer token on /v1/*")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--mode", choices=["auto", "native", "step"], default="auto", help="see mkserve/server.py: native = the engine's own batching (greedy); step = sampling and early stop, one batch at a time")
@@ -180,7 +229,10 @@ def main(argv=None) -> int:
     s.add_argument("--default-max-tokens", type=int, default=512)
     s.add_argument("--strict-sampling", action="store_true", help="refuse sampling requests in native mode instead of decoding greedily")
     args = parser.parse_args(argv)
-    return cmd_list(args) if args.cmd == "list" else cmd_serve(args)
+    if args.cmd in ("doctor", "bench", "chat"):
+        from mkserve import tools
+        return getattr(tools, args.cmd)(args)
+    return {"list": cmd_list, "pull": cmd_pull, "serve": cmd_serve}[args.cmd](args)
 
 
 if __name__ == "__main__":

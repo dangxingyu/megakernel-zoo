@@ -3,7 +3,7 @@
 # kernel evaluator on the starter engine (Hugging Face behind the contract). The starter must come out "valid":
 # if it does not, the evaluator or its tolerance is wrong, not the engine.
 # The card is MK_HW (h100 | b200; default: the pod's card); the reference lines are eval/baselines_<model>_<card>.json.
-# MK_REF_DTYPE (auto | float64 | float32) is handed to eval/make_reference.py; MK_REF_REMAKE=1 makes the reference
+# MK_REF_DTYPE (auto | float64 | float32) and MK_REF_CARDS (spread the reference over N cards) go to eval/make_reference.py; MK_REF_REMAKE=1 makes the reference
 # again although the store has one; MK_SELFTEST_MODES ("quick full" by default; "none": only the reference) picks
 # the evaluations. A reference is only token ids and logits: it can be made on another card than the run's.
 # MK_SELFTEST_WS (a directory with engine/, default starter) is the engine evaluated; MK_SELFTEST_ARGS are passed on to
@@ -19,7 +19,8 @@ source scripts/cuda_toolkit.sh > "$MK_ROOT/logs/cuda-toolkit.log" 2>&1; grep MK_
 set +e +u; set -o pipefail
 t=$(date +%s)
 py="$MK_ROOT/venvs/eval/bin/python"
-uv venv -q "$MK_ROOT/venvs/eval" --python python3.12 && uv pip install -q --python "$py" torch transformers accelerate numpy tokenizers safetensors nvidia-ml-py --torch-backend=auto
+extra_pip=(); case "$(echo "$MK_MODEL" | tr 'A-Z' 'a-z')" in *gpt-oss*) extra_pip=(triton "kernels>=0.18.2,<0.19") ;; esac   # MXFP4 experts in their own format (else transformers dequantizes them to BF16)
+uv venv -q "$MK_ROOT/venvs/eval" --python python3.12 && uv pip install -q --python "$py" torch transformers accelerate numpy tokenizers safetensors nvidia-ml-py "${extra_pip[@]}" --torch-backend=auto
 "$py" -c 'import torch, transformers; print(f"MK_ENV eval torch={torch.__version__} cuda={torch.version.cuda} transformers={transformers.__version__} gpu={torch.cuda.get_device_name(0)}")' || exit 12
 stage "eval venv" ok $t
 
@@ -34,7 +35,7 @@ if [ -z "${MK_REF_REMAKE:-}" ] && store has "$key" > /dev/null 2>&1; then
   store get "$key" "$ref" > "$MK_ROOT/logs/ref-get.log" 2>&1 && stage "reference from store" ok $t
 else
   ids=(); [ -f "eval/refs/$name/ids.npy" ] && [ -z "${MK_REF_OWN_SEQUENCES:-}" ] && ids=(--ids "eval/refs/$name/ids.npy")   # the sequences of our own runs
-  "$py" eval/make_reference.py --model-dir "$model" --out "$ref" --dtype "${MK_REF_DTYPE:-auto}" "${ids[@]}" 2>&1 | grep -E "MK_REF|Error|error|Traceback" | cut -c1-1200
+  "$py" eval/make_reference.py --model-dir "$model" --out "$ref" --dtype "${MK_REF_DTYPE:-auto}" --cards "${MK_REF_CARDS:-1}" "${ids[@]}" 2>&1 | grep -E "MK_REF|Error|error|Traceback" | cut -c1-1200
   [ -f "$ref/meta.json" ] || { stage "reference" failed $t; exit 13; }
   store put "$ref" "$key" "$MK_S3" 2>&1 | tail -n 1 | cut -c1-200
   stage "reference made" ok $t

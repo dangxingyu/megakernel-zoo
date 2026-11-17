@@ -1,0 +1,59 @@
+{
+ "model": "Qwen/Qwen3-32B",
+ "gpu": "NVIDIA B200 (one card of a GB200 node)",
+ "hw": "b200",
+ "provisional": false,
+ "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, one SSE chunk per token; 3 server starts x 3 repeats per system, eval/client.py through scripts/compare.sh, both systems in turns on one card in one job). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
+ "source": "megakernel-mm2-q32-compare-1: sglang B=1 87.4 tok/s, vllm B=1 81.5 tok/s, sglang B=8 684.2 tok/s, vllm B=8 653.5 tok/s",
+ "systems": {
+  "sglang": {
+   "version": "0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on); Qwen3 has no separate SGLang recipe flags for one card",
+   "general_engine": true,
+   "b1": 11440,
+   "decode_tok_s": {
+    "b1": 87.4,
+    "b8": 684.2
+   },
+   "per_round_tok_s": {
+    "b1": [
+     87.4,
+     87.4,
+     87.4
+    ],
+    "b8": [
+     684.2,
+     684.2,
+     684.3
+    ]
+   },
+   "job": "megakernel-mm2-q32-compare-1",
+   "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --log-level info",
+   "b8": 11692
+  },
+  "vllm": {
+   "version": "0.32.0 (torch 2.13.0+cu132), default flags (the Qwen3 recipe serves with defaults)",
+   "general_engine": true,
+   "b1": 12270,
+   "decode_tok_s": {
+    "b1": 81.5,
+    "b8": 653.5
+   },
+   "per_round_tok_s": {
+    "b1": [
+     81.5,
+     81.5,
+     81.5
+    ],
+    "b8": [
+     653.6,
+     653.3,
+     653.5
+    ]
+   },
+   "job": "megakernel-mm2-q32-compare-1",
+   "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90",
+   "b8": 12242
+  }
+ },
+ "eval_timeout_scale": 3
+}

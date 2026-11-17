@@ -46,12 +46,12 @@ import prompts  # noqa: E402
 FILL = {"float64": 0.86, "float32": 0.90}  # largest share of the card's memory the reference's weights may take
 
 
-def choose_dtype(model_dir: str, wanted: str) -> tuple[str, dict]:
-    """float64 when the text decoder's weights fit the card in float64, else float32, else nothing."""
+def choose_dtype(model_dir: str, wanted: str, cards: int = 1) -> tuple[str, dict]:
+    """float64 when the text decoder's weights fit the card(s) in float64, else float32, else nothing."""
     params = modelinfo.weights(model_dir)["text_parameters"]
-    total = torch.cuda.get_device_properties(0).total_memory
+    total = sum(torch.cuda.get_device_properties(i).total_memory for i in range(cards))
     need = {"float64": params * 8, "float32": params * 4}
-    why = {"text_parameters": params, "gpu_memory_gb": total / 1e9, "float64_gb": need["float64"] / 1e9, "float32_gb": need["float32"] / 1e9}
+    why = {"text_parameters": params, "gpu_memory_gb": total / 1e9, "cards": cards, "float64_gb": need["float64"] / 1e9, "float32_gb": need["float32"] / 1e9}
     if wanted != "auto":
         return wanted, why
     for name in ("float64", "float32"):
@@ -80,10 +80,12 @@ def main() -> int:
     parser.add_argument("--ids", default=None, help="int64 [R, T_long] .npy: use these token sequences instead of generating them. The continuation of a prompt "
                         "differs between machines at near-ties, and with it the reference; fixed sequences make the evaluation the same everywhere")
     parser.add_argument("--dtype", choices=["auto", "float64", "float32"], default="auto")
+    parser.add_argument("--cards", type=int, default=1, help="spread the reference model over this many cards (layer after layer) when "
+                        "it fits no single card; the BF16 path always runs on card 0 alone")
     args = parser.parse_args()
     import transformers
 
-    ref_dtype, sizing = choose_dtype(args.model_dir, args.dtype)
+    ref_dtype, sizing = choose_dtype(args.model_dir, args.dtype, args.cards)
     print("MK_REF dtype " + json.dumps({"reference_dtype": ref_dtype, **sizing}), flush=True)
 
     out = Path(args.out)
@@ -130,16 +132,16 @@ def main() -> int:
     print(f"MK_REF bf16 done in {time.time() - t0:.0f}s ids {tuple(ids.shape)}", flush=True)
 
     t0 = time.time()
-    model64 = hf_text.load(args.model_dir, getattr(torch, ref_dtype))
+    model64 = hf_text.load(args.model_dir, getattr(torch, ref_dtype), cards=args.cards)
     loaded64 = hf_text.describe(model64)
-    print("MK_REF reference model " + json.dumps({**loaded64, "gpu_allocated_gb": torch.cuda.memory_allocated() / 1e9}), flush=True)
+    print("MK_REF reference model " + json.dumps({**loaded64, "gpu_allocated_gb": [torch.cuda.memory_allocated(i) / 1e9 for i in range(args.cards)]}), flush=True)
     logits64 = torch.empty(R, T, bf16_logits.shape[-1], dtype=torch.float32)
     long64 = torch.empty(R, len(long_positions), bf16_logits.shape[-1], dtype=torch.float32)
     with torch.no_grad():
         for r in range(R):
             whole = model64(input_ids=ids[r:r + 1]).logits[0]
             logits64[r] = whole[:T].float().cpu()
-            long64[r] = whole[long_positions.cuda()].float().cpu()
+            long64[r] = whole[long_positions.to(whole.device)].float().cpu()
             del whole
     del model64
     torch.cuda.empty_cache()
@@ -158,7 +160,7 @@ def main() -> int:
     flat = err.flatten().sort().values
     meta = {"model_dir": args.model_dir, "sequences": R, "prompt_tokens": P, "check_tokens": T, "long_tokens": TL,
             "vocab": int(logits64.shape[-1]), "seed": args.seed,
-            "reference_dtype": ref_dtype, "reference_sizing": sizing, "hf_class": loaded["class"],
+            "reference_dtype": ref_dtype, "reference_sizing": sizing, "hf_class": loaded["class"], "hf_bf16_parameter_dtypes": loaded["parameter_dtypes"],
             "reference_parameter_dtypes": loaded64["parameter_dtypes"], "banned_tokens": banned,
             "hf_bf16_rel_l2": {"median": flat[len(flat) // 2].item(), "p99": flat[int(0.99 * len(flat))].item(), "max": flat[-1].item()},
             "hf_bf16_top1_agreement": agree,

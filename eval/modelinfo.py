@@ -11,7 +11,8 @@ Bytes one decode step has to read (`decode_bytes`). The count follows the model'
   rest       every weight of the text decoder outside the groups below: read once per step
   head       the output head: `lm_head` (Inkling 2: `unembed`) when the checkpoint stores one, else the token embedding table (a tied head
              is the table). A stored table that is only a lookup is NOT counted (one row per sequence is)
-  experts    weights under an `experts` module of a mixture-of-experts layer. A token reads k of N experts per
+  experts    weights under an `experts` module of a mixture-of-experts layer (bytes as stored: MXFP4 experts of
+             gpt-oss count their U8 code blocks, two 4-bit codes per byte, plus one U8 scale per 32 codes, and BF16 biases). A token reads k of N experts per
              layer, so a step at batch B reads between k/N (all sequences route alike) and min(1, B*k/N) (all
              route apart) of them: `low` and `high`. At B=1 they are equal. Which experts a token uses depends
              on the token; equal expert sizes are assumed, the real routing is not measured here
@@ -47,7 +48,18 @@ CARDS = {
                              "cards are joined by NVLink (NV18 between every pair, about 777 GB/s measured peer copy)"},
 }
 DTYPE_BYTES = {"BF16": 2, "F16": 2, "F32": 4, "F64": 8, "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1, "BOOL": 1,
-               "F8_E4M3": 1, "F8_E5M2": 1}  # U8 also holds packed 4-bit codes (two per byte): counted as one element
+               "F8_E4M3": 1, "F8_E5M2": 1, "F8_E8M0": 1}
+
+
+def parameter_count(name: str, dtype: str, nbytes: int) -> int:
+    """Parameters a stored tensor holds. MXFP4 (gpt-oss): `*_blocks` are U8 bytes with two 4-bit codes each (two
+    parameters per byte) and `*_scales` one shared power-of-two exponent per 32 codes (no parameters of their own);
+    their bytes are counted as stored either way."""
+    if name.endswith("_blocks") and dtype == "U8":
+        return 2 * nbytes
+    if name.endswith("_scales") and dtype in ("U8", "F8_E8M0"):
+        return 0
+    return nbytes // DTYPE_BYTES.get(dtype, 2)
 
 
 def card_count(hw: str | None) -> int:
@@ -108,7 +120,7 @@ def weights(model_dir: str | Path) -> dict:
     for name, dtype, shape, nbytes in tensors(model_dir):
         group = category(name)
         size[group] += nbytes
-        params[group] += nbytes // DTYPE_BYTES.get(dtype, 2)
+        params[group] += parameter_count(name, dtype, nbytes)
     text = [k for k in size if k not in ("vision", "aux")]
     return {"bytes": size, "parameters": params, "text_parameters": sum(params[k] for k in text),
             "text_bytes": sum(size[k] for k in text), "stored_head": size["head"] > 0}
@@ -123,8 +135,8 @@ def decode_bytes(model_dir: str | Path, batch: int, context: float) -> dict:
     hidden = config["hidden_size"]
     head = size["head"] if info["stored_head"] else size["input_embedding"]
     fixed = size["rest"] + head
-    n_experts = config.get("num_experts") or config.get("n_routed_experts")
-    k_experts = config.get("num_experts_per_tok")
+    n_experts = config.get("num_experts") or config.get("n_routed_experts") or config.get("num_local_experts")  # gpt-oss: num_local_experts
+    k_experts = config.get("num_experts_per_tok") or config.get("experts_per_token")
     how = ["every text-decoder weight outside the input embedding table once"
            + ("" if info["stored_head"] else " (the table is counted: it is the tied output head)")]
     experts_low = experts_high = 0.0
@@ -178,8 +190,9 @@ def describe(model_dir: str | Path, hw: str | None = None, batches=(1, 8), conte
     config = text_config(model_dir)
     out = {"model_dir": str(model_dir), "shards": len(shards(model_dir)), **info,
            "config": {k: config.get(k) for k in ("model_type", "hidden_size", "num_hidden_layers", "vocab_size", "num_attention_heads",
-                                                 "num_key_value_heads", "head_dim", "num_experts", "n_routed_experts", "num_experts_per_tok",
-                                                 "sliding_window", "tie_word_embeddings")},
+                                                 "num_key_value_heads", "head_dim", "num_experts", "n_routed_experts", "num_local_experts",
+                                                 "num_experts_per_tok", "sliding_window", "tie_word_embeddings")},
+           "quantization": (json.loads((Path(model_dir) / "config.json").read_text()).get("quantization_config") or {}).get("quant_method"),
            "decode_bytes": {f"b{b}": decode_bytes(model_dir, b, context) for b in batches}, "context": context}
     if hw in CARDS:
         rate = CARDS[hw]["hbm_gb_s"] * 1e9

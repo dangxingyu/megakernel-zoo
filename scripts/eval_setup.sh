@@ -14,7 +14,8 @@ MK_MODEL="${MK_MODEL:-Qwen/Qwen3-8B}"
 py="$MK_ROOT/venvs/eval/bin/python"
 if [ ! -x "$py" ]; then
   uv venv -q "$MK_ROOT/venvs/eval" --python python3.12
-  uv pip install -q --python "$py" torch transformers accelerate numpy tokenizers safetensors nvidia-ml-py pytest --torch-backend=auto
+  extra_pip=(); case "$(echo "$MK_MODEL" | tr 'A-Z' 'a-z')" in *gpt-oss*) extra_pip=(triton "kernels>=0.18.2,<0.19") ;; esac   # MXFP4 experts in their own format
+  uv pip install -q --python "$py" torch transformers accelerate numpy tokenizers safetensors nvidia-ml-py pytest "${extra_pip[@]}" --torch-backend=auto
 fi
 # the evaluation's HTTP stage runs the workload client and the front end under the tools Python (aiohttp, tokenizers, NVML)
 uv pip install -q --python "$MK_TOOLS_PY" nvidia-ml-py

@@ -41,6 +41,8 @@ evaluator and benchmark suite, and the tooling to run the same kind of optimizat
 
 ## News
 
+- **2026-11-17** `mkserve doctor`, `pull`, `chat` and `bench`; `--api-key`, `--served-model-name` and a `/metrics` endpoint. The
+  autoresearch kit gains an in-kernel phase profiler, an A/B bit-identity check and a playbook of what the earlier runs measured.
 - **2026-11-16** Initial release: 13 engines for 5 models on H100 and B200, `mkserve`, the evaluation suite and the
   autoresearch kit. Write-up: [A Megakernel per Model](https://dangxingyu.github.io/megakernel-dashboard/).
 
@@ -96,12 +98,21 @@ The evaluation scripts create their own environments with [`uv`](https://docs.as
 
 ## Quick start
 
-List the engines and serve one (the weights are downloaded from Hugging Face; `--model-dir` uses a local snapshot):
+Check the machine, list the engines and serve one (the weights are downloaded from Hugging Face; `--model-dir` uses a
+local snapshot):
 
 ```bash
+mkserve doctor Qwen/Qwen3-8B                         # card, CUDA toolkit, Python packages, engines for this card
 mkserve list
 mkserve serve Qwen/Qwen3-8B --port 8000              # the default engine of this model on this card
 mkserve serve Qwen/Qwen3-8B --engine offline-b       # a specific engine
+```
+
+Then talk to it, or time it on the benchmark workload (the same command times vLLM or SGLang with `--url`):
+
+```bash
+mkserve chat
+mkserve bench --batch 1 8
 ```
 
 Query it with any OpenAI-compatible client:
@@ -239,6 +250,11 @@ a shell can drive it. The prompts state the goal, the rules and the two tracks; 
   contract, how the evaluator scores, how to log).
 - [`autoresearch/skills_by_model`](autoresearch/skills_by_model): the skills of our runs, with the facts of each model
   and card.
+- [`autoresearch/skills/megakernel/playbook.md`](autoresearch/skills/megakernel/playbook.md): what the 12 runs measured:
+  where each engine's time went, which changes paid and by how much, track-B formats, dead ends, correctness traps.
+- [`autoresearch/tools`](autoresearch/tools): `mkprof` (phase timings inside a persistent kernel, which a profiler sees
+  as one kernel), `bitcheck.py` (are two builds the same function, bit for bit?) and `weights_census.py` (exact
+  statistics of a checkpoint's weights).
 - [`runs/`](runs): every submission of our 12 runs (source, hypothesis, score) and the agents' notes, as worked examples.
 
 For a model that is not in Hugging Face `transformers`, a reference implementation has to be written first;
