@@ -14,7 +14,7 @@
 
 </div>
 
-<p align="center"><img src="assets/demo.gif" width="760" alt="The same question answered by a megakernel engine and by the fastest general engine on the same card, replayed at the recorded speed"></p>
+<p align="center"><img src="assets/demo.gif" width="860" alt="The same question answered by a megakernel engine and by the fastest general engine on the same card, replayed at the recorded speed"></p>
 
 **megakernel-zoo** is a collection of LLM inference engines, each built for exactly one checkpoint on one GPU
 architecture. A megakernel fuses the whole autoregressive decode path (every transformer layer, next-token selection and
@@ -171,7 +171,8 @@ How the comparison is made:
 - **Released baselines.** vLLM and SGLang are installed from their releases and run with their recommended flags, or a
   faster setting where we found one. For North Mini Code the reference is the vendor's own hand-written megakernel.
 
-**Serving a production request trace** (300-second replay of the Mooncake tool-and-agent trace, all systems over HTTP on
+**Serving a production request trace** (300-second replay of the
+[Mooncake tool-and-agent trace](https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release/traces), all systems over HTTP on
 the same hardware; a request is within the service levels when its first token arrives within 5 s and its tokens are on
 average at most 0.1 s apart):
 
@@ -284,4 +285,5 @@ The findings of the independent audit of every engine are summarized in the [wri
 
 Apache-2.0. `eval/inkling2_ref.py` began as a transcription of model code from NovaSky-AI/SkyRL (Apache-2.0), as noted in
 the file. The baselines are [vLLM](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang)
-and Cohere's megakernel for North Mini Code; the request trace is Mooncake's tool-and-agent trace.
+and Cohere's megakernel for North Mini Code; the request trace is the tool-and-agent trace released with
+[Mooncake](https://github.com/kvcache-ai/Mooncake) ([FAST '25](https://www.usenix.org/conference/fast25/presentation/qin)).
