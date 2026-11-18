@@ -1,6 +1,11 @@
 <div align="center">
 
-# megakernel-zoo
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" width="420" alt="megakernel zoo">
+  </picture>
+</p>
 
 **Model-specific megakernel inference engines for LLM decoding, written by coding agents**
 
