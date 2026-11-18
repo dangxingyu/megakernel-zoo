@@ -25,6 +25,42 @@ def pack_tiles(w: torch.Tensor) -> torch.Tensor:
     return w.reshape(M // 16, 2, 8, K // 16, 2, 4, 2).permute(0, 3, 2, 5, 4, 1, 6).contiguous().view(-1)
 
 
+def round_up_bf16(x: torch.Tensor) -> torch.Tensor:
+    """float64 >= 0 -> the smallest BF16 value >= x (as int16 bits)."""
+    f = x.float()
+    f = torch.where(f.double() < x, torch.nextafter(f, torch.full_like(f, float("inf"))), f)
+    b = (f.view(torch.int32) >> 16).to(torch.int32)                 # truncation toward zero (x >= 0)
+    b = torch.where((b << 16).view(torch.float32).double() < x, b + 1, b)
+    return b.to(torch.int16)
+
+
+def head_sketch(w: torch.Tensor):
+    """Certified int8 sketch of the head (track B, greedy paths only). w: int16 [V, 2048] (BF16 bits).
+    Per row i: s_i (float32) and q_i = round(w_i / s_i) in [-127, 127]; e_i = w_i - s_i q_i (exact in float64).
+    Returns (q tiles in the mma.m16n8k32.s8 A order [V/16][64 chunks][32 lanes][16 B], norm tiles: ||e_i,b|| over 32
+    blocks of 64 columns rounded up to BF16 as mma.m16n8k16 A tiles [V/16][2][32][4][2], float32 [V][2] = (s_i, wn_i)
+    with wn_i >= ||w_i|| + ||e_i|| >= ||s_i q_i||), and the largest relative error seen in the checks."""
+    V, K = w.shape
+    qs, ens, sws = [], [], []
+    for r0 in range(0, V, 16384):
+        W = w[r0:r0 + 16384].contiguous().view(torch.bfloat16).double()
+        s = (W.abs().amax(1) / 127.0).float()
+        s = torch.where(s > 0, s, torch.ones_like(s))
+        s64 = s.double()
+        q = torch.round(W / s64[:, None]).clamp_(-127, 127)
+        E = W - s64[:, None] * q                                     # exact: s (24 bits) * q (8 bits) and w are float64-exact
+        assert float((E.abs() <= s64[:, None] * 0.5000001).float().min()) == 1.0
+        en = E.view(E.shape[0], 32, 64).norm(dim=2) * (1 + 2 ** -40)
+        wn = (W.norm(dim=1) + E.norm(dim=1)) * (1 + 2 ** -30)
+        wn32 = wn.float(); wn32 = torch.where(wn32.double() < wn, torch.nextafter(wn32, torch.full_like(wn32, float("inf"))), wn32)
+        qs.append(q.to(torch.int8)); ens.append(round_up_bf16(en)); sws.append(torch.stack([s, wn32], 1))
+        del W, q, E, en
+    Q = torch.cat(qs); EN = torch.cat(ens); SW = torch.cat(sws).contiguous()
+    # A fragment of m16n8k32 (s8): lane (g, t) holds [row g: cols 4t..4t+3][row g+8: same][row g: +16][row g+8: +16]
+    qt = Q.view(V // 16, 2, 8, K // 32, 2, 4, 4).permute(0, 3, 2, 5, 4, 1, 6).contiguous().view(-1)
+    return qt, pack_tiles(EN), SW
+
+
 def interleave(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     """[I, K] gate and up -> [2I, K] where every 16-row group holds 8 gate rows followed by the same 8 up rows."""
     I, K = gate.shape
@@ -80,7 +116,16 @@ class Engine:
     def __init__(self, model_dir: str, max_batch: int, max_context: int):
         assert max_batch <= MAXB, "this engine is built for batches of at most 8"
         t0 = time.time()
+        # A small CUDA allocation before the engine's own. Where the engine's small tensors (the norm weights of every
+        # layer, read by every block in every layer) fall in PyTorch's small-block pool changes the batch-1 step by
+        # ~30 us: in a process that has allocated nothing before (the evaluation's HTTP engine process) 1450 us per token,
+        # after any allocation of 8 B .. 64 KB 1418-1421 (256 KB .. 1 MB: 1446-1452). notes/journal.md 62.
+        pad = int(os.environ.get("MK_PAD", "512"))
+        if pad > 0:
+            self._pad = torch.empty(pad, dtype=torch.uint8, device="cuda")
         lib_path = os.path.join(HERE, "build", "libmk_prof.so" if os.environ.get("MK_PROF") else "libmk.so")
+        if os.environ.get("MK_LIB"):      # (tests: a library built elsewhere)
+            lib_path = os.environ["MK_LIB"]
         if not os.path.exists(lib_path):
             subprocess.run(["bash", os.path.join(HERE, "build.sh")], check=True)
         self.lib = ctypes.CDLL(lib_path)
@@ -102,11 +147,14 @@ class Engine:
         self.max_context = min(int(max_context), 2048)
         self.kgmax = (self.max_context + 15) // 16
         self.keep = []
-        slots = np.zeros(NLAYER * 20 + 8, dtype=np.int64)
+        slots = np.zeros(NLAYER * 20 + 16, dtype=np.int64)
         self.track = open(os.path.join(HERE, "TRACK")).read().strip() if os.path.exists(os.path.join(HERE, "TRACK")) else "A"
         self.track = os.environ.get("MK_TRACK", self.track)
-        # early routing (track B only, experimental): engine/EARLY_ROUTE or MK_EARLY=1; the kernel is built with -DEARLY_ROUTE then
-        self.early = self.track == "B" and (os.path.exists(os.path.join(HERE, "EARLY_ROUTE")) or bool(os.environ.get("MK_EARLY")))
+        # Track B (this run): the arithmetic of track A plus lossless model-specific formats (the head sketch of the
+        # greedy paths). Track F: the float32 stream of the previous run (s0055/s0057), not bit-identical to track A.
+        self.hsk = self.track == "B"
+        # early routing (track F only, experimental): engine/EARLY_ROUTE or MK_EARLY=1; the kernel is built with -DEARLY_ROUTE then
+        self.early = self.track == "F" and (os.path.exists(os.path.join(HERE, "EARLY_ROUTE")) or bool(os.environ.get("MK_EARLY")))
         # speculative routing (both tracks): engine/SPEC_ROUTE or MK_SPEC=1; the kernel is built with -DSPEC_ROUTE then
         self.spec = (not self.early) and (os.path.exists(os.path.join(HERE, "SPEC_ROUTE")) or bool(os.environ.get("MK_SPEC")))
         ck = Checkpoint(model_dir)
@@ -132,6 +180,10 @@ class Engine:
                     base = NLAYER * 20
                     slots[base + 0] = keep(ck.get("model.embed_tokens.weight").contiguous().clone())
                     slots[base + 1] = keep(pack_tiles(ck.get("lm_head.weight")))
+                    if self.hsk:
+                        qt, et, sw = head_sketch(ck.get("lm_head.weight"))
+                        slots[base + 7] = keep(qt); slots[base + 8] = keep(et); slots[base + 9] = keep(sw)
+                        slots[base + 10] = 1 if os.environ.get("MK_HSK_OFF") else 0      # (test switch: exact head everywhere)
                     slots[base + 2] = keep(ck.f32("model.norm.weight"))
                 else:
                     self._pack_layer(ck, i, cfg, slots, keep, cache_bytes)
@@ -145,7 +197,7 @@ class Engine:
         freqs = torch.arange(self.max_context, device="cuda")[:, None].float() * inv_freq.cuda()[None, :]
         emb = torch.cat((freqs, freqs), dim=-1)
         base = NLAYER * 20
-        if self.track == "B":     # float32 tables (the Hugging Face BF16 path rounds them to BF16)
+        if self.track == "F":     # float32 tables (the Hugging Face BF16 path rounds them to BF16)
             slots[base + 3] = keep(emb.cos().contiguous())
             slots[base + 4] = keep(emb.sin().contiguous())
         else:
@@ -347,6 +399,8 @@ class Engine:
         if len(prompt) - 1 + n > self.max_context:
             raise ValueError("submit: %d prompt tokens + %d new tokens do not fit the context of %d positions"
                              % (len(prompt), n, self.max_context))
+        if min(prompt) < 0 or max(prompt) >= VOCAB:      # (the kernel would read them modulo the vocabulary)
+            raise ValueError("submit: token ids must be in [0, %d)" % VOCAB)
         self._pending.append((rid, prompt, n, time.perf_counter()))
 
     def poll(self) -> list:

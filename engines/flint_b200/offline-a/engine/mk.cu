@@ -143,7 +143,7 @@ typedef unsigned long long u64;
 #define HSTG 0                   // experiment (off: with the batched K/V loads it is 16-45 us slower than without): the owners stage their pair's first K/V tiles in registers after their phase A
 #endif
 #ifndef K2B
-#define K2B 0                    // experiment (off: same bits, +10 us, spill line 160/52/60): batch 7-8, pairs on main blocks: two batches of K tiles in flight in the scores
+#define K2B 1                    // (on since s0012: -11 us at batch 8 on client-like prompts, journal 102-103; once off: same bits, +10 us, spill line 160/52/60): batch 7-8, pairs on main blocks: two batches of K tiles in flight in the scores
 #endif
 #ifndef RSTG
 #define RSTG 0                   // experiment (off: same bits, -2 us = nothing; the pairs on main blocks are the last ones anyway): batch > 2, router blocks with an attention pair stage key groups 16..27 in shared memory, too
@@ -179,6 +179,32 @@ typedef unsigned long long u64;
 #define ROUTE_RANK 1             // batch 1-2: top 6 by ranks instead of rounds of warp maxima (bit-identical choice and weights)
 #endif
 #define VOCAB 150144
+#ifndef HSK
+#define HSK 0
+#endif
+// EPF (batch 1-2): expert prefetch. At the start of a MoE layer the router blocks apply their router tiles (already in
+// registers) to the layer INPUT normed with the post-attention norm's weights (a prediction of the router's input,
+// x + attention) and publish the 256 predicted logits as tagged words; the main blocks, while they wait for the
+// attention, rank them and an idle warp pulls the EPF_K largest experts' tiles into L2, each block 1/128 of each
+// expert. Only a cache hint: the arithmetic and every result are unchanged.
+#ifndef EPF
+#define EPF 0
+#endif
+#ifndef EPF_K
+#define EPF_K 6
+#endif
+#ifndef EPF_DOWN
+#define EPF_DOWN 1
+#endif
+#ifndef EPF_POLL
+#define EPF_POLL 4096
+#endif
+#ifndef EPF_PUB
+#define EPF_PUB 1                // 0: the router blocks publish no prediction (timing probe)
+#endif
+#ifndef EPF_ISS
+#define EPF_ISS 1                // 0: rank only, no prefetch; 1: issued by an idle warp
+#endif
 #define NMAIN 128
 #define NAUX 24
 #define NROUT 16
@@ -223,9 +249,22 @@ struct LayerP {
 };
 
 struct Params {
-    LayerP L[NLAYER];
+#ifndef HPF3Q
+#define HPF3Q 0                  // (study) track B: HPF3 prefetches the head sketch's first 20 MB instead of the head's
+#endif
+#ifndef HSKE
+#define HSKE 0                   // (study) track B: the sketch's int8 tiles with the evict-first hint
+#endif
+#ifndef HPF3
+#define HPF3 1                   // 1 (since s0015): a layer entry past the last whose q/k/v pointer is the head: the last layer's q/k/v prefetch (end of C) fetches the head's first 20 MB (-4..-5 B=1, journal 122-124)
+#endif
+    LayerP L[NLAYER + (HPF3 ? 1 : 0)];
     const u16* embed;
     const uint4* head;
+    const uint4 *hq, *hen;   // track B head sketch: int8 tiles [V/16][64][32 lanes], block-norm tiles [V/16][2][32 lanes] (BF16, rounded up)
+    const float2* hsw;       // ... (s_i, wn_i) per row
+    float* lbv;              // ... [NBLK][MAXB] the blocks' largest lower bounds
+    int hsk_on;              // ... 1: greedy paths use it (0: the exact head; a test switch, MK_HSK_OFF)
     const float* fnorm;
     const float *cosT, *sinT;
     int maxctx, kgmax;
@@ -237,6 +276,7 @@ struct Params {
     float4* qraw;        // raw q/k/v sums per sequence: [MAXB][320 row groups][8 g] = {half 0: row g, row g+8; half 1: row g, row g+8}
     uint2* attnf;        // attention output as B fragments, per sequence: [MAXB][256 chunks][4 lanes]
     float* rl;           // [MAXB][NEXP] router logits
+    unsigned long long* rlp;   // (EPF) [NEXP] predicted logits of sequence 0, tagged {float bits, epoch}
     uint2* hbuf;         // SwiGLU hidden as B fragments, per sequence: [MAXB][50 slots x 32 chunks][4 lanes]; slots 48,49 = shared expert; dense MLP: 384 chunks from slot 0
     float* argv;         // [NMAIN][MAXB]
     int* argi;           // [NMAIN][MAXB]
@@ -564,6 +604,37 @@ template <int N> __device__ __forceinline__ void tload(uint4* T, const uint4* p)
 #endif
 }
 
+// EVF: the expert phases' tile loads with an L2 evict-first policy (they are streamed once per layer and not read
+// again soon; the prefetched q/k/v, shared-expert tiles and the hand-over buffers stay in L2 instead). Cache hint only.
+#ifndef EVF
+#define EVF 1
+#endif
+#ifndef EVFV
+#define EVFV 1                   // 1 (since s0014): the evict-first loads without L1::no_allocate (-6 B=1, -15..-25 B=8; journal 118-119); 0: with it; 2: fraction 0.5 (+90 B=8)
+#endif
+#ifndef EVFH
+#define EVFH 1                   // the exact head's tiles with the same hint (needs EVF for tloadE to apply it)
+#endif
+template <int N> __device__ __forceinline__ void tloadE(uint4* T, const uint4* p) {
+#if EVF
+    unsigned long long pol;
+#if EVFV == 2
+    asm("createpolicy.fractional.L2::evict_first.b64 %0, 0.5;" : "=l"(pol));
+#else
+    asm("createpolicy.fractional.L2::evict_first.b64 %0, 1.0;" : "=l"(pol));
+#endif
+#if EVFV == 1
+#pragma unroll
+    for (int i = 0; i < N; i++) asm("ld.global.L2::cache_hint.v4.u32 {%0,%1,%2,%3}, [%4], %5;" : "=r"(T[i].x), "=r"(T[i].y), "=r"(T[i].z), "=r"(T[i].w) : "l"(p + i * 32), "l"(pol));
+#else
+#pragma unroll
+    for (int i = 0; i < N; i++) asm("ld.global.L1::no_allocate.L2::cache_hint.v4.u32 {%0,%1,%2,%3}, [%4], %5;" : "=r"(T[i].x), "=r"(T[i].y), "=r"(T[i].z), "=r"(T[i].w) : "l"(p + i * 32), "l"(pol));
+#endif
+#else
+    tload<N>(T, p);
+#endif
+}
+
 // norm weights of the next RMSNorm into shared memory: one 16-byte load per thread
 __device__ __forceinline__ void nw_load(float* nw, const float* w) {
     const int tid = threadIdx.x;
@@ -805,6 +876,18 @@ __device__ __forceinline__ void frag_copy_n(uint2* xf, int Ls, int nchunks, int 
 
 // Write one hidden unit of a SwiGLU (gate row g of the row group, up row g+8) into the per-sequence B fragments;
 // chunk0: first chunk of the unit in hbuf.
+// (dense layers, DMLP & 256) h_store's values as plain stores; the caller fences before its counter bump
+__device__ __forceinline__ void h_store_plain(const Params* P, const float4& c, int lr, int lane, int B, int chunk0) {
+    const int g = lane >> 2, t = lane & 3;
+    const int j = 8 * lr + g;
+    for (int i = 0; i < 2; i++) {
+        const int b = 2 * t + i;
+        const float gate = rbA(cget(c, i)), up = rbA(cget(c, 2 + i));
+        const u32 hv = fbits(rbA(silu(gate)) * up) & 0xFFFFu;
+        const u32 pv = __shfl_xor_sync(0xffffffffu, hv, 4);
+        if (b < B && !(g & 1)) *((volatile u32*)(P->hbuf + (size_t)b * HCHUNKS * 4) + (gidx(chunk0 + (j >> 4), j & 15) >> 1)) = hv | (pv << 16);
+    }
+}
 __device__ __forceinline__ u32 h_store(const Params* P, const float4& c, int lr, int lane, int B, int chunk0, const float* member = nullptr) {
     u32 dep = 0u;
     // called by a whole warp. Units g (even) and g+1 of the row group share one 32-bit word of the fragment buffer:
@@ -1024,6 +1107,31 @@ __device__ __forceinline__ float pma(float a, float b, float c, int mode) {     
 }
 #define NK2 12
 #define NV2 0                     // V levels staged in shared memory (0: the reservation must stay small, see SM_TOTAL)
+// KQT: the scores of a key group as K x q^T, with the K tile (16 keys x 16 dims) as the A operand and q (8 heads) as
+// the B operand: 8 mma per key group instead of 16 (q as A has 8 rows of zeros). The K tile registers are already an A
+// fragment up to their order (x, z, y, w); q's are already a B fragment. The tensor core gives bit-identical results
+// for the transposed product (tools/bench_mmaT.cu: 0 of 1.25e9 chained scores differ), and the scores are brought
+// back to the layout every later stage uses (head g; keys 2t, 2t+1, 2t+8, 2t+9) with 8 shuffles.
+// Per track: the track-B build (HSK) kept the 16-mma form until s0016 (its batch-1 kernel drew the better allocation
+// with it then); on the s0015 source both tracks draw 176/16..24 B with KQT and B gains ~6 us over A (journal 129-130).
+// The scores are the same bits either way.
+// KQT_SMALL / KQT_BIG: the form used by the batch 1-2 / batch > 2 kernel instance.
+#ifndef KQT_SMALL
+#define KQT_SMALL 1
+#endif
+#ifndef KQT_BIG
+#define KQT_BIG 1
+#endif
+__device__ __forceinline__ void kq_mma(float4& c, const uint4& k, const uint2& q2) { mma(c, make_uint4(k.x, k.z, k.y, k.w), q2); }
+__device__ __forceinline__ void kq_tr(const float4& cT, float4& c0, float4& c1) {
+    const int lane = threadIdx.x & 31, g = lane >> 2, t = lane & 3;
+    const int sA = (2 * t) * 4 + (g >> 1), sB = sA + 4;
+    const float ax = __shfl_sync(0xffffffffu, cT.x, sA), ay = __shfl_sync(0xffffffffu, cT.y, sA);
+    const float az = __shfl_sync(0xffffffffu, cT.z, sA), aw = __shfl_sync(0xffffffffu, cT.w, sA);
+    const float bx = __shfl_sync(0xffffffffu, cT.x, sB), by = __shfl_sync(0xffffffffu, cT.y, sB);
+    const float bz = __shfl_sync(0xffffffffu, cT.z, sB), bw = __shfl_sync(0xffffffffu, cT.w, sB);
+    c0.x = (g & 1) ? ay : ax; c0.y = (g & 1) ? by : bx; c1.x = (g & 1) ? aw : az; c1.y = (g & 1) ? bw : bz;
+}
 struct AttnSm {              // shared-memory views of an attention block
     uint2* qA;               // [8 dim chunks][32 lanes] q as mma A operand (rows = heads): registers 0 and 2 (rows 8..15 are zero)
     uint2* wb;               // [key groups][32 lanes] attention weights as mma B operand
@@ -1083,7 +1191,7 @@ __device__ __forceinline__ void attn_stage(const Params* P, const LayerP& L, int
 
 // One (sequence b, K/V head kvg) pair = 8 query heads. The key of the current position is handled from registers.
 // staged: attn_stage ran for this layer and position (T holds the K and V tiles of key group kg0 + warp).
-__device__ __forceinline__ void attention(const Params* P, const LayerP& L, int b, int kvg, int pos, const AttnSm& S, uint4* T, bool staged, bool smstaged, int pblk, int* ppi, bool has_pre, bool bkv, const uint4* ctiles = nullptr, unsigned cxt = 0u, bool k2b = false) {
+__device__ __forceinline__ void attention(const Params* P, const LayerP& L, int b, int kvg, int pos, const AttnSm& S, uint4* T, bool staged, bool smstaged, int pblk, int* ppi, bool has_pre, bool bkv, const uint4* ctiles = nullptr, unsigned cxt = 0u, bool k2b = false, bool kqt = true) {
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, g = lane >> 2, t = lane & 3;
     float* sm = S.sm;
     const size_t cbase = ((size_t)(b * NKV + kvg) * P->kgmax) * 8 * 32;
@@ -1232,6 +1340,12 @@ __device__ __forceinline__ void attention(const Params* P, const LayerP& L, int 
             for (int i = warp; i < nkgS; i += 32, j += 2) {
                 {
                     float4 c0 = make_float4(0.f, 0.f, 0.f, 0.f), c1 = c0;
+                    if (kqt) {
+                        float4 cT = make_float4(0.f, 0.f, 0.f, 0.f);
+#pragma unroll
+                        for (int dc = 0; dc < 8; dc++) kq_mma(cT, T[dc], S.qA[dc * 32 + lane]);
+                        kq_tr(cT, c0, c1);
+                    } else
 #pragma unroll
                     for (int dc = 0; dc < 8; dc++) {
                         const uint2 q2 = S.qA[dc * 32 + lane];
@@ -1247,6 +1361,12 @@ __device__ __forceinline__ void attention(const Params* P, const LayerP& L, int 
                 }
                 if (i + 16 < nkgS) {
                     float4 c0 = make_float4(0.f, 0.f, 0.f, 0.f), c1 = c0;
+                    if (kqt) {
+                        float4 cT = make_float4(0.f, 0.f, 0.f, 0.f);
+#pragma unroll
+                        for (int dc = 0; dc < 8; dc++) kq_mma(cT, T[8 + dc], S.qA[dc * 32 + lane]);
+                        kq_tr(cT, c0, c1);
+                    } else
 #pragma unroll
                     for (int dc = 0; dc < 8; dc++) {
                         const uint2 q2 = S.qA[dc * 32 + lane];
@@ -1265,6 +1385,12 @@ __device__ __forceinline__ void attention(const Params* P, const LayerP& L, int 
         for (int i = warp; i < nkgS; i += 16, j++) {
             float4 c0 = make_float4(0.f, 0.f, 0.f, 0.f), c1 = c0;
             if (j == 0 && staged) {
+                if (kqt) {
+                    float4 cT = make_float4(0.f, 0.f, 0.f, 0.f);
+#pragma unroll
+                    for (int dc = 0; dc < 8; dc++) kq_mma(cT, T[dc], S.qA[dc * 32 + lane]);
+                    kq_tr(cT, c0, c1);
+                } else
 #pragma unroll
                 for (int dc = 0; dc < 8; dc++) {
                     const uint2 q2 = S.qA[dc * 32 + lane];
@@ -1275,6 +1401,11 @@ __device__ __forceinline__ void attention(const Params* P, const LayerP& L, int 
             } else {
                 const uint4* kt = (smstaged && i < 16 + NK2 ? S.k2 + (size_t)(i - 16) * 8 * 32 : kc + (size_t)(kg0 + i) * 8 * 32) + lane;
                 if (!bkv) {
+                if (kqt) {
+                    float4 cT = make_float4(0.f, 0.f, 0.f, 0.f);
+                    for (int dc = 0; dc < 8; dc++) kq_mma(cT, kt[dc * 32], S.qA[dc * 32 + lane]);
+                    kq_tr(cT, c0, c1);
+                } else
                 for (int dc = 0; dc < 8; dc++) {
                     const uint4 k = kt[dc * 32];
                     const uint2 q2 = S.qA[dc * 32 + lane];
@@ -1287,6 +1418,12 @@ __device__ __forceinline__ void attention(const Params* P, const LayerP& L, int 
                 // into the staging registers of the first key group, which is done (more registers would spill).
 #pragma unroll
                 for (int dc = 0; dc < 8; dc++) T[dc] = (smstaged && i < 16 + NK2) ? kt[dc * 32] : lda(kt + dc * 32);      // (the staged groups are in shared memory)
+                if (kqt) {
+                    float4 cT = make_float4(0.f, 0.f, 0.f, 0.f);
+#pragma unroll
+                    for (int dc = 0; dc < 8; dc++) kq_mma(cT, T[dc], S.qA[dc * 32 + lane]);
+                    kq_tr(cT, c0, c1);
+                } else
 #pragma unroll
                 for (int dc = 0; dc < 8; dc++) {
                     const uint2 q2 = S.qA[dc * 32 + lane];
@@ -1960,12 +2097,390 @@ __device__ __noinline__ void gather_best(const Params* P, int B, float* sm, int*
 #ifndef NACC
 #define NACC 4                    // accumulators per mma chain (1, 2 or 4): the summation order of every matrix-vector product
 #endif
+#if HSK && NACC != 2
+#error "the head sketch's pass 2 reproduces the exact head's two chains (NACC 2)"
+#endif
 #ifdef MK_PROF
 #define NHB NMAIN                 // blocks that stream the head (profiling build: main blocks only)
 #else
 #define NHB NBLK                  // all 152 blocks stream the head
 #endif
 #define NPA 16                   // tiles of phase A loaded ahead (of 20 per warp)
+#ifdef HSK_STATS
+__device__ unsigned long long g_hsk[16];      // [0] candidate groups, [1] steps x blocks, [2..7] cycles of block 0 per stage of the sketch, [8] cycles of block 0 in the exact head
+#endif
+#if HSK
+// ---- Track B: the head of the greedy paths (generate, serve) through a certified int8 sketch (notes/headsketch.md).
+// Pass 1 reads q_i = round(w_i / s_i) (int8, half the head's bytes) and computes approx_i = s_i q_i . x exactly in
+// integers (x as two digits: X = round(x 2^k) = 256 hi + lo, hi signed, lo unsigned), and a bound with
+// |exact_i - approx_i| <= bound_i, where exact_i is what the BF16 head computes for row i (this kernel's mma chains):
+//   bound_i = (1 + 2^-8) sum_b ||e_i,b|| ||x_b|| + wn_i (||r|| + 2^-12 ||x||) (1 + 2^-8)
+// (e = w - s q, 32 blocks of 64 columns; r = x - X 2^-k; wn_i >= ||s_i q_i||; 2^-12 ||w|| ||x|| covers the float32
+// accumulation of the exact head, at least 8x what 128 chained mma steps can lose). Every row whose upper bound reaches
+// the largest lower bound over all rows is computed again with the exact head's own arithmetic (pass 2: the same two
+// mma chains over even and odd tiles, the same final adds), and the token is the best of those exact values, lowest
+// index on a tie: the same token as the exact head (the rows left out are strictly below the maximum).
+#define HSK_XD (88 << 10)          // 32 KB: x digits as B fragments of mma.m16n8k32 [64 chunks][32 lanes] {hi k0-3, hi k16-19, lo k0-3, lo k16-19}
+#define HSK_XN (120 << 10)         // 512 B: block norms ||x_b|| (rounded up) as B fragments of mma.m16n8k16 [2][32 lanes]
+#define HSK_UP (HSK_XN + 512)      // 64 x 8 floats: per local row group and sequence, the largest upper bound
+#define HSK_SC (HSK_UP + 2048)     // 8 floats 2^-k, 8 floats extra term per sequence, 8 floats L, 64 ints candidate list, 1 int count
+#define HSK_SLOT (16 << 10)        // 16 KB (the partial-sum slots, unused at the head): pass-2 chains [8 pairs][2][32 lanes] float4
+#define HSK_MAXG 62                // row groups per block (61 or 62)
+#ifndef HSK_CONTIG
+#define HSK_CONTIG 0               // 1: block b takes the row groups [b G / 152, (b + 1) G / 152) like the exact head; 0: b, b + 152, ...
+#endif
+#define HSK_RG(j) (HSK_CONTIG ? (blk * (VOCAB / 16)) / NBLK + (j) : blk + NBLK * (j))
+#ifdef MK_PROF
+#error "the head sketch needs the head on all 152 blocks (the profiling build runs it on the main blocks only)"
+#endif
+__device__ __forceinline__ void imma_su(int4& c, const uint4& a, u32 b0, u32 b1) {
+    asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+                 : "+r"(c.x), "+r"(c.y), "+r"(c.z), "+r"(c.w) : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w), "r"(b0), "r"(b1));
+}
+__device__ __forceinline__ void imma_uu(int4& c, const uint4& a, u32 b0, u32 b1) {
+    asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.u8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+                 : "+r"(c.x), "+r"(c.y), "+r"(c.z), "+r"(c.w) : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w), "r"(b0), "r"(b1));
+}
+// returns the counter target after the extra exchange; publishes the block's best exact (value, index) per sequence
+// into argv/argi with hdep (the caller bumps CM as for the exact head)
+#ifdef HSK_STATS
+#define HSK_T(i) do { if (blk == 0 && tid == 0) { const unsigned long long c_ = clock64(); if (i) atomicAdd(&g_hsk[1 + (i)], c_ - t_hsk); t_hsk = c_; } } while (0)
+#else
+#define HSK_T(i) do {} while (0)
+#endif
+#ifndef HSK_INL
+#define HSK_INL __noinline__
+#endif
+template <int BIG>
+__device__ HSK_INL unsigned head_sketch(const Params* P, int B, unsigned tm) {
+    // (few arguments and no pointer to a caller's variable: what the call costs the caller's register allocation)
+    extern __shared__ uint4 smem_hsk[];
+    char* sb = (char*)smem_hsk;
+    const uint2* xf = (const uint2*)(sb + SM_XF);
+    float* sm = (float*)(sb + SM_SM);
+    int* smi = (int*)(sb + SM_SMI);
+    const int Ls = BIG ? (B <= 4 ? 16 : 32) : (B <= 1 ? 4 : 8);
+    const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31, g = lane >> 2, t = lane & 3;
+    const int blk = blockIdx.x;
+    const uint4* const hq = P->hq;
+    const uint4* const hen = P->hen;
+    const float2* const hsw = P->hsw;
+    uint4* XD = (uint4*)(sb + HSK_XD);
+    uint2* XN = (uint2*)(sb + HSK_XN);
+    float* UP = (float*)(sb + HSK_UP);
+    float* SC = (float*)(sb + HSK_SC);
+    int* CL = (int*)(SC + 32);
+    u16* XNV = (u16*)(sb + HSK_SLOT);            // [8][32] block norms as BF16 (scratch, before pass 2)
+    const float4 zero4 = make_float4(0.f, 0.f, 0.f, 0.f);
+#ifdef HSK_STATS
+    unsigned long long t_hsk = 0;
+#endif
+    HSK_T(0);
+    // The first HSK_PF bytes of each warp's first row group are sent to L2 before anything else (a bulk prefetch:
+    // no registers held), so the preparation below runs under their latency. (Holding the first batch in registers
+    // across the preparation instead made this function and both kernel instances spill: 1467 -> 1621 us.)
+    const int ng = (VOCAB / 16 - blk + NBLK - 1) / NBLK;
+#ifndef HSK_PF
+#define HSK_PF 16384
+#endif
+    if (HSK_PF && lane == 0 && warp < ng)
+        asm volatile("cp.async.bulk.prefetch.L2.global [%0], %1;" :: "l"(hq + (size_t)HSK_RG(warp) * 64 * 32), "r"(HSK_PF) : "memory");
+    // ---- 1. per sequence (warp b): block sums of squares, max |x|; digits; ||r||
+    if (warp < 8) {
+        const int b = warp, bb = lane;
+        float ss = 0.f, mx = 0.f;
+        if (b < B) {
+            for (int c = 4 * bb; c < 4 * bb + 4; c++)
+                for (int sub = 0; sub < 4; sub++) {
+                    const uint2 v = xf[c * Ls + b * 4 + sub];
+                    const float a0 = b2f((u16)v.x), a1 = b2f((u16)(v.x >> 16)), a2 = b2f((u16)v.y), a3 = b2f((u16)(v.y >> 16));
+                    ss = fmaf(a0, a0, ss); ss = fmaf(a1, a1, ss); ss = fmaf(a2, a2, ss); ss = fmaf(a3, a3, ss);
+                    mx = fmaxf(mx, fmaxf(fmaxf(fabsf(a0), fabsf(a1)), fmaxf(fabsf(a2), fabsf(a3))));
+                }
+        }
+        // ||x_b|| rounded up: float32 sum of 64 squares (relative error < 2^-17) and sqrt, times (1 + 2^-10), then up to BF16
+        const float nb = sqrtf(ss) * (1.0f + 0x1p-10f);
+        u32 hb = __float_as_uint(nb) >> 16;
+        if (__uint_as_float(hb << 16) < nb) hb++;
+        XNV[b * 32 + bb] = (u16)hb;
+        float tot = ss;
+        for (int o = 16; o; o >>= 1) { tot += __shfl_xor_sync(0xffffffffu, tot, o); mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, o)); }
+        if (lane < 8 && warp == 0) sm[512 + lane] = 0.f;      // sums of r^2 per sequence (step 1b)
+        if (lane == 0) {
+            int E = 0;
+            frexpf(mx, &E);                       // mx < 2^E
+            const int k = mx > 0.f ? 14 - E : 0;  // |X| = |x| 2^k < 2^14
+            SC[b] = ldexpf(1.0f, k); SC[24 + b] = ldexpf(1.0f, -k);
+            SC[8 + b] = sqrtf(tot) * (1.0f + 0x1p-10f);    // ||x|| (up), the r term is added below
+        }
+    }
+    __syncthreads();
+    if (tid < 64) {      // B fragments of the block norms: chunk h (blocks 16h..16h+15), lane (seq g, t)
+        const int h = tid >> 5, l = tid & 31, gg = l >> 2, tt = l & 3;
+        uint2 v = make_uint2(0u, 0u);
+        if (gg < B) {
+            const u16* r = XNV + gg * 32 + 16 * h;
+            v = make_uint2(r[2 * tt] | ((u32)r[2 * tt + 1] << 16), r[2 * tt + 8] | ((u32)r[2 * tt + 9] << 16));
+        }
+        XN[h * 32 + l] = v;
+    }
+    // Digits X = round(x 2^k) = 256 hi + lo, hi = (X + 128) >> 8 in [-64, 64], lo in [-128, 127] (both signed).
+    // BIG = 0 (batch 1-2): one mma per tile, hi digits in B columns 0..B-1 and lo digits in columns 4..4+B-1;
+    // BIG = 1: two mmas per tile, {hi, lo} per lane.
+    float rr = 0.f;      // sum of r^2 of this thread's values (sequence g of its lane; counted once per element)
+    for (int e = tid; e < 64 * 32; e += 512) {
+        const int c = e >> 5, l = e & 31, gg = l >> 2, tt = l & 3;
+        const int sq = BIG ? gg : (gg & 3), dig = BIG ? 2 : (gg >> 2);     // sequence, digit (0 hi, 1 lo, 2 both)
+        u32 hw[2] = {0u, 0u}, lw[2] = {0u, 0u};
+        if (sq < B) {
+            const float sc = SC[sq], isc = SC[24 + sq];
+#pragma unroll
+            for (int kh = 0; kh < 2; kh++) {
+                // columns 32c + 16kh + 4tt + i, i = 0..3: chunk 2c + kh of the BF16 fragments, entries 2(tt&1), 2(tt&1)+1, half tt>>1
+                const uint2 v0 = xf[(2 * c + kh) * Ls + sq * 4 + 2 * (tt & 1)], v1 = xf[(2 * c + kh) * Ls + sq * 4 + 2 * (tt & 1) + 1];
+                const u32 w0 = (tt >> 1) ? v0.y : v0.x, w1 = (tt >> 1) ? v1.y : v1.x;
+                const float xs[4] = {b2f((u16)w0), b2f((u16)(w0 >> 16)), b2f((u16)w1), b2f((u16)(w1 >> 16))};
+#pragma unroll
+                for (int i = 0; i < 4; i++) {
+                    const float X = rintf(xs[i] * sc);
+                    if (dig != 1) { const float r = xs[i] - X * isc; rr = fmaf(r, r, rr); }     // exact: X 2^-k is an integer scaled by a power of two
+                    const int Xi = (int)X, hi = (Xi + 128) >> 8, lo = Xi - hi * 256;
+                    hw[kh] |= ((u32)hi & 255u) << (8 * i);
+                    lw[kh] |= ((u32)lo & 255u) << (8 * i);
+                }
+            }
+        }
+        if (BIG) ((uint4*)XD)[e] = make_uint4(hw[0], hw[1], lw[0], lw[1]);
+        else ((uint2*)XD)[e] = dig == 0 ? make_uint2(hw[0], hw[1]) : make_uint2(lw[0], lw[1]);
+    }
+    // ||r|| per sequence: the threads with sequence gg are those with (e & 31) >> 2 == gg; e & 31 = tid & 31 here
+    for (int o = 1; o <= 2; o <<= 1) rr += __shfl_xor_sync(0xffffffffu, rr, o);     // over tt
+    if (t == 0 && (BIG ? g : (g < 4 ? g : 8)) < B) atomicAdd(&sm[512 + g], rr);
+    __syncthreads();
+    if (tid < 8) {
+        // extra term per sequence: (||r|| + 2^-12 ||x||) (1 + 2^-8); ||r||^2 summed in float32 (relative error < 2^-12)
+        const float rn = sqrtf(sm[512 + tid]) * (1.0f + 0x1p-10f);
+        SC[8 + tid] = (rn + 0x1p-12f * SC[8 + tid]) * (1.0f + 0x1p-8f);
+        SC[16 + tid] = SC[24 + tid];              // 2^-k
+    }
+    __syncthreads();
+    HSK_T(1);
+    // ---- 2. pass 1: row groups blk + 152 j, j = warp, warp + 16, ...
+    static_assert(!HSK_CONTIG, "(contiguous ranges: measured slower, not kept)");
+    float lbest0 = -INFINITY, lbest1 = -INFINITY;            // best lower bound of sequences 2t, 2t+1 over this thread's rows
+    const float sk0 = SC[16 + 2 * t], sk1 = SC[16 + 2 * t + 1], ex0 = SC[8 + 2 * t], ex1 = SC[8 + 2 * t + 1];
+    unsigned long long hpol = 0;
+    if (HSKE == 2) asm volatile("createpolicy.fractional.L2::evict_first.b64 %0, 1.0;" : "=l"(hpol));
+    for (int j = warp; j < ng; j += 16) {
+        const int rg = HSK_RG(j);
+        const uint4* qt = hq + (size_t)rg * 64 * 32 + lane;
+        const uint4 en0 = hen[((size_t)rg * 2) * 32 + lane], en1 = hen[((size_t)rg * 2 + 1) * 32 + lane];
+        const float2 sw0 = hsw[rg * 16 + g], sw8 = hsw[rg * 16 + g + 8];
+        int4 ch0 = make_int4(0, 0, 0, 0), ch1 = ch0, cl0 = ch0, cl1 = ch0;
+        uint4 T[16];
+        for (int c0 = 0; c0 < 64; c0 += 16) {
+            if (HSKE == 2) {
+#pragma unroll
+                for (int i = 0; i < 16; i++) asm volatile("ld.global.L2::cache_hint.v4.u32 {%0,%1,%2,%3}, [%4], %5;" : "=r"(T[i].x), "=r"(T[i].y), "=r"(T[i].z), "=r"(T[i].w) : "l"(qt + (size_t)(c0 + i) * 32), "l"(hpol)); }
+            else if (HSKE) tloadE<16>(T, qt + (size_t)c0 * 32); else tload<16>(T, qt + (size_t)c0 * 32);
+#pragma unroll
+            for (int i = 0; i < 16; i++) {
+                if (BIG) {
+                    const uint4 d = ((const uint4*)XD)[(c0 + i) * 32 + lane];
+                    imma_su(i & 1 ? ch1 : ch0, T[i], d.x, d.y);
+                    imma_su(i & 1 ? cl1 : cl0, T[i], d.z, d.w);
+                } else {
+                    const uint2 d = ((const uint2*)XD)[(c0 + i) * 32 + lane];
+                    imma_su(i & 1 ? ch1 : ch0, T[i], d.x, d.y);
+                }
+            }
+        }
+        float4 bn = zero4;
+        mma(bn, en0, XN[lane]);
+        mma(bn, en1, XN[32 + lane]);
+        int chv[4] = {ch0.x + ch1.x, ch0.y + ch1.y, ch0.z + ch1.z, ch0.w + ch1.w};
+        int clv[4] = {cl0.x + cl1.x, cl0.y + cl1.y, cl0.z + cl1.z, cl0.w + cl1.w};
+        if (!BIG) {       // the lo sums of sequences 2t, 2t+1 are in columns 4 + 2t, 4 + 2t + 1: lane t + 2
+#pragma unroll
+            for (int i = 0; i < 4; i++) clv[i] = __shfl_xor_sync(0xffffffffu, chv[i], 2);
+        }
+        const float bnv[4] = {bn.x, bn.y, bn.z, bn.w};
+        float up0 = -INFINITY, up1 = -INFINITY;
+#pragma unroll
+        for (int i = 0; i < 4; i++) {
+            const float2 sw = (i >> 1) ? sw8 : sw0;
+            const float S = fmaf(256.0f, (float)chv[i], (float)clv[i]);
+            const float ap = sw.x * (S * ((i & 1) ? sk1 : sk0));
+            const float bd = fmaf(bnv[i], 1.0f + 0x1p-8f, sw.y * ((i & 1) ? ex1 : ex0));
+            const float lo = ap - bd, hi = ap + bd;
+            if (i & 1) { lbest1 = fmaxf(lbest1, lo); up1 = fmaxf(up1, hi); } else { lbest0 = fmaxf(lbest0, lo); up0 = fmaxf(up0, hi); }
+        }
+        for (int o = 4; o <= 16; o <<= 1) { up0 = fmaxf(up0, __shfl_xor_sync(0xffffffffu, up0, o)); up1 = fmaxf(up1, __shfl_xor_sync(0xffffffffu, up1, o)); }
+        if (g == 0) { UP[j * 8 + 2 * t] = up0; UP[j * 8 + 2 * t + 1] = up1; }
+    }
+    for (int o = 4; o <= 16; o <<= 1) { lbest0 = fmaxf(lbest0, __shfl_xor_sync(0xffffffffu, lbest0, o)); lbest1 = fmaxf(lbest1, __shfl_xor_sync(0xffffffffu, lbest1, o)); }
+    if (g == 0) { sm[warp * 8 + 2 * t] = lbest0; sm[warp * 8 + 2 * t + 1] = lbest1; }
+    __syncthreads();
+    HSK_T(2);
+    u32 dep = 0u;
+    if (tid < B) {
+        float v = sm[tid];
+        for (int w = 1; w < 16; w++) v = fmaxf(v, sm[w * 8 + tid]);
+        dep = put32(P->lbv + blk * MAXB + tid, __float_as_uint(v));
+    }
+    __syncthreads();
+    if (warp == 0) {
+        SETTLE(dep);
+        FENCE(128);
+        if (tid == 0) atomicAdd(P->ctr + CM, 1u);
+    }
+    tm += NHB_;
+    wait_ctr(P, CM, tm);
+    HSK_T(3);
+    // ---- 3. the largest lower bound per sequence over all blocks
+    {
+        const int b = tid & 7, p = tid >> 3;
+        float v = -INFINITY;
+        if (b < B) {
+            float vv[3];
+#pragma unroll
+            for (int k = 0; k < 3; k++) vv[k] = (p + 64 * k < NHB_) ? ldx(P->lbv + (p + 64 * k) * MAXB + b) : -INFINITY;
+            v = fmaxf(vv[0], fmaxf(vv[1], vv[2]));
+        }
+        for (int o = 8; o <= 16; o <<= 1) v = fmaxf(v, __shfl_xor_sync(0xffffffffu, v, o));
+        if (lane < 8) sm[warp * 8 + lane] = v;
+        __syncthreads();
+        if (tid < 8) {
+            float L = sm[tid];
+            for (int w = 1; w < 16; w++) L = fmaxf(L, sm[w * 8 + tid]);
+            SC[16 + tid] = L;            // (2^-k is no longer needed)
+        }
+        __syncthreads();
+    }
+    // ---- 4. candidate row groups (ascending local index), then pass 2: the exact head's two chains on two warps each
+    if (tid < 64) {
+        bool cand = false;
+        if (tid < ng) for (int b = 0; b < B; b++) cand |= UP[tid * 8 + b] >= SC[16 + b];
+        const unsigned m = __ballot_sync(0xffffffffu, cand);
+        if (lane == 0) CL[64 + warp] = __popc(m);
+        CL[72 + tid] = cand ? (int)__popc(m & ((1u << lane) - 1u)) : -1;
+    }
+    __syncthreads();
+    if (tid < 64) {
+        const int pos = CL[72 + tid];
+        if (pos >= 0) CL[pos + (tid >= 32 ? CL[64] : 0)] = tid;
+    }
+    __syncthreads();
+    const int ncand = CL[64] + CL[65];
+#ifdef HSK_STATS
+    if (tid == 0) { atomicAdd(&g_hsk[0], (unsigned long long)ncand); atomicAdd(&g_hsk[1], 1ull); }
+#endif
+    HSK_T(4);
+#ifdef MK_CLK
+    if (tid == 0) { P->bt[10 * NBLK + blk] = clk_lo(); P->bt[12 * NBLK + blk] = (unsigned)ncand; }
+#endif
+    float4* slot = (float4*)(sb + HSK_SLOT);
+    float bv0 = -INFINITY, bv1 = -INFINITY;
+    int bi0 = 0x7fffffff, bi1 = 0x7fffffff;
+#ifndef HSP2
+#define HSP2 1                   // (since s0023) pass 2 one candidate at a time: all 16 warps load its 128 tiles into shared memory in one round, two warps run the same chains from there
+#endif
+    if (HSP2) {
+        uint4* const stg = (uint4*)(sb + (56 << 10));      // 64 KB: free in pass 2 (x fragments end at 56 KB for batch <= 2; the digits at 88 KB are done)
+        for (int c = 0; c < ncand; c++) {
+            const int rg = HSK_RG(CL[c]);
+            const uint4* wt = P->head + (size_t)rg * 128 * 32 + lane;
+            {
+                uint4 R[8];
+#pragma unroll
+                for (int i = 0; i < 8; i++) R[i] = wt[(size_t)(8 * warp + i) * 32];
+#pragma unroll
+                for (int i = 0; i < 8; i++) stg[(8 * warp + i) * 32 + lane] = R[i];
+            }
+            __syncthreads();
+            if (warp < 2) {
+                const int par = warp;
+                float4 cc = zero4;
+                for (int ch = 0; ch < 128; ch += 32) {
+#pragma unroll
+                    for (int i = 0; i < 16; i++) mma(cc, stg[(ch + 2 * i + par) * 32 + lane], xget(xf, Ls, ch + 2 * i + par, lane));
+                }
+                slot[par * 32 + lane] = cc;
+            }
+            __syncthreads();
+            if (warp == 0) {
+                const float4 cs = f4add(f4add(slot[lane], slot[32 + lane]), f4add(zero4, zero4));
+                for (int i = 0; i < 4; i++) {
+                    const int b = 2 * t + (i & 1), row = rg * 16 + g + (i >> 1) * 8;
+                    if (b < B) {
+                        const float val = cget(cs, i);
+                        if (i & 1) { if (val > bv1 || (val == bv1 && row < bi1)) { bv1 = val; bi1 = row; } }
+                        else { if (val > bv0 || (val == bv0 && row < bi0)) { bv0 = val; bi0 = row; } }
+                    }
+                }
+            }
+            __syncthreads();
+        }
+    } else
+    for (int c0 = 0; c0 < ncand; c0 += 8) {
+        const int q = warp >> 1, par = warp & 1;
+        if (c0 + q < ncand) {
+            const int rg = HSK_RG(CL[c0 + q]);
+            const uint4* wt = P->head + (size_t)rg * 128 * 32 + lane;
+            float4 c = zero4;
+            uint4 T[16];
+            for (int ch = 0; ch < 128; ch += 32) {
+#pragma unroll
+                for (int i = 0; i < 16; i++) T[i] = wt[(size_t)(ch + 2 * i + par) * 32];
+#pragma unroll
+                for (int i = 0; i < 16; i++) mma(c, T[i], xget(xf, Ls, ch + 2 * i + par, lane));
+            }
+            slot[(q * 2 + par) * 32 + lane] = c;
+        }
+        __syncthreads();
+        if (warp < 8 && c0 + warp < ncand) {
+            const int rg = HSK_RG(CL[c0 + warp]);
+            const float4 c = f4add(f4add(slot[(warp * 2) * 32 + lane], slot[(warp * 2 + 1) * 32 + lane]), f4add(zero4, zero4));
+            for (int i = 0; i < 4; i++) {
+                const int b = 2 * t + (i & 1), row = rg * 16 + g + (i >> 1) * 8;
+                if (b < B) {
+                    const float val = cget(c, i);
+                    if (i & 1) { if (val > bv1 || (val == bv1 && row < bi1)) { bv1 = val; bi1 = row; } }
+                    else { if (val > bv0 || (val == bv0 && row < bi0)) { bv0 = val; bi0 = row; } }
+                }
+            }
+        }
+        __syncthreads();
+    }
+    HSK_T(5);
+#ifdef MK_CLK
+    if (tid == 0) P->bt[11 * NBLK + blk] = clk_lo();
+#endif
+    // ---- 5. the block's best per sequence (warps 0..7 hold candidates; the others -inf)
+    u32 hd = 0u;
+    float bv[2] = {bv0, bv1};
+    int bi[2] = {bi0, bi1};
+    for (int i = 0; i < 2; i++) {
+        for (int o = 4; o <= 16; o <<= 1) {
+            const float ov = __shfl_xor_sync(0xffffffffu, bv[i], o);
+            const int oi = __shfl_xor_sync(0xffffffffu, bi[i], o);
+            if (ov > bv[i] || (ov == bv[i] && oi < bi[i])) { bv[i] = ov; bi[i] = oi; }
+        }
+        if (g == 0) { sm[warp * 8 + 2 * t + i] = bv[i]; smi[warp * 8 + 2 * t + i] = bi[i]; }
+    }
+    __syncthreads();
+    if (tid < B) {
+        float v = sm[tid]; int ix = smi[tid];
+        for (int w = 1; w < 16; w++) {
+            const float ov = sm[w * 8 + tid]; const int oi = smi[w * 8 + tid];
+            if (ov > v || (ov == v && oi < ix)) { v = ov; ix = oi; }
+        }
+        hd = put32(P->argv + blk * MAXB + tid, __float_as_uint(v)); hd |= put32(P->argi + blk * MAXB + tid, (u32)ix);
+    }
+    if (warp == 0) SETTLE(hd);       // (the caller's SETTLE then sees 0)
+    return tm;
+}
+#endif
 
 // mode 0: one step, logits out. mode 1: nsteps greedy steps into gen_out [B][nsteps] (int64).
 // mode 2: served cohort: npre prompt steps without the head, then nsteps greedy steps into P->gen [B][maxctx] (int32), progress in ctr[96].
@@ -2035,7 +2550,20 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
     // these blocks reach the phase 1.5 to 3 us after the others and every block's down phase waits for their hidden
     // units). Equal weights give b * G / 128.
 #define ES_NM (big && B > 6 ? 4 * B - NAUX : 0)
-#define ESPLIT(b, G) ((((b) < ES_NM ? (b) * ES_WM : ES_NM * ES_WM + ((b) - ES_NM) * ES_WO) * (G)) / (ES_NM * ES_WM + (NMAIN - ES_NM) * ES_WO))
+// ES_TB / ES_TW / ES_TO (batch 1-2): main blocks ES_TB.. get the share ES_TW against ES_TO of the others (blocks 112-127
+// reach the expert phase late when the memory is busy, seen on the cycle counter: MK_CLK).
+#ifndef ES_TB
+#define ES_TB NMAIN
+#endif
+#ifndef ES_TW
+#define ES_TW 2
+#endif
+#ifndef ES_TO
+#define ES_TO 3
+#endif
+#define ES_TB_ (big ? NMAIN : ES_TB)
+#define ESW_(b) ((b) < ES_TB_ ? (b) * ES_TO : ES_TB_ * ES_TO + ((b) - ES_TB_) * ES_TW)
+#define ESPLIT(b, G) (ES_TB_ < NMAIN ? (ESW_(b) * (G)) / ESW_(NMAIN) : ((((b) < ES_NM ? (b) * ES_WM : ES_NM * ES_WM + ((b) - ES_NM) * ES_WO) * (G)) / (ES_NM * ES_WM + (NMAIN - ES_NM) * ES_WO)))
 #ifndef HOSTC_B
 #define HOSTC_B 24               // the first host block (the hosts are HOSTC_B .. HOSTC_B + 7; any 8 main blocks without a pair would do). Scored workload, us per step: 8: 3512.5, 16: 3509, 24: 3502.6, 32: 3508, 40: 3509, 56: 3510, 88: 3516, 104: 3508, 120: 3533
 #endif
@@ -2118,6 +2646,11 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
             else {
                 tload<NPA>(T, P->L[0].qkv + (size_t)(blk * 320 + 20 * warp) * 32 + lane);
                 nw_load(nw, P->L[0].ln1);
+#ifndef QPF0
+#define QPF0 0                   // (study) layer 0's q/k/v tiles past the register preload (NPA..19 of each warp) into L2 during the gather wait
+#endif
+                if (QPF0 && !big && lane == 0)
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], %1;" :: "l"(P->L[0].qkv + (size_t)(blk * 320 + 20 * warp + NPA) * 32), "r"((20 - NPA) * 512) : "memory");
             }
             if (step > 0) wait_ctr(P, CM, tm); else __syncthreads();
         } else {
@@ -2138,6 +2671,26 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
             if (is_main) {
                 // ============ A: input norm, q/k/v projections. A block owns 320 consecutive tiles (5 half row groups), 20 per warp.
                 PROF(1); BT(0);
+#ifndef QPF2_AT
+#define QPF2_AT 1                // 1: QPF2 (the shared expert's slices) at the start of phase A instead of in the attention wait (A reads L2 only: HBM is idle)
+#endif
+#ifndef QPF_W
+#define QPF_W 12
+#endif
+#ifndef DMLPA
+#define DMLPA 0                  // (study) dense layers: gate/up tiles 16..31 of every warp to L2 at the start of phase A (HBM idle there)
+#endif
+                if (DMLPA && !big && !L.moe && warp == QPF_W && lane < 16)
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], 8192;" :: "l"(L.dgu + (size_t)(blk * 768 + 48 * lane + 16) * 32) : "memory");
+                if (QPF2_AT == 1 && !big && L.moe && warp == QPF_W && lane < 3) {
+                    const uint4* a_ = lane < 2 ? L.sgu + (size_t)(blk * 128 + lane * 64) * 32 : L.sdown + (size_t)(blk * 64) * 32;
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(a_) : "memory");
+                }
+#ifndef QPFO
+#define QPFO 0                   // 1: this block's output-projection slice (4 x 32 KB) to L2 at the start of phase A too (its C preload then reads L2 during the attention)
+#endif
+                if (QPFO && !big && warp == QPF_W + 1 && lane < 4)
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(L.o + (size_t)(blk * 256 + lane * 64) * 32) : "memory");
                 if (afirst) {
                     // (no phase A here, see AFIRST) this block's own 16 rows of the stream at the first layer
                     if (l == 0 && (tid >> 2) == blk) {
@@ -2161,7 +2714,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         x_sentinel(P, blk, lane, B, true);
                         if (L.moe) h_sent(P, blk, lane, B, HSLOT_SHARED * 32);
                     }
-                    attention(P, L, (blk + NAUX) >> 2, (blk + NAUX) & 3, pos, AS, T, AF_T == 0, AF_T == 0, blk, PPI, l > 0, false, nullptr, tx + 8 * npairs);
+                    attention(P, L, (blk + NAUX) >> 2, (blk + NAUX) & 3, pos, AS, T, AF_T == 0, AF_T == 0, blk, PPI, l > 0, false, nullptr, tx + 8 * npairs, false, BIG ? KQT_BIG : KQT_SMALL);
                     if (P->fence) __threadfence();
                     __syncthreads();
                     tload<16>(T, L.o + (size_t)(blk * 256 + 16 * warp) * 32 + lane);      // preload C
@@ -2255,7 +2808,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         if (L.moe) h_sent(P, blk, lane, B, HSLOT_SHARED * 32);
                     }
                     attention(P, L, (blk + NAUX) >> 2, (blk + NAUX) & 3, pos, AS, T, HSTG && HOSTC, false, blk, PPI, l > 0, KV_BATCH_MAIN != 0,
-                              MATTN_CPRE && !HOSTC ? L.o + (size_t)(blk * 256 + 16 * warp) * 32 + lane : nullptr, MATTN_TAIL && !HOSTC ? tx + 8 * npairs : 0u, K2B && KV_BATCH_MAIN && !(HSTG && HOSTC));
+                              MATTN_CPRE && !HOSTC ? L.o + (size_t)(blk * 256 + 16 * warp) * 32 + lane : nullptr, MATTN_TAIL && !HOSTC ? tx + 8 * npairs : 0u, K2B && KV_BATCH_MAIN && !(HSTG && HOSTC), BIG ? KQT_BIG : KQT_SMALL);
                     if (P->fence) __threadfence();
                     __syncthreads();
                 }
@@ -2276,6 +2829,62 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                     // waits for the exchange itself to return instead: then the sentinel is, or has been, in the words.
                     if (hostc_own) SETTLE(xdep);
                 }
+#ifndef QPF_W
+#define QPF_W 12                 // the warp that issues the L2 prefetches of QPF / QPF2 (idle at those points)
+#endif
+#ifndef QPF2
+#define QPF2 1                   // 1: while the block waits for the attention, an idle warp sends its slices of the shared expert's gate/up and down tiles to L2
+#endif
+                if (QPF2 && QPF2_AT == 0 && !big && L.moe && warp == QPF_W && lane < 3) {
+                    const uint4* a_ = lane < 2 ? L.sgu + (size_t)(blk * 128 + lane * 64) * 32 : L.sdown + (size_t)(blk * 64) * 32;
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(a_) : "memory");
+                }
+#ifndef QPF3N
+#define QPF3N 18                 // QPF3: chunks of 32 KB per block (0..11 gate/up, 12..17 down)
+#endif
+#ifndef QPF3
+#define QPF3 0                   // 1: the dense layers' MLP slices (gate/up 768 tiles, down 384 tiles per block) the same way
+#endif
+                if (QPF3 && !big && !L.moe && warp == QPF_W && lane < QPF3N) {
+                    // gate/up: 6144 x 2 rows = 768 row groups x 128 tiles / 128 blocks = 768 tiles (384 KB) per block; down: 128 row groups x 384 tiles / 128 = 384 tiles (192 KB)
+                    const uint4* a_ = lane < 12 ? L.dgu + (size_t)(blk * 768 + lane * 64) * 32 : L.ddown + (size_t)(blk * 384 + (lane - 12) * 64) * 32;
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(a_) : "memory");
+                }
+#ifndef QPF4
+#define QPF4 0                   // 1: the next layer's q/k/v slice here (instead of before the routing)
+#endif
+                if (QPF4 && !big && l + 1 < NLAYER && warp == QPF_W + 1 && lane < 5)
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(P->L[l + 1].qkv + (size_t)(blk * 320 + lane * 64) * 32) : "memory");
+#if EPF
+                if (!big && L.moe) {      // (EPF) the predicted experts' tiles to L2 while the attention runs
+                    float* pv = sm + 4096;      // (the partial-sum area: free between A and C)
+                    int* epl = (int*)(sm + 4096 + NEXP);
+                    const unsigned ep = tx0 + (unsigned)(step * NLAYER + l) + 1u;
+                    if (tid < NEXP) {
+                        long long w = 0; unsigned s_ = 0;
+                        do { w = ldx((const long long*)P->rlp + tid); } while ((unsigned)((unsigned long long)w >> 32) != ep && ++s_ < EPF_POLL);
+                        pv[tid] = (unsigned)((unsigned long long)w >> 32) == ep ? __uint_as_float((unsigned)w) : -INFINITY;
+                    }
+                    __syncthreads();
+                    if (tid < NEXP) {
+                        const float v = pv[tid];
+                        int rank = 0;
+                        for (int j = 0; j < NEXP / 4; j++) {
+                            const float4 q = ((const float4*)pv)[j];
+                            rank += (q.x > v || (q.x == v && 4 * j < tid)) + (q.y > v || (q.y == v && 4 * j + 1 < tid)) + (q.z > v || (q.z == v && 4 * j + 2 < tid)) + (q.w > v || (q.w == v && 4 * j + 3 < tid));
+                        }
+                        if (rank < EPF_K) epl[rank] = v > -INFINITY ? tid : -1;
+                    }
+                    __syncthreads();
+                    if (EPF_ISS == 1 && warp == QPF_W + 2 && lane < 2 * EPF_K) {      // an idle warp issues the prefetches
+                        const int e = epl[lane >> 1];
+                        if (e >= 0) {
+                            if (!(lane & 1)) asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(L.egu + (size_t)e * 64 * 128 * 32 + (size_t)blk * 2048) : "memory");
+                            else if (EPF_DOWN) asm volatile("cp.async.bulk.prefetch.L2.global [%0], 16384;" :: "l"(L.edown + (size_t)(e * 128 + blk) * 32 * 32) : "memory");
+                        }
+                    }
+                }
+#endif
                 tx += 8 * npairs;
                 // (a block with a pair: asked inside the attention, or, HOSTC, it reads no attention output at all)
                 if (!afirst && !((MATTN_TAIL || HOSTC) && mattn)) wait_ctr(P, CX, tx);
@@ -2405,6 +3014,35 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                 //  the block meets again at the barrier inside the next wait)
                 tm += NMAIN;
                 PROF(5); BT(3);
+#ifndef QPF_AT
+#define QPF_AT 2                 // where QPF is issued in a MoE layer: 0 after the router's signal (before the routing), 1 after phase D's mma, 2 at the end of phase C
+#endif
+#ifndef QPF_W
+#define QPF_W 12
+#endif
+#ifndef HPF2
+#define HPF2 0                   // (study) the same five prefetches in the last layer: the first row groups of this block's head slice
+#endif
+                if (QPF_AT == 2 && !big && L.moe && (HPF2 || l + 1 < NLAYER + (HPF3 ? 1 : 0)) && warp == QPF_W && lane < 5)
+                    asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(HPF2 && l + 1 == NLAYER ? P->head + ((size_t)((blk * (VOCAB / 16)) / NHB + lane) << 12)
+                                                                                              : P->L[l + 1].qkv + (size_t)(blk * 320 + lane * 64) * 32) : "memory");
+#ifndef HPF_X
+#define HPF_X 1                  // HPF: also the slice of aux block blk (blk < 24)
+#endif
+#ifndef HPF
+#define HPF 0                    // (study) last layer, end of C: the idle warp prefetches the first HPF half row groups of the head slices (its own, and an aux block's)
+#endif
+#if HPF
+                if (!big && l + 1 == NLAYER && warp == QPF_W) {
+#if HPF_X
+                    const int hs = lane < 16 ? blk : NMAIN + blk;
+#else
+                    const int hs = blk;
+#endif
+                    if ((lane & 15) < HPF && hs < NHB)
+                        asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(P->head + ((size_t)((hs * (VOCAB / 16)) / NHB + (lane & 15)) << 12)) : "memory");
+                }
+#endif
                 if (L.moe) {
                     tload<8>(T, L.sgu + (size_t)(blk * 128 + 8 * warp) * 32 + lane);   // preload D
                     // ============ D: post-attention norm; shared expert gate/up (router logits on aux)
@@ -2424,6 +3062,8 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         red[(16 + warp) * 32 + lane] = f4add(f4add(c4[0], c4[1]), f4add(c4[2], c4[3]));        // slots 16..31: the expert phase below uses 0..15
                     }
                     PROF(52);
+                    if (QPF_AT == 1 && !big && l + 1 < NLAYER && warp == QPF_W && lane < 5)
+                        asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(P->L[l + 1].qkv + (size_t)(blk * 320 + lane * 64) * 32) : "memory");
                     __syncthreads();
                     // The shared expert's hidden units are folded and written by one warp; nobody reads them before the
                     // down phase. It was warp 0 right here, and the routing started that much later. Now: batch 1, warp
@@ -2450,6 +3090,26 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         for (int w = 1; w < 16; w++) c = f4add(c, red[(16 + w) * 32 + lane]);
                         h_store(P, c, blk, lane, B, HSLOT_SHARED * 32);
                     }
+#ifndef QPF
+#ifndef QPF_W
+#define QPF_W 12
+#endif
+#define QPF 1                    // 1: each main block sends its slice of the next layer's q/k/v tiles to L2 before the routing (HBM is idle there)
+#endif
+#ifndef QPFNM
+#define QPFNM 1                  // (since s0026) 1: without the "!L.moe" clause (this statement sits in the MoE path: the clause is never true, but the batch-1 kernel kept the dead branch)
+#endif
+#ifndef HPF3B
+#define HPF3B 0                  // (study; B=8 -3, not submitted yet) HPF3 in the batch-8 kernel too (its q/k/v prefetch is issued here; B=8 -3, journal 126-127)
+#endif
+#ifndef QPF_ROT
+#define QPF_ROT 0                // (study) block b sends the slice of block (b + QPF_ROT) % 128
+#endif
+#ifndef QPF_SKIP
+#define QPF_SKIP 128             // (study) blocks from this one on send nothing
+#endif
+                    if (QPF && (QPF_AT == 0 || big || (!QPFNM && !L.moe)) && l + 1 < NLAYER + (HPF3B && HPF3 ? 1 : 0) && warp == QPF_W && lane < 5 && blk < QPF_SKIP)
+                        asm volatile("cp.async.bulk.prefetch.L2.global [%0], 32768;" :: "l"(P->L[l + 1].qkv + (size_t)(((blk + QPF_ROT) & 127) * 320 + lane * 64) * 32) : "memory");
                     if (!(WHATIF & 16)) route_local(P, P->rl, B, sm, smi, un, uwl, blk, PPI, big, ER != 0);
                     if (WHATIF & 1) {
                         __syncthreads();
@@ -2480,7 +3140,20 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         const int half = warp >> 3, wi = warp & 7;
                         {
                             const int rg = e0 + half;
-                            if (rg < e1) tload<16>(T, L.egu + ((size_t)((un[1 + (rg >> 6)] & 255) * 64 + (rg & 63)) * 128 + wi * 16) * 32 + lane);
+                            if (rg < e1) tloadE<16>(T, L.egu + ((size_t)((un[1 + (rg >> 6)] & 255) * 64 + (rg & 63)) * 128 + wi * 16) * 32 + lane);
+                        }
+#ifndef ESTG
+#define ESTG 0                   // 1: batch 1 (three row groups per block): the second half's warps, idle in the second slot, copy the third row group's tiles into shared memory (cp.async) with the first slot's request; the second slot reads them there instead of a second round trip to memory
+#endif
+                        const bool estg = ESTG && !big && e1 - e0 == 3;
+                        uint4* const est = (uint4*)(sb + (48 << 10));      // (64 KB: free in the main blocks at batch 1 between the x fragments (8 KB at SM_XF) and SM_PART)
+                        if (estg && half == 1) {
+                            const int rg2 = e0 + 2;
+                            const uint4* src = L.egu + ((size_t)((un[1 + (rg2 >> 6)] & 255) * 64 + (rg2 & 63)) * 128 + wi * 16) * 32 + lane;
+                            const unsigned dst = (unsigned)__cvta_generic_to_shared(est + (size_t)(wi * 16) * 32 + lane);
+#pragma unroll
+                            for (int i = 0; i < 16; i++) asm volatile("cp.async.cg.shared.global [%0], [%1], 16;" :: "r"(dst + i * 512), "l"(src + i * 32) : "memory");
+                            asm volatile("cp.async.commit_group;" ::: "memory");
                         }
                         // the hidden-unit words this warp will write: sentinel now (the previous layer's down phase is
                         // done everywhere), read back and signalled while the first tiles are on their way
@@ -2509,6 +3182,10 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                             const int u = rg >> 6, lr = rg & 63;
                             float4* redE = red + (sl & 1) * 16 * 32;
                             float4 c = zero4;
+                            if (estg && sl == 1 && act) {
+#pragma unroll
+                                for (int i = 0; i < 16; i++) T[i] = est[(size_t)(wi * 16 + i) * 32 + lane];
+                            }
                             if (act) {
                                 float4 c4[4] = {zero4, zero4, zero4, zero4};
 #pragma unroll
@@ -2519,8 +3196,9 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                             PROF(54);
                             {
                                 const int rn = rg + 2;
-                                if (rn < e1) tload<16>(T, L.egu + ((size_t)((un[1 + (rn >> 6)] & 255) * 64 + (rn & 63)) * 128 + wi * 16) * 32 + lane);
+                                if (rn < e1 && !estg) tloadE<16>(T, L.egu + ((size_t)((un[1 + (rn >> 6)] & 255) * 64 + (rn & 63)) * 128 + wi * 16) * 32 + lane);
                             }
+                            if (estg && sl == 0 && half == 1) asm volatile("cp.async.wait_all;" ::: "memory");
                             PROF(55);
                             // (E_SETTLE_LATE: the wait for the sentinel exchanges and the signal come behind the first
                             //  slot's mma and the request for the second slot's tiles, not in front of them)
@@ -2559,7 +3237,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         // a warp's loads return behind the exchanges it issued before them (about 2 us)
                         if (FPRE_EARLY) {
                             const int it = warp >> 1;
-                            if (it < U) tload<16>(T, L.edown + ((size_t)((un[1 + it] & 255) * 128 + blk) * 32 + 16 * wj) * 32 + lane);
+                            if (it < U) tloadE<16>(T, L.edown + ((size_t)((un[1 + it] & 255) * 128 + blk) * 32 + 16 * wj) * 32 + lane);
                             else if (it < U + 2) tload<16>(T, L.sdown + ((size_t)(blk * 64 + (it - U) * 32) + 16 * wj) * 32 + lane);
                         }
                         const int G = U * 64, e0 = ESPLIT(blk, G), e1 = ESPLIT(blk + 1, G);
@@ -2579,7 +3257,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                     // preload F: the first 8 items (item = warp/2: units in ascending order, then the two halves of the shared expert)
                     if (!(big && FPRE_EARLY)) {
                         const int it = warp >> 1;
-                        if (it < U) tload<16>(T, L.edown + ((size_t)((un[1 + it] & 255) * 128 + blk) * 32 + 16 * wj) * 32 + lane);
+                        if (it < U) tloadE<16>(T, L.edown + ((size_t)((un[1 + it] & 255) * 128 + blk) * 32 + 16 * wj) * 32 + lane);
                         else if (it < U + 2) tload<16>(T, L.sdown + ((size_t)(blk * 64 + (it - U) * 32) + 16 * wj) * 32 + lane);
                     }
                     PROF(48);
@@ -2665,7 +3343,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                                 if (it < nitems) {
                                     const uint4* dt = it < U ? L.edown + ((size_t)((un[1 + it] & 255) * 128 + blk) * 32 + 16 * wj) * 32 + lane
                                                              : L.sdown + ((size_t)(blk * 64 + (it - U) * 32) + 16 * wj) * 32 + lane;
-                                    tload<8>(T + 8, dt + 8 * 32);
+                                    tloadE<8>(T + 8, dt + 8 * 32);
                                 }
                             } else if (!F_PIPE || it0 == 0) {
                                 // larger batches: a unit has few member sequences; copy only their fragments (the others'
@@ -2694,7 +3372,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                                 if (!F_PIPE && it0 > 0 && it < nitems) {
                                     const uint4* dt = it < U ? L.edown + ((size_t)((un[1 + it] & 255) * 128 + blk) * 32 + 16 * wj) * 32 + lane
                                                              : L.sdown + ((size_t)(blk * 64 + (it - U) * 32) + 16 * wj) * 32 + lane;
-                                    tload<8>(T + 8, dt + 8 * 32);
+                                    tloadE<8>(T + 8, dt + 8 * 32);
                                 }
                             }
                             PROF(41);
@@ -2755,7 +3433,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                                 if (itn < nitems) {
                                     const uint4* dt = itn < U ? L.edown + ((size_t)((un[1 + itn] & 255) * 128 + blk) * 32 + 16 * wj) * 32 + lane
                                                               : L.sdown + ((size_t)(blk * 64 + (itn - U) * 32) + 16 * wj) * 32 + lane;
-                                    if (big && !F_PIPE && !F_ONE) tload<8>(T, dt); else tload<16>(T, dt);      // (the old per-round copy, larger batches: the first half only, see above)
+                                    if (big && !F_PIPE && !F_ONE) tloadE<8>(T, dt); else tloadE<16>(T, dt);      // (the old per-round copy, larger batches: the first half only, see above)
                                 }
                             }
                             PROF(43);
@@ -2830,14 +3508,51 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                     PROF(12); BT(9); BT_FLUSH();
                 } else {
                     // ============ dense MLP (layers 0 and 1). D': gate/up, 768 consecutive tiles (6 row groups) per block, 48 per warp
+#ifndef DMLP
+#define DMLP 33158               // dense MLP: 4 = 16 gate/up tiles per warp preloaded before the barrier, 2 = the down phase's 16 likewise (s0017); 128 = that preload after warp 0's writes and bump, 256 = those writes as plain stores + one fence (s0019); 32768 = the other 32 gate/up tiles unrolled by 16 (since s0021); 1, 8, 16, 64, 512, 16384: studies (journal 141-155)
+#endif
+                    if (DMLP & 5) tload<16>(T, L.dgu + (size_t)(blk * 768 + 48 * warp) * 32 + lane);
+                    if (DMLP & 16) {                   // (16: the same tiles with per-lane line prefetches: lane i takes tile 16 + i, four 128-byte lines)
+                        const char* pt = (const char*)(L.dgu + (size_t)(blk * 768 + 48 * warp + 16 + lane) * 32);
+#pragma unroll
+                        for (int q = 0; q < 4; q++) asm volatile("prefetch.global.L2 [%0];" :: "l"(pt + 128 * q) : "memory");
+                    }
+                    if ((DMLP & 8) && lane == 0)       // (8: the warp's other 32 gate/up tiles, contiguous, to L2 with one bulk prefetch)
+                        asm volatile("cp.async.bulk.prefetch.L2.global [%0], 16384;" :: "l"(L.dgu + (size_t)(blk * 768 + 48 * warp + 16) * 32) : "memory");
                     wait_ctr(P, CM, tm);
+                    BT(4);
                     norm_frag<big && NORM_WS>(P, nullptr, nullptr, 1, 0, nw, B, Ls, xf, sm, false, nullptr, xo, -1, nullptr, nscr, true);
-                    {
+                    if (DMLP & 1) {
                         const int g0 = 48 * warp;
                         int nA = 128 - (g0 & 127); if (nA > 48) nA = 48;
                         float4 cA = zero4, cB = zero4;
                         const uint4* wt = L.dgu + (size_t)(blk * 768 + g0) * 32 + lane;
-                        for (int i = 0; i < 48; i++) {
+                        for (int c0 = 0; c0 < 48; c0 += 16) {
+                            if (c0) tload<16>(T, wt + (size_t)c0 * 32);
+#pragma unroll
+                            for (int i = 0; i < 16; i++) {
+                                const uint2 bb = xget(xf, Ls, (g0 + c0 + i) & 127, lane);
+                                if (c0 + i < nA) mma(cA, T[i], bb); else mma(cB, T[i], bb);
+                            }
+                        }
+                        red[(warp * 2) * 32 + lane] = cA;
+                        red[(warp * 2 + 1) * 32 + lane] = cB;
+                    } else {
+                        const int g0 = 48 * warp;
+                        int nA = 128 - (g0 & 127); if (nA > 48) nA = 48;
+                        float4 cA = zero4, cB = zero4;
+                        const uint4* wt = L.dgu + (size_t)(blk * 768 + g0) * 32 + lane;
+                        if (DMLP & 4) {
+#pragma unroll
+                            for (int i = 0; i < 16; i++) {
+                                const uint2 bb = xget(xf, Ls, (g0 + i) & 127, lane);
+                                if (i < nA) mma(cA, T[i], bb); else mma(cB, T[i], bb);
+                            }
+                        }
+#if DMLP & 32768
+#pragma unroll 16
+#endif
+                        for (int i = (DMLP & 4) ? 16 : 0; i < 48; i++) {
                             const uint4 a = wt[(size_t)i * 32];
                             const uint2 bb = xget(xf, Ls, (g0 + i) & 127, lane);
                             if (i < nA) mma(cA, a, bb); else mma(cB, a, bb);
@@ -2846,20 +3561,66 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         red[(warp * 2 + 1) * 32 + lane] = cB;
                     }
                     __syncthreads();
+                    BT(5);
+                    if (DMLP & 512) {      // (512: warp h folds and writes row group h, the six in parallel; then the block's bump)
+                        if (warp < 6) {
+                            const int h = warp;
+                            const int w_lo = (128 * h) / 48, w_hi = (128 * h + 127) / 48;
+                            float4 c = zero4;
+                            for (int w = w_lo; w <= w_hi; w++) c = f4add(c, red[(w * 2 + (((48 * w) >> 7) == h ? 0 : 1)) * 32 + lane]);
+                            if (DMLP & 256) { h_store_plain(P, c, blk * 6 + h, lane, B, 0); __threadfence(); }
+                            else { const u32 dep = h_store(P, c, blk * 6 + h, lane, B, 0); SETTLE(dep); }
+                        }
+                        __syncthreads();
+                        if (tid == 0) atomicAdd(P->ctr + CM, 1u);
+                    } else
                     if (warp == 0) {
+                        u32 dep6 = 0u;
                         for (int h = 0; h < 6; h++) {
                             const int w_lo = (128 * h) / 48, w_hi = (128 * h + 127) / 48;
                             float4 c = zero4;
                             for (int w = w_lo; w <= w_hi; w++) c = f4add(c, red[(w * 2 + (((48 * w) >> 7) == h ? 0 : 1)) * 32 + lane]);
-                            { const u32 dep = h_store(P, c, blk * 6 + h, lane, B, 0); SETTLE(dep); }
+                            if (DMLP & 256) h_store_plain(P, c, blk * 6 + h, lane, B, 0);      // (256: plain stores, one fence below)
+                            else if (DMLP & 64) dep6 |= h_store(P, c, blk * 6 + h, lane, B, 0);      // (64: one settle for the six row groups' exchanges, not one each)
+                            else { const u32 dep = h_store(P, c, blk * 6 + h, lane, B, 0); SETTLE(dep); }
                         }
+                        BT(8);
+                        if (DMLP & 64) SETTLE(dep6);
+                        if (DMLP & 256) __threadfence();
                         FENCE(64);
                         if (tid == 0) atomicAdd(P->ctr + CM, 1u);
                     }
+                    BT(6);
                     tm += NMAIN;
                     // E': down projection (K = 6144: 384 tiles per block, 24 per warp) + residual
+                    if (DMLP & 128) __syncthreads();      // (128: the down tiles requested only after warp 0's exchanges and bump: they no longer queue in front of them)
+                    if (DMLP & 2) tload<16>(T, L.ddown + (size_t)(blk * 384 + 24 * warp) * 32 + lane);
+                    if ((DMLP & 8) && (DMLP & 2) && lane == 0)
+                        asm volatile("cp.async.bulk.prefetch.L2.global [%0], 4096;" :: "l"(L.ddown + (size_t)(blk * 384 + 24 * warp + 16) * 32) : "memory");
                     wait_ctr(P, CM, tm);
-                    {
+                    BT(7);
+                    if (DMLP & 2) {
+                        float4 c = zero4;
+                        const uint4* wt = L.ddown + (size_t)(blk * 384 + 24 * warp) * 32 + lane;
+                        const uint2* hb = P->hbuf + ((size_t)(lane >> 2) * HCHUNKS + 24 * warp) * 4 + (lane & 3);
+                        if (DMLP & 16384) {      // (16384: the last 8 tiles requested right after the barrier, into their own registers)
+                            uint4 T8[8];
+                            tload<8>(T8, wt + (size_t)16 * 32);
+#pragma unroll
+                            for (int i = 0; i < 24; i++) {
+                                uint2 bb = make_uint2(0u, 0u);
+                                if (lane < 4 * B) bb = ldx(hb + i * 4);
+                                mma(c, i < 16 ? T[i] : T8[i - 16], bb);
+                            }
+                        } else
+                        for (int i = 0; i < 24; i++) {
+                            if (i == 16) tload<8>(T, wt + (size_t)16 * 32);
+                            uint2 bb = make_uint2(0u, 0u);
+                            if (lane < 4 * B) bb = ldx(hb + i * 4);
+                            mma(c, T[i & 15], bb);
+                        }
+                        red[warp * 32 + lane] = c;
+                    } else {
                         float4 c = zero4;
                         const uint4* wt = L.ddown + (size_t)(blk * 384 + 24 * warp) * 32 + lane;
                         const uint2* hb = P->hbuf + ((size_t)(lane >> 2) * HCHUNKS + 24 * warp) * 4 + (lane & 3);
@@ -2881,6 +3642,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                     }
                     __syncthreads();
                     tm += NMAIN;
+                    BT(9); BT_FLUSH();
                 }
 #if APRE_EARLY
                 // (APRE_EARLY: the tiles first. A warp's loads return behind the exchanges it issued before them.)
@@ -2971,12 +3733,32 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         SETTLE(dep);
                         if (EB && tid == 0) atomicAdd(P->ctr + CR, 1u);
                     }
+#if EPF
+                    if (EPF_PUB && !big && rpre) {      // the prediction of this layer's router logits (see EPF)
+                        norm_frag<0>(P, nullptr, nullptr, 1, 0, nw, B, Ls, xf, sm, false, nullptr, xo, blk);
+                        float4 cz = zero4;
+#pragma unroll
+                        for (int i = 0; i < 8; i++) mma(cz, T[i], xget(xf, Ls, 8 * warp + i, lane));
+                        red[warp * 32 + lane] = cz;
+                        __syncthreads();
+                        if (warp == 0) {
+                            float4 c = red[lane];
+                            for (int w = 1; w < 16; w++) c = f4add(c, red[w * 32 + lane]);
+                            if (t == 0) {
+                                const unsigned long long ep = (unsigned long long)(tx0 + (unsigned)(step * NLAYER + l) + 1u) << 32;
+                                atomicExch(P->rlp + rj * 16 + g, ep | __float_as_uint(c.x));
+                                atomicExch(P->rlp + rj * 16 + g + 8, ep | __float_as_uint(c.z));
+                            }
+                        }
+                        __syncthreads();
+                    }
+#endif
                 }
 #endif
                 if (has_attn) {
                     wait_ctr(P, CM, tmA);
                     PROF(21); CLK_A(0);
-                    attention(P, L, aux >> 2, aux & 3, pos, AS, T, stg, stg && stgsm, blk, PPI, l > 0 && !ER, KV_BATCH && (!big || KV_BATCH_AUXBIG));
+                    attention(P, L, aux >> 2, aux & 3, pos, AS, T, stg, stg && stgsm, blk, PPI, l > 0 && !ER, KV_BATCH && (!big || KV_BATCH_AUXBIG), nullptr, 0u, false, BIG ? KQT_BIG : KQT_SMALL);
                     PROF(22); CLK_A(9);
                     // (the K/V stores of this position are read again only by this block: no fence)
                     if (rdefer && L.moe) tload<8>(T, L.router + (size_t)(rj * 128 + 8 * warp) * 32 + lane);
@@ -3089,6 +3871,13 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
 #endif
         PROF(13);
         norm_frag<big && NORM_WS>(P, nullptr, nullptr, 1, 0, nw, B, Ls, xf, sm, false, (P->dbg && blk == 0) ? P->dbg + (size_t)NLAYER * MAXB * HID : nullptr, xo, -1);
+#ifdef HSK_STATS
+        const unsigned long long th0 = clock64();
+#endif
+#if HSK
+        if (!BIG && mode != 0 && P->hsk_on) tm = head_sketch<BIG>(P, B, tm);      // (batch 1-2 only: at batch > 2 the sketch gained nothing, notes/headsketch.md)
+        else
+#endif
         {
             const int G = VOCAB / 16;
             const int e0 = (int)((long long)blk * G / NHB), e1 = (int)((long long)(blk + 1) * G / NHB);
@@ -3098,7 +3887,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                 const uint4* wt = P->head + (size_t)rg * 128 * 32 + lane;
                 float4 c4[4] = {zero4, zero4, zero4, zero4};
                 for (int ch = 0; ch < 128; ch += 16) {
-                    tload<16>(T, wt + (size_t)ch * 32);        // 16 tiles per load round trip (the staging registers are free here)
+                    if (EVFH) tloadE<16>(T, wt + (size_t)ch * 32); else tload<16>(T, wt + (size_t)ch * 32);        // 16 tiles per load round trip (the staging registers are free here)
 #pragma unroll
                     for (int i = 0; i < 16; i++) mma(c4[i & (NACC - 1)], T[i], xget(xf, Ls, ch + i, lane));
                 }
@@ -3133,6 +3922,9 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
             }
         }
         __syncthreads();
+#ifdef HSK_STATS
+        if (blk == 0 && tid == 0) atomicAdd(&g_hsk[8], clock64() - th0);
+#endif
         if (warp == 0) {
             SETTLE(hdep); hdep = 0u;
             FENCE(128);
@@ -3162,6 +3954,7 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                 }
                 __syncthreads();
             }
+            u32 tokdep = 0u;
             if (blk == 0 && tid < B) {
                 float v; int ix;
                 if (gpar || gstr) {
@@ -3177,17 +3970,31 @@ mk_kernel(const Params* Pp, const long long* tok_in, int tstride, float* logits,
                         if (ov > v || (ov == v && oi < ix)) { v = ov; ix = oi; }
                     }
                 }
-                P->curtok[tid] = ix;
+#ifndef GORD
+#define GORD 2                   // block 0 after the gather (since s0024): 2 = the chosen tokens published by atomic exchange, settled, then the bump; the generated tokens and the host's progress word fenced after it (1: fence, bump, progress word; 0: fence, progress word, fence, bump)
+#endif
+                if (GORD == 2) { tokdep = (u32)atomicExch((unsigned long long*)P->curtok + tid, (unsigned long long)(long long)ix); }
+                else P->curtok[tid] = ix;
                 if (mode == 1) gen_out[(size_t)tid * nsteps + (step - npre)] = ix;
                 else P->gen[(size_t)tid * P->maxctx + (step - npre)] = ix;
             }
             __syncthreads();
             if (warp == 0) {
+                if (GORD == 2) {
+                    SETTLE(tokdep);
+                    if (tid == 0) atomicAdd(P->ctr + CM, 1u);
+                    if (blk == 0) { __threadfence(); if (tid == 0 && mode == 2) { P->ctr[96] = (unsigned)(step - npre + 1); __threadfence(); } }
+                } else if (GORD == 1) {
+                    if (blk == 0) __threadfence();
+                    if (tid == 0) atomicAdd(P->ctr + CM, 1u);
+                    if (blk == 0 && tid == 0 && mode == 2) { P->ctr[96] = (unsigned)(step - npre + 1); __threadfence(); }
+                } else {
                 if (blk == 0) {
                     __threadfence();
                     if (tid == 0 && mode == 2) { P->ctr[96] = (unsigned)(step - npre + 1); __threadfence(); }
                 }
                 if (tid == 0) atomicAdd(P->ctr + CM, 1u);
+                }
             }
             tm += NHB;
         }
@@ -3281,8 +4088,10 @@ void* mk_create(const long long* s) {
     const long long* q = s + NLAYER * 20;
     P.embed = (const u16*)q[0]; P.head = (const uint4*)q[1]; P.fnorm = (const float*)q[2]; P.cosT = (const float*)q[3]; P.sinT = (const float*)q[4];
     P.maxctx = (int)q[5]; P.kgmax = (P.maxctx + 15) / 16;
+    P.hq = (const uint4*)q[7]; P.hen = (const uint4*)q[8]; P.hsw = (const float2*)q[9]; P.hsk_on = HSK && q[7] && !q[10];
+    if (HPF3) P.L[NLAYER - 1 + (HPF3 ? 1 : 0)].qkv = (HPF3Q && P.hsk_on) ? P.hq : P.head;      // (HPF3Q: track B reads the sketch, not the head)
     int ok = dalloc(P.xc, 4 * 1024) && dalloc(P.xm, 4 * 1024) && dalloc(P.qraw, MAXB * 320 * 8) && dalloc(P.attnf, MAXB * 256 * 4) && dalloc(P.rl, MAXB * NEXP) &&
-             dalloc(P.hbuf, (size_t)MAXB * HCHUNKS * 4) && dalloc(P.argv, NBLK * MAXB) && dalloc(P.argi, NBLK * MAXB) && dalloc(P.curtok, MAXB) &&
+             dalloc(P.hbuf, (size_t)MAXB * HCHUNKS * 4) && dalloc(P.argv, NBLK * MAXB) && dalloc(P.argi, NBLK * MAXB) && dalloc(P.lbv, NBLK * MAXB) && dalloc(P.rlp, NEXP) && dalloc(P.curtok, MAXB) &&
              dalloc(P.gen, (size_t)MAXB * P.maxctx) && dalloc(h->cslab[0], NCPAGE * 1024 + 128) && dalloc(h->cslab[1], NCPAGE * 1024 + 128);
     // (after everything above, whose addresses the batch > 2 instance's placement of s0049/s0050 was found with)
     if (ok) ok = dalloc(h->alt[0], MAXB * NEXP * 4 + NBPAGE * 4096) && dalloc(h->alt[1], 4 * 1024 * 16 + NBPAGE * 4096) && dalloc(h->alt[2], MAXB * 256 * 4 * 8 + NBPAGE * 4096);
@@ -3332,7 +4141,7 @@ int mk_run(void* hv, const long long* tok, int tstride, float* logits, long long
     const int npairs = 4 * B;
 #endif
     const unsigned layers_m = 47 * (KA + 2 + (B > 2 ? KEBIG : KE)) + 2 * (KA + 3);      // counter bumps per block and step
-    h->tmv[c] += (unsigned)NMAIN * (unsigned)(npre + nsteps) * layers_m + (unsigned)NHB * (unsigned)nsteps * (mode ? 2 : 1);
+    h->tmv[c] += (unsigned)NMAIN * (unsigned)(npre + nsteps) * layers_m + (unsigned)NHB * (unsigned)nsteps * (mode ? 2 + (HSK && h->host.hsk_on && B <= 2) : 1);
     h->txv[c] += 8u * (unsigned)npairs * (unsigned)(npre + nsteps) * NLAYER;
     h->trv[c] += (unsigned)NROUT * (unsigned)(npre + nsteps) * 47;
     cudaError_t e = cudaGetLastError();
@@ -3401,6 +4210,15 @@ int mk_read_dbg(void* hv, float* out) {
     return 0;
 }
 
+int mk_hsk_stats(unsigned long long* out) {
+#ifdef HSK_STATS
+    if (cudaMemcpyFromSymbol(out, g_hsk, sizeof(unsigned long long) * 16) != cudaSuccess) return 1;
+    unsigned long long z[16] = {0};
+    return cudaMemcpyToSymbol(g_hsk, z, sizeof(z)) != cudaSuccess;
+#else
+    return 1;
+#endif
+}
 int mk_read_bt(void* hv, unsigned* out) {
     Handle* h = (Handle*)hv;
     if (!h->host.bt) return -1;

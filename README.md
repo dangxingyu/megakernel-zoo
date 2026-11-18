@@ -143,10 +143,10 @@ type; any other pair is refused. See [`mkserve/README.md`](mkserve/README.md) fo
 | Qwen/Qwen3-8B | h100 | `online-a` | A | online | 64 | 34,816 | run s3-q8b-online-a1, submission s0038 |
 | Qwen/Qwen3-8B | h100 | `offline-b` | B | offline | 8 | 2,048 | run s10-q8b-h100-f1, submission s0002 |
 | Qwen/Qwen3-8B | h100 | `offline-a` | A | offline | 8 | 2,048 | run s10-q8b-h100-f1, submission s0003 |
-| RecursiveSI/flint | b200 | `offline-a` (default) | A | offline | 8 | 2,048 | run s4-flint-b200-a2, submission s0077 |
-| RecursiveSI/flint | b200 | `offline-b` | B | offline | 8 | 2,048 | run s4-flint-b200-a2, submission s0055 |
+| RecursiveSI/flint | b200 | `offline-a` (default) | A | offline | 8 | 2,048 | run s11-flint-b200-b1, submission s0026 |
+| RecursiveSI/flint | b200 | `offline-b` | B | offline | 8 | 2,048 | run s11-flint-b200-b1, submission s0027 |
 | Qwen/Qwen3.8-27B | b200 | `offline-a` (default) | A | offline | 8 | 2,048 | run s9-qwen38-27b-b200-f1, submission s0022 |
-| Qwen/Qwen3.8-27B | b200 | `offline-b` | B | offline | 8 | 2,048 | run s9-qwen38-27b-b200-f1, submission s0023 |
+| Qwen/Qwen3.8-27B | b200 | `offline-b` | B | offline | 8 | 2,048 | run s11-q27-b200-b1, submission s0020 |
 | CohereLabs/North-Mini-Code-1.0 | h100 | `offline-a` (default) | A | offline | 8 | 2,048 | run s4-north-h100-a1, submission s0022 |
 | CohereLabs/North-Mini-Code-1.0 | h100 | `offline-b` | B | offline | 8 | 2,048 | run s4-north-h100-a1, submission s0021 |
 | thinkingmachines/Inkling-2-Small | b200x4 | `offline-a` (default) | A | offline | 8 | 2,048 | run s7-inkling2s-b200x4-fb1, submission s0034 |
@@ -188,10 +188,10 @@ average at most 0.1 s apart):
 
 | Model, GPU | Rate | Within service levels | Longest stall |
 |---|---|---|---|
-| Inkling-2-Small, 4 × B200 | 1–4 req/s | 100% vs 83–85% (SGLang) | 0.08–0.09 s vs 2.4–2.6 s |
-| Inkling-2-Small, 4 × B200 | 8 req/s | 99.2% vs 81.7% (SGLang) | 0.15 s vs 4.4 s |
-| Qwen3-8B, 1 × H100 | 1–2 req/s | 95–97% vs 68–75% (SGLang, vLLM) | 0.09–0.11 s vs 0.5–6.9 s |
-| Qwen3-8B, 1 × H100 | 3 req/s | 90–93% vs 59–68% (SGLang, vLLM) | 0.09 s vs 0.6–7.3 s |
+| Inkling-2-Small, 4 × B200 | 1–4 req/s | **100%** vs 83–85% (SGLang) | 0.08–0.09 s vs 2.4–2.6 s |
+| Inkling-2-Small, 4 × B200 | 8 req/s | **99.2%** vs 81.7% (SGLang) | 0.15 s vs 4.4 s |
+| Qwen3-8B, 1 × H100 | 1–2 req/s | **95–97%** vs 68–75% (SGLang, vLLM) | 0.09–0.11 s vs 0.5–6.9 s |
+| Qwen3-8B, 1 × H100 | 3 req/s | **90–93%** vs 59–68% (SGLang, vLLM) | 0.09 s vs 0.6–7.3 s |
 
 <p align="center"><img src="assets/serving-inkling.png" width="820" alt="Inkling-2-Small on four B200 under a production request trace"></p>
 

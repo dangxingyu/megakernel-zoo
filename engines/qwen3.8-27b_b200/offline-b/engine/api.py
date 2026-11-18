@@ -30,6 +30,9 @@ CHAIN_MAX = 4   # drafts made by the MTP head per pass (1 in the verify launch +
 (OP_EMBED, OP_GEMM, OP_LMIX, OP_ATT_PREP, OP_ATT_SCORE, OP_ATT_SOFTMAX, OP_ATT_VSUM, OP_ATT_OUT, OP_ARGMAX, OP_FINISH, OP_MTP_IN,
  OP_ACCEPT, OP_CHAIN_FIN) = range(1, 14)
 OP_ATT_DIST = 15
+OP_SKETCH, OP_RESCORE = 16, 17   # track B (build flag -DHEAD_SK): certified int8 sketch of lm_head + exact rescoring
+HK_SMEM = int(os.environ.get("MK_HK_SMEM", "65536"))   # shared memory of the head kernel launch
+XFLAGS = int(os.environ.get("MK_XFLAGS", "0"))
 # One-token passes run each full-attention layer as one op, one block per 256-key chunk of each (sequence, kv head)
 # (mk.cu att_dist_work), while a unit's chunks fit its blocks; otherwise the four separate ops
 ATT_FUSE = os.environ.get("MK_ATT_FUSE", "1") == "1"
@@ -77,6 +80,9 @@ def _lib():
     lib = ctypes.CDLL(str(so))
     lib.mk_launch.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(Ctx), ctypes.c_int]
     lib.mk_launch.restype = ctypes.c_int
+    if hasattr(lib, "mk_launch_head"):   # HEAD_SK builds: the sketch head's own kernel
+        lib.mk_launch_head.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(Ctx), ctypes.c_int]
+        lib.mk_launch_head.restype = ctypes.c_int
     if hasattr(lib, "mk_host_alloc"):   # (older libraries in A/B tests have none)
         lib.mk_host_alloc.argtypes = [ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
         lib.mk_host_alloc.restype = ctypes.c_int
@@ -149,6 +155,25 @@ def w12_pack(F: torch.Tensor, NT: int, KQ: int, lo_rows: torch.Tensor):
     return u.view(-1), out, vals
 
 
+W12_L0 = 107   # W12_RS (build flag -DW12_RS, mk.cu W12_C0): every row r stored as W[r] 2^(L0 - lo_r), one decode base
+
+
+def w12_ftab(lo_rows: torch.Tensor) -> torch.Tensor:
+    """W12_RS: per row the exact factor 2^(lo_r - L0) the epilogue multiplies the row's sum by (float32, padded)."""
+    f = torch.ldexp(torch.ones_like(lo_rows, dtype=torch.float32), (lo_rows - W12_L0).to(torch.int32))   # exact (torch.pow is not)
+    return torch.cat([f, f.new_ones(64)]).contiguous()
+
+
+def w12_scale_bits(b: torch.Tensor, lo: torch.Tensor) -> torch.Tensor:
+    """W12_RS: bf16 bits b (int32, 16-bit values) of weights of rows with window start lo -> bits of b * 2^(L0 - lo),
+    exact (exponent field moved; asserted to stay a normal number, no zeros in this checkpoint's matrices)."""
+    e = (b >> 7) & 0xFF
+    assert bool((e > 0).all()), "zero / subnormal weight: the shift would not be exact"
+    e2 = e + (W12_L0 - lo)
+    assert bool(((e2 >= 1) & (e2 <= 254)).all())
+    return (b & 0x807F) | (e2 << 7)
+
+
 def w12_ctab(lo_rows: torch.Tensor) -> torch.Tensor:
     """Per row the decode base C * 0x10001 (C = (lo - 16 + W12_WIN) << 7) as int32: the kernel adds it to two codes at once.
     Padded by 32 rows: the kernel reads the next tile's bases ahead."""
@@ -198,11 +223,11 @@ def w12_escapes_fixed(out: torch.Tensor, vals: torch.Tensor, tab: torch.Tensor, 
     return ent.view(-1).contiguous(), CAP
 
 
-def w12_unpack_fixed(packed: torch.Tensor, NT: int, KQ: int, lo_rows: torch.Tensor, ent: torch.Tensor, CAP: int, tab: torch.Tensor):
+def w12_unpack_fixed(packed: torch.Tensor, NT: int, KQ: int, lo_rows: torch.Tensor, ent: torch.Tensor, CAP: int, tab: torch.Tensor, rs: bool = False):
     """What the exact W12 kernel feeds the MMA: the dense decode with every listed weight patched in (bf16 bits
-    [NT][KQ][4][32][8]), for the bit-for-bit check."""
+    [NT][KQ][4][32][8]), for the bit-for-bit check. rs: W12_RS (one decode base, rows scaled by 2^(L0 - lo_r))."""
     u = (packed.view(NT, KQ, 3, 32, 4).permute(0, 1, 3, 2, 4).reshape(NT, KQ, 32, 4, 3).to(torch.int64)) & 0xFFFFFFFF
-    C = (w12_ctab(lo_rows)[:NT * 16].to(torch.int64) & 0xFFFFFFFF)
+    C = (w12_ctab(torch.full_like(lo_rows, W12_L0) if rs else lo_rows)[:NT * 16].to(torch.int64) & 0xFFFFFFFF)
     lane = torch.arange(32, device=packed.device)
     Cg = C.view(NT, 16)[:, lane >> 2].view(NT, 1, 32, 1)
     Cg8 = C.view(NT, 16)[:, (lane >> 2) + 8].view(NT, 1, 32, 1)
@@ -331,6 +356,13 @@ class Engine:
         self.bar_base = 0
         self._hold = None
         self.counters = {"passes": 0, "tokens": 0, "chain_launches": 0}
+        if getattr(self, "sk", False) and os.environ.get("MK_L2W"):   # experiment: L2 persisting window on the sketch
+            mb = float(os.environ["MK_L2W"])
+            self.lib.mk_l2_window.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_float, ctypes.c_size_t]
+            self.lib.mk_l2_window(ctypes.c_void_p(self.sk_q.data_ptr()), (128 << 20) if mb > 0 else 0, ctypes.c_float(min(1.0, mb / 128.0)), int(mb * 2 ** 20))
+        if getattr(self, "sk", False) and os.environ.get("MK_SK_BALANCE", "0" if getattr(self, "sk76", False) else "1") == "1":   # off with SK76 (s0019: in-process +31 us in the evaluation)
+            self._sk_balance()
+            self.counters = {"passes": 0, "tokens": 0, "chain_launches": 0}
         self.load_seconds = time.time() - t0
         self.waiting, self.cohort, self.first_wait = [], None, None
 
@@ -412,27 +444,43 @@ class Engine:
             lo = w12_window_rows(W)
             NT, KQ = M // 16, Kc // 64
             packed, out, vals = w12_pack(t, NT, KQ, lo)
+            if self.w12_rs:   # escapes patched in as the scaled values: bits of w 2^(L0 - lo_row)
+                erow = out[:, 0] * 16 + (out[:, 3] >> 2) + 8 * ((out[:, 4] >> 1) & 1)
+                vals = w12_scale_bits(vals, lo[erow].to(torch.int32))
             self.weight_bytes += packed.numel() * 4 + M * 4
             self.w12_stats["weights"] += t.numel()
             if os.environ.get("MK_W12_VERIFY") == "1":   # decode as the kernel does and compare every weight
                 partition(NT, KQ)
                 if W12_EXACT:
                     ent, CAP = w12_escapes_fixed(out, vals, tabs[(NT, KQ)], NT, KQ)
-                    back = w12_unpack_fixed(packed, NT, KQ, lo, ent, CAP, tabs[(NT, KQ)])
+                    back = w12_unpack_fixed(packed, NT, KQ, lo, ent, CAP, tabs[(NT, KQ)], rs=self.w12_rs)
                 else:
                     hdr, ent = w12_escapes(out, vals, tabs[(NT, KQ)], NT, KQ)
                     back = w12_unpack(packed, NT, KQ, lo, hdr, ent, tabs[(NT, KQ)])
                 ref = t.view(NT, KQ, 4, 32, 8).to(torch.int32) & 0xFFFF
+                if self.w12_rs:   # the kernel's operand times its row factor must be the checkpoint's value exactly
+                    lof = w12_rows_frag(lo, NT).to(torch.int32)
+                    fr = torch.ldexp(torch.ones_like(lof, dtype=torch.float64), lof - W12_L0)   # exact powers of two
+                    sem = (back.to(torch.int16).view(torch.bfloat16).double() * fr) != ref.to(torch.int16).view(torch.bfloat16).double()
+                    self.w12_stats["semantic_mismatches"] = self.w12_stats.get("semantic_mismatches", 0) + int(sem.sum())
+                    if int(sem.sum()) and os.environ.get("MK_W12_SEMDBG"):
+                        j = tuple(sem.nonzero()[0].tolist())
+                        print("semantic mismatch", W.shape, int(sem.sum()), j, hex(int(back[j])), hex(int(ref[j])), flush=True)
+                    del lof, fr, sem
+                    ref = w12_scale_bits(ref, w12_rows_frag(lo, NT).to(torch.int32))
                 bad = int((back != ref).sum())
                 self.w12_stats["verified_weights"] = self.w12_stats.get("verified_weights", 0) + t.numel()
                 self.w12_stats["mismatches"] = self.w12_stats.get("mismatches", 0) + bad
                 self.w12_stats["verified_tensors"] = self.w12_stats.get("verified_tensors", 0) + 1
                 del back, ref
-            return {"ptr": K(packed), "ctab": K(w12_ctab(lo)), "out": out, "vals": vals}
+            return {"ptr": K(packed), "ctab": K(w12_ftab(lo) if self.w12_rs else w12_ctab(lo)), "out": out, "vals": vals}
 
         tables, tabs = {}, {}
         flags = (HERE / "build" / "flags").read_text() if (HERE / "build" / "flags").exists() else ""
         self.w12 = W12   # engine/TRACK "A W12": the one-token data flow with 12-bit weight storage (the run's track B)
+        self.w12_rs = self.w12 and ("-DW12_RS" in flags or os.environ.get("MK_W12_RS") == "1")   # must match the build
+        global W12_L0   # -DW12_OR: window base 112 (decode by OR, mk.cu dec8r), else 107
+        W12_L0 = 112 if ("-DW12_OR" in flags or os.environ.get("MK_W12_OR") == "1") else 107
         if not self.w12 and "-DW12_ONLY" in (HERE / "build" / "flags").read_text() if (HERE / "build" / "flags").exists() else False:
             raise RuntimeError("this build has no BF16 stream loops (W12_ONLY): set MK_W12=1 or rebuild with MK_NO_W12_ONLY=1")
         self.w12_stats = {"weights": 0, "escapes": 0}
@@ -522,7 +570,8 @@ class Engine:
             gn = gain(lp + "post_attention_layernorm.weight")
             r = row(OP_GEMM, EP_RESID, NT=320, KQ=96, W=frag(Wout, bf=os.environ.get("MK_W12_BF_OUT", "0") == "1"), gnext=gn)
             ops.append(r)
-            if self.w12 and W12_DUAL:   # a BF16 copy for one-column passes (B = 1): there out_proj / o_proj stream faster
+            if self.w12 and W12_DUAL and "-DW12_MIXED" in flags:   # a BF16 copy for one-column passes (B = 1) (s11: off;
+                # the build has no BF16 stream loops without -DW12_MIXED; with the s0005+ kernel W12 is faster there too)
                 self.alt_rows[id(r)] = row(OP_GEMM, EP_RESID, NT=320, KQ=96, W=frag(Wout, bf=True), gnext=gn)   # in BF16 (6 quads per warp)
             gate, up = wts.get(lp + "mlp.gate_proj.weight"), wts.get(lp + "mlp.up_proj.weight")
             Wgu = torch.stack([gate.view(FF // 8, 8, HID), up.view(FF // 8, 8, HID)], 1).reshape(2 * FF, HID)
@@ -629,12 +678,250 @@ class Engine:
             for Pv in range(3, PMAX + 1):
                 for i in range(2, min(Pv, CHAIN_MAX + 1)):
                     progs[f"chain{Pv}_{i}"] = [mtp_in(1, i - 1, Pv, x_mtp)] + mtp_rows + [row(OP_CHAIN_FIN, i6=i, M=Pv)]
+        flags_sk = (os.environ.get("MK_HEAD_SK") == "1") if "MK_HEAD_SK" in os.environ else "-DHEAD_SK" in flags
+        self.sk = self.w12 and flags_sk and am != 0 and hasattr(self.lib, "mk_launch_head")
+        self.sk7 = "-DSK7" in flags   # 7-bit sketch (mk.cu SK7)
+        self.sk76 = self.sk7 and "-DSK76" in flags   # mixed 7 / 6-bit tiles (mk.cu SK76)
+        self.sk_last = "-DSK_LAST" in flags
+        # rescore_own (SK_OWN / SK_SPEC) uses a 112 KB TMA ring from 16 KB on
+        self.hk_smem = HK_SMEM if ("MK_HK_SMEM" in os.environ or not ("-DSK_SPEC" in flags or "-DSK_OWN" in flags)) else 135168
+        if "-DSK_XS" in flags and "MK_HK_SMEM" not in os.environ:   # x entries of B > 1 passes staged from 48 KB on (80 KB)
+            self.hk_smem = max(self.hk_smem, 136 * 1024)
+        if "-DSK_DYN" in flags and "MK_HK_SMEM" not in os.environ:   # + the row constants of up to 127 tiles from 9728 floats on
+            self.hk_smem = max(self.hk_smem, 81920)
+        if self.sk:
+            self._sketch_build(wts.get("lm_head.weight"))
+            for name in list(progs):
+                rows = progs[name]
+                if len(rows) >= 3 and rows[-3][0] == OP_GEMM and rows[-3][1] == EP_LOGITS and rows[-2][0] == OP_ARGMAX:
+                    hx = rows[-3][XF]
+                    sk = [OP_SKETCH, 0, VOCAB // 16, 20 if self.sk7 else 40, 0, 0, 0, 0, self.sk_q.data_ptr(), hx, self.sk_tmax.data_ptr(),
+                          self.sk_st.data_ptr(), self.sk_lkey.data_ptr(), self.sk_dig.data_ptr(), self.sk_bmax.data_ptr(),
+                          self.sk_ttab.data_ptr(), self.sk_time.data_ptr()] + ([self.sk_bf.data_ptr(), am, 0] if "-DSK_SPEC" in flags else [0] * 3)
+                    rs = [OP_RESCORE, 0, VOCAB // 16, 80, 0, 0, 0, 0, self.sk_bf.data_ptr(), hx, am, 0,
+                          self.sk_lkey.data_ptr(), self.sk_tmax.data_ptr(), self.sk_bmax.data_ptr(), self.sk_ttab.data_ptr()] + [0] * 4
+                    self.sk_nextpf = "-DSK_NEXTPF" in flags   # filled in by _install (the final programs)
+                    if self.sk_map is not None:   # SK76: 7-bit slot count and slot -> tile map for the sketch and the scan
+                        sk[6] = self.sk_n7; sk[19] = self.sk_map.data_ptr(); rs[19] = self.sk_map.data_ptr()
+                    amx = list(rows[-2]); amx[13] = self.sk_lkey.data_ptr()
+                    # ops from OP_SKETCH on run in their own launch (mk_launch_head), right after the main kernel
+                    def tail_(sk_, rs_):
+                        if "-DSK_LAST" in flags:   # the rescoring's last block finishes the pass (mk.cu SK_LAST)
+                            if not hasattr(self, "sk_ctr"):
+                                self.sk_ctr = torch.zeros(4, dtype=torch.int32, device=self.dev); self.keep.append(self.sk_ctr)
+                            rl = list(rs_); rl[18] = self.sk_ctr.data_ptr()
+                            return rows[:-3] + [sk_, rl]
+                        if "-DSK_FOLD" in flags:   # the argmax op folded into the finish op (mk.cu SK_FOLD): one barrier less
+                            fin = list(rows[-1]); fin[17] = am; fin[18] = self.sk_lkey.data_ptr()
+                            return rows[:-3] + [sk_, rs_, fin]
+                        return rows[:-3] + [sk_, rs_, amx, rows[-1]]
+                    progs[name + "_sk"] = tail_(sk, rs)
+                    if self.sk_alt is not None:   # "_sk7": the all-7-bit sketch, used by passes of B > 1 (_launch)
+                        al = self.sk_alt
+                        sk7, rs7 = list(sk), list(rs)
+                        sk7[8] = al["q"].data_ptr(); sk7[11] = al["st"].data_ptr(); sk7[15] = al["ttab"].data_ptr()
+                        sk7[6] = 0; sk7[19] = 0          # no map: the kernel's plain 7-bit instance (sketch_work<false>)
+                        rs7[8] = al["bf"].data_ptr(); rs7[15] = al["ttab"].data_ptr(); rs7[19] = 0
+                        progs[name + "_sk7"] = tail_(sk7, rs7)
+        self._install(progs)
+        l0t = self.w12 and (os.environ.get("MK_L0T") == "1" if "MK_L0T" in os.environ else "-DL0_TABLE" in flags) and types[0] == "linear_attention"
+        if l0t:   # track B: layer 0's in_proj output for every token id, made by this kernel's own in_proj op
+            in0 = body[1]
+            assert body[0][0] == OP_EMBED and in0[0] == OP_GEMM and in0[1] == EP_STORE
+            mini = self.prog["full"][:2].clone()
+            self.pos_ub, self.bar_base, self.launches = 0, 0, 0
+            self.buf["bar"].zero_()
+            tab = torch.empty(VOCAB, MROW, dtype=torch.int16, device=self.dev)
+            ids = torch.arange(VOCAB, dtype=torch.int64, device=self.dev)
+            mb = self.buf["mbuf"].view(NCM, MROW)
+            for c0 in range(0, VOCAB, NCM):
+                self._launch(1, NCM, ids[c0:].data_ptr(), 1, 0, prog=mini, nops=2, advance=0)
+                tab[c0:c0 + NCM] = mb
+            if os.environ.get("MK_L0T_VERIFY") == "1":   # every row against a one-column pass of the same op (the decode path)
+                bad = 0
+                chk = torch.empty(4096, MROW, dtype=torch.int16, device=self.dev)
+                for c0 in range(0, VOCAB, 4096):
+                    n = min(4096, VOCAB - c0)
+                    for i in range(n):
+                        self._launch(1, 1, ids[c0 + i:].data_ptr(), 1, 0, prog=mini, nops=2, advance=0)
+                        chk[i] = mb[0]
+                    bad += int((chk[:n] != tab[c0:c0 + n]).any(1).sum())
+                self.l0t_mismatched_rows = bad
+            torch.cuda.synchronize()
+            self.buf["bar"].zero_()   # the barrier counter starts from 0 again (__init__ sets bar_base = 0)
+            self.reset()
+            self.l0_table = tab
+            self.keep.append(tab)
+            progs2 = {}
+            for name, rows in progs.items():
+                if len(rows) > 1 and rows[1] is in0:
+                    e = list(rows[0]); e[12] = tab.data_ptr()
+                    rows = [e] + rows[2:]
+                progs2[name] = rows
+            self._install(progs2)
+        self.pf_b = {}
+        torch.cuda.synchronize()
+        wts.maps.clear()
+
+    def _sketch_build(self, W):
+        """SK76 with MK_SK76_B1ONLY=1 (default): the mixed 6 / 7-bit sketch for the one-sequence programs, an all-7-bit
+        one for the others (at B=8 the extra candidates of the mixed sketch cost more than its bytes save)."""
+        NT = W.shape[0] // 16
+        self.sk_alt = None
+        if getattr(self, "sk76", False) and os.environ.get("MK_SK76_B1ONLY", "1") == "1":
+            self.sk76 = False
+            self._sketch_core(W)
+            ident = torch.arange(NT, dtype=torch.int32, device=self.dev)
+            self.keep.append(ident)
+            self.sk_alt = dict(q=self.sk_q, st=self.sk_st, map=ident, n7=NT, ttab=self.sk_ttab, bf=self.sk_bf)
+            self.sk76 = True
+        self._sketch_core(W)
+        self.sk_ttabs = {self.sk_ttab.data_ptr(): self.sk_ttab}
+        if self.sk_alt is not None:
+            self.sk_ttabs[self.sk_alt["ttab"].data_ptr()] = self.sk_alt["ttab"]
+
+    def _sketch_core(self, W):
+        """Certified int8 sketch of lm_head (track B, mk.cu sketch_work / rescore_work). Per row: s = max|w| / 127,
+        q = round(w / s) in [-127, 127] (m16n8k32 s8 A-fragment order), and the bound constants
+        c1 = ||w - s q|| + 2^-10 ||w||, c2 = s ||q|| (float64, rounded up to float32 with slack); a BF16 copy of the head
+        in the exact head's fragment order for the rescoring."""
+        V, Kc = W.shape
+        NT = V // 16
+        q8 = torch.empty(V, Kc, dtype=torch.int8, device=self.dev)
+        st = torch.zeros(V, 4, dtype=torch.float32, device=self.dev)
+        def up32(x):   # float64 -> the smallest float32 >= x
+            f = x.float()
+            return torch.where(f.double() < x, torch.nextafter(f, torch.full_like(f, float("inf"))), f)
+        qm = 63 if self.sk7 else 127
+        # SK76: tiles listed in engine/sk6_tiles.bin (packed bits, tools/mixed_census.py: tiles that were candidates at
+        # <= 80 of 6144 own greedy positions under 6 bits: 93.9 % of tiles) are quantized to 6 bits (s = max|w| / 31, u = q + 32)
+        self.sk_is6 = None
+        if self.sk76:
+            bits = np.unpackbits(np.fromfile(os.environ.get("MK_SK6_FILE", str(HERE / "sk6_tiles.bin")), dtype=np.uint8))[:NT].astype(bool)
+            self.sk_is6 = torch.from_numpy(bits).to(self.dev)
+        for r0 in range(0, V, 8192):
+            w = W[r0:r0 + 8192].double()
+            qmr = torch.full((w.shape[0],), float(qm), dtype=torch.float64, device=self.dev)
+            if self.sk_is6 is not None:
+                qmr = torch.where(self.sk_is6.repeat_interleave(16)[r0:r0 + 8192], torch.full_like(qmr, 31.0), qmr)
+            sc = (w.abs().amax(1) / qmr).float()
+            sc = torch.where(sc > 0, sc, torch.ones_like(sc))
+            q = torch.round(w / sc.double()[:, None])
+            q = torch.minimum(torch.maximum(q, -qmr[:, None]), qmr[:, None])
+            e = w - sc.double()[:, None] * q                 # exact in float64
+            en, qn, wn = e.norm(dim=1), q.norm(dim=1), w.norm(dim=1)
+            st[r0:r0 + 8192, 0] = sc
+            st[r0:r0 + 8192, 1] = up32((en + wn * 2.0 ** -10) * (1 + 2.0 ** -20))
+            st[r0:r0 + 8192, 2] = up32(sc.double() * qn * (1 + 2.0 ** -20))
+            q8[r0:r0 + 8192] = q.to(torch.int8)
+            del w, q, e
+        # a_i: row g + 8 (i & 1), k 4t + 16 (i >> 1) + j  ->  [NT][160 k-steps][g][t][kh][h][j]
+        self.sk_q = q8.view(NT, 2, 8, Kc // 32, 2, 4, 4).permute(0, 3, 2, 5, 4, 1, 6).contiguous()
+        del q8
+        self.sk_map, self.sk_n7 = None, NT
+        if self.sk76:   # storage slots: the 7-bit tiles first, then the 6-bit ones; sk_map[slot] = tile
+            t6 = self.sk_is6.nonzero().view(-1); t7 = (~self.sk_is6).nonzero().view(-1)
+            order = torch.cat([t7, t6])
+            self.sk_map = order.to(torch.int32).contiguous(); self.sk_n7 = int(t7.numel())
+            self.sk_q = self.sk_q[order].contiguous()
+        if self.sk7:   # u = q + 64 in [1, 127]; per lane and unit of 8 k-steps, 32 fragment words A -> 28 stored words S:
+            # S[7m + j] = (A[8m + j] & 0x7F7F7F7F) | (bit j of each byte of A[8m + 7]) << 7; memory [NT][20][7][32 lanes][16 B]
+            def pack7(sq):
+                n = sq.shape[0]
+                u = (sq.to(torch.int16) + 64).to(torch.uint8)
+                A = u.view(n, 20, 8, 32, 16).permute(0, 1, 3, 2, 4).contiguous().view(torch.int32).view(n, 20, 32, 4, 8).to(torch.int64)
+                del u
+                hi = A[..., 7:8]
+                j = torch.arange(7, device=self.dev, dtype=torch.int64)
+                S = (A[..., :7] & 0x7F7F7F7F) | (((hi >> j) & 0x01010101) << 7)
+                del A, hi
+                return torch.where(S >= 2 ** 31, S - 2 ** 32, S).to(torch.int32).view(n, 20, 32, 7, 4).permute(0, 1, 3, 2, 4).contiguous()
+            def pack6(sq):   # u = q + 32 in [1, 63]; S[6m + j] = (A[8m + j] & 0x3F3F3F3F) | (bits 2(j%3).. of A[8m + 6 + j/3]) << 6
+                n = sq.shape[0]
+                u = (sq.to(torch.int16) + 32).to(torch.uint8)
+                A = u.view(n, 20, 8, 32, 16).permute(0, 1, 3, 2, 4).contiguous().view(torch.int32).view(n, 20, 32, 4, 8).to(torch.int64)
+                del u
+                j = torch.arange(6, device=self.dev, dtype=torch.int64)
+                hi = torch.where(j < 3, A[..., 6:7], A[..., 7:8])
+                S = (A[..., :6] & 0x3F3F3F3F) | (((hi >> (2 * (j % 3))) & 0x03030303) << 6)
+                del A, hi
+                return torch.where(S >= 2 ** 31, S - 2 ** 32, S).to(torch.int32).view(n, 20, 32, 6, 4).permute(0, 1, 3, 2, 4).contiguous()
+            sq = self.sk_q; del self.sk_q
+            n7 = self.sk_n7
+            parts = [pack7(sq[:n7]).view(-1)]
+            if n7 < NT:
+                parts.append(pack6(sq[n7:]).view(-1))
+            del sq
+            self.sk_q = torch.cat(parts).contiguous()
+            del parts
+        self.sk_st = st
+        self.sk_bf = to_frag(W).contiguous()
+        self.sk_tmax = torch.zeros(NT * 8, dtype=torch.float32, device=self.dev)
+        self.sk_lkey = torch.zeros(NCM, dtype=torch.int32, device=self.dev)
+        self.sk_bmax = torch.zeros(self.nblocks * 8, dtype=torch.float32, device=self.dev)
+        nb = self.nblocks   # tile range of each block (rebalanced by _sk_balance) and each block's measured stream time
+        if self.sk76:   # byte-balanced slot ranges (7-bit slots 7 units of 16 B per lane, 6-bit ones 6)
+            w6 = float(os.environ.get("MK_SK76_W6", "7"))   # cost of a 6-bit slot relative to a 7-bit one (7): a unit costs a warp about the same time either way (head nsys: 7 better than 6, 6.5, 7.5)
+            cost = np.where(np.arange(NT) < self.sk_n7, 7.0, w6).cumsum()
+            tt = [0] + [int(np.searchsorted(cost, cost[-1] * b / nb)) for b in range(1, nb)] + [NT]
+            self.sk_ttab = torch.tensor(tt, dtype=torch.int32, device=self.dev)
+        else:
+            self.sk_ttab = torch.tensor([(NT * b) // nb for b in range(nb + 1)], dtype=torch.int32, device=self.dev)
+        self.sk_time = torch.zeros(nb, dtype=torch.int64, device=self.dev)
+        self.sk_dig = torch.zeros(self.nblocks * 160 * 32 * 4, dtype=torch.int32, device=self.dev)
+        self.keep += [self.sk_q, self.sk_st, self.sk_bf, self.sk_tmax, self.sk_lkey, self.sk_dig, self.sk_bmax, self.sk_ttab, self.sk_time]
+        if self.sk_map is not None:
+            self.keep.append(self.sk_map)
+
+    def _sk_balance(self, rounds=2, passes=12):
+        """The sketch's blocks stream at systematically different speeds (the same SMs are 5-10 us late every pass;
+        findings F8): measure each block's stream time over greedy passes and give it tiles in proportion to its speed.
+        The sketch's sums are integers, so any split gives the same bounds; only the time changes."""
+        NT, nb = VOCAB // 16, self.nblocks
+        tok = torch.full((1,), 1000, dtype=torch.int64, device=self.dev)
+        for _ in range(rounds):
+            self.reset()
+            acc = np.zeros(nb)
+            for i in range(passes):
+                tok = self.generate(tok, 1)[:, 0].contiguous()
+                if i >= 2:
+                    torch.cuda.synchronize(); acc += self.sk_time.cpu().numpy()
+            tab = self.sk_ttab.cpu().numpy().astype(np.int64)
+            tiles = np.diff(tab).astype(np.float64)
+            speed = tiles / np.maximum(acc / (passes - 2), 1.0)
+            share = speed / speed.sum() * NT
+            new = np.floor(share).astype(np.int64)
+            rem = NT - new.sum()
+            new[np.argsort(-(share - new))[:rem]] += 1
+            new = np.clip(new, 1, 127)
+            new[np.argmax(new)] += NT - new.sum()   # (clipping is never active in practice; keep the total exact)
+            self.sk_ttab.copy_(torch.from_numpy(np.concatenate([[0], np.cumsum(new)]).astype(np.int32)))
+        self.sk_ttab_np = self.sk_ttab.cpu().numpy().astype(np.int64)
+        for k in self.prog:   # the prefetch tables' sketch pieces follow the new ranges (tensors updated in place)
+            if self.pf[k] is not None:
+                self.pf[k].copy_(self._prefetch_table(self.prog_np[k]))
+        torch.cuda.synchronize()
+        self.pf_b = {}
+        self.reset()
+        self.sk_balance_tiles = (int(np.diff(self.sk_ttab.cpu().numpy()).min()), int(np.diff(self.sk_ttab.cpu().numpy()).max()))
+
+    def _install(self, progs):
         self.prog = {}
         self.pf = {}
         self.prog_np = {}      # the programs' rows on the host: the prefetch table of a batch size is made on first use
         for name, rows in progs.items():
             a = np.array(rows, dtype=np.int64)
             assert a.shape[1] == OPW
+            if getattr(self, "sk_nextpf", False) and name.endswith("_sk"):
+                # SK_NEXTPF: the rescoring op asks L2 for the next pass's first GEMM (W12: 1536 bytes per quad)
+                gi = [i for i in range(a.shape[0]) if a[i, 0] == OP_GEMM]
+                ri = [i for i in range(a.shape[0]) if a[i, 0] == OP_RESCORE]
+                k_ = int(os.environ.get("MK_NEXTPF_G", "1"))   # which GEMM of the next pass (0: out_proj L0, 1: gate_up L0)
+                if len(gi) > k_ and ri and (int(a[gi[k_], 7]) >> 32):
+                    g0 = a[gi[k_]]
+                    a[ri[0], 6] = int(float(os.environ.get("MK_NEXTPF_KB", "512")) * 1024)   # bytes per block
+                    a[ri[0], 7] = (int(g0[2]) << 16) | int(g0[3])
+                    a[ri[0], 19] = int(g0[8])
             for o in range(a.shape[0]):   # p5 of a GEMM: the conv history ring of the recurrent op right after it (its rows are
                 if a[o, 0] == OP_GEMM:    # prefetched during the GEMM, mk.cu ring_prefetch), else 0
                     a[o, 13] = a[o + 1, 13] if (o + 1 < a.shape[0] and a[o + 1, 0] == OP_LMIX) else 0
@@ -646,9 +933,9 @@ class Engine:
         self.prog_b1 = self.prog.get("full_b1")
         self.pf_by_ptr = {self.prog[k].data_ptr(): self.pf[k] for k in self.prog}
         self.name_by_ptr = {self.prog[k].data_ptr(): k for k in self.prog}
+        self.sk_split = {self.prog[k].data_ptr(): int(np.nonzero(self.prog_np[k][:, 0] == OP_SKETCH)[0][0])
+                         for k in self.prog if k.endswith("_sk") or k.endswith("_sk7")}
         self.pf_b = {}
-        torch.cuda.synchronize()
-        wts.maps.clear()
 
     def _prefetch_table(self, a, B=0):
         """[nops][nblocks][2] (address, bytes): at the barrier after op o, block b asks L2 for the first bytes of its
@@ -659,7 +946,9 @@ class Engine:
         # 160 KB / 64 KB: 8622 / 9140; 176 KB / 64 KB: 8633 / 9140; near 256 KB +105 / +70, far 512 KB +82 / +115.
         # Before (cg loads): near 128 KB, far 0 (BF16; far 1 MB +0.6 to +1.6 %) and far 96 KB (W12, s5).
         # W12 engine with cs loads (s9): 128 / 96 KB 7838 / 8372; 144 / 64 KB 7840 / 8350; 160 / 96 KB 7845 / 8357; 192 / 96 KB +47 / +25.
-        near = int(os.environ.get("MK_PF_NEAR", "147456" if self.w12 else "163840"))
+        # 12-bit engine, s11 (7-bit sketch build), cards 1 and 3, 3 rounds, B=1 / B=8 us: 144 KB 7271-7286 / 7691-7714,
+        # 160 KB 7257-7271 / 7682-7697, 176 KB 7258-7271 / 7670-7687, 192 KB 7264-7279 / 7665-7696
+        near = int(os.environ.get("MK_PF_NEAR", "180224" if self.w12 else "163840"))
         # far piece, BF16 engine: 128 KB since the barrier issues one piece per poll and none after the release (s0020). On
         # the evaluator's card, B=1 / B=8 us per step: 64 / 80 KB (s0020) 8462 / 8858, 96 KB 8453 / 8851, 112 KB 8451 / 8851,
         # 128 KB 8448 / 8850, 160 KB 8454 / 8859. Card-specific at this level (another card of the pod: +8 / +58 at 128 KB).
@@ -669,7 +958,13 @@ class Engine:
             return None
         n, nb, nw = a.shape[0], self.nblocks, self.nwarps
         t = np.zeros((n, nb, 2), dtype=np.int64)
-        gemms = [i for i in range(n) if a[i, 0] == OP_GEMM]
+        near_map = {}
+        # 12-bit build (s11, nsys main-kernel medians, contexts to 1088, two jobs x 3 runs): gate_up 160 KB and down
+        # 192 KB instead of 176: -1.0 / -1.3 us (each alone: gate_up 160 -1.2, down 192 -1.0; 144 / 208 worse)
+        nm_def = "2176x80:163840,320x272:196608" if (self.w12 and 0 < B <= 3) else ""   # measured at B=1 only
+        for it in filter(None, os.environ.get("MK_PF_NEAR_MAP", nm_def).split(",")):
+            k, v = it.split(":"); nt_, kq_ = k.split("x"); near_map[(int(nt_), int(kq_))] = int(v)
+        gemms = [i for i in range(n) if a[i, 0] in (OP_GEMM, OP_SKETCH)]
         # MK_PF_CUM=1: the barriers before a GEMM that is not the next op (recurrent op, attention ops in between) ask
         # for consecutive pieces of the block's share instead of the same first bytes again
         # (same card, B=1 / B=8 us per step: 8621 -> 8605 / 9168 -> 9150 with 64 KB pieces; 96 KB 8612 / 9160, 128 KB 8612 / 9165)
@@ -680,10 +975,11 @@ class Engine:
         # 32: 8579, 40: 8574, 48: 8583, all 56: 8588 (more prefetch traffic delays the recurrent op's own loads);
         # 192 or 256 KB instead of the whole share: 8590-8597. (MK_PF_IDLE=n: blocks n.. whatever the batch.)
         idle0 = int(os.environ.get("MK_PF_IDLE", "0"))
+        lmix_all = os.environ.get("MK_PF_LMIX_ALL", "0") == "1"
         if B > 0 and "MK_PF_IDLE" not in os.environ:   # the blocks without a recurrent unit in a one-token pass of B sequences
             u = B * 48
             busy = 2 * u if 2 * u <= nb else u if u <= nb else (u + 1) // 2 if u <= 2 * nb else nb
-            k = min(nb - busy, int(os.environ.get("MK_PF_IDLE_N", "32"))) if B <= 3 else 0   # measured at B=1 only
+            k = min(nb - busy, int(os.environ.get("MK_PF_IDLE_N", "56" if lmix_all else ("40" if self.w12 else "32")))) if B <= 3 else 0   # measured at B=1 only
             idle0 = nb - k if k > 0 else 0
         g_prev, off = -1, np.zeros(nb, dtype=np.int64)
         for o in range(n):
@@ -694,11 +990,18 @@ class Engine:
             if g != g_prev:
                 g_prev, off = g, np.zeros(nb, dtype=np.int64)
             budget = near if g == o + 1 else far
+            if g == o + 1 and near_map:   # MK_PF_NEAR_MAP="NTxKQ:bytes,...": per-matrix near piece (A/B tests)
+                budget = near_map.get((int(a[g, 2]), int(a[g, 3])), budget)
             if o + 1 < n and a[o + 1, 0] == OP_ATT_DIST:
                 # the barrier before the one-op attention layer (few blocks work in it at small batches): the whole rest of
                 # the block's o_proj share at B <= 3, the usual far piece otherwise. Same card, us per step: B=1 far piece
                 # 8566, 128 KB 8557, 256 KB 8571, whole share 8520; B=8 9094, 9097, 9122, 9100.
-                budget = int(os.environ.get("MK_PF_FAR_ATT", str(1 << 30 if 0 < B <= 3 else far)))
+                # 12-bit build, s11 (nsys, main-kernel median over 1024 greedy steps, context to 1088, B=1, 3 runs each):
+                # whole share 7084.1-7084.7 us, 128 KB 7092.1-7092.7, 256 KB 7081.6-7083.2, 512 KB 7083.5-7084.8;
+                # 256 KB + the K chunk (below) 7080.8-7081.5. Short contexts (<= 364): all within +-1 us.
+                # Later (with the K chunks limited to 5, below): the whole share again, -2 us more (hour ~10.5)
+                att_b13 = (1 << 30) if self.w12 else (1 << 30)
+                budget = int(os.environ.get("MK_PF_FAR_ATT", str(att_b13 if 0 < B <= 3 else far)))
             if budget <= 0:
                 continue
             NT, KQ, W = int(a[g, 2]), int(a[g, 3]), int(a[g, 8])
@@ -706,23 +1009,55 @@ class Engine:
             UQ = NT * KQ
             starts = (np.arange(nb, dtype=np.int64) * 32 * UQ) // nw
             ends = (np.arange(1, nb + 1, dtype=np.int64) * 32 * UQ) // nw
+            if a[g, 0] == OP_SKETCH:   # whole tiles per block (mk.cu sketch_work)
+                qb = 3584 if getattr(self, "sk7", False) else 2048
+                sk76 = getattr(self, "sk76", False)
+                starts = (np.arange(nb, dtype=np.int64) * NT) // nb * KQ
+                ends = (np.arange(1, nb + 1, dtype=np.int64) * NT) // nb * KQ
+                tt = getattr(self, "sk_ttab_np", None)   # the balanced table (_sk_balance)
+                if tt is not None:
+                    starts, ends = tt[:-1] * KQ, tt[1:] * KQ
+                if sk76:   # byte offsets of slot ranges: 7-bit slots 20 x 3584 B, 6-bit slots 20 x 3072 B (the row's own sketch)
+                    tt = self.sk_ttabs.get(int(a[g, 15]), self.sk_ttab).cpu().numpy().astype(np.int64)
+                    n7 = int(a[g, 6]) if int(a[g, 19]) else NT   # no map: all 7-bit
+                    boff = lambda s_: np.minimum(s_, n7) * KQ * 3584 + np.maximum(s_ - n7, 0) * KQ * 3072
+                    starts, ends, qb = boff(tt[:-1]), boff(tt[1:]), 1
             bud = np.full(nb, budget, dtype=np.int64)
             if idle0 > 0 and o + 1 < n and a[o + 1, 0] == OP_LMIX:
                 bud[idle0:] = int(os.environ.get("MK_PF_IDLE_BYTES", str(1 << 30)))
             t[o, :, 0] = W + starts * qb + off
             t[o, :, 1] = np.clip(np.minimum((ends - starts) * qb - off, bud), 0, None) // 16 * 16
+            if lmix_all and idle0 > 0 and a[o, 0] == OP_LMIX and g == o + 1:
+                # the blocks without a recurrent unit wait here for the whole recurrent op: they ask L2 for the whole
+                # next matrix (out_proj), in consecutive slices, so that it streams from L2
+                tot = UQ * qb
+                ni = nb - idle0
+                sl = (tot + ni - 1) // ni // 65536 * 65536 + 65536
+                for i in range(ni):
+                    t[o, idle0 + i, 0] = W + i * sl
+                    t[o, idle0 + i, 1] = max(0, min(sl, tot - i * sl)) // 16 * 16
             if cum:
                 off = off + bud
-            if o + 1 < n and a[o + 1, 0] == OP_ATT_DIST and os.environ.get("MK_PF_ATT_K", "1" if B >= 4 else "0") == "1" and B > 0:
+            if o + 1 < n and a[o + 1, 0] == OP_ATT_DIST and os.environ.get("MK_PF_ATT_K", "1" if (B >= 4 or self.w12) else "0") == "1" and B > 0:
                 # the blocks of the one-op attention layer (unit u, chunk ch -> block u S + ch) ask for their chunk of the
                 # K cache (131 KB) at the barrier before it instead of a weights piece: the op's largest phase was the
                 # scores waiting for K (phase timer: 4.5 us of 15 at B=1, 7 of 21 at B=8). Same card, BF16 engine:
                 # B=8 8937 -> 8880 us per step; B=1 8530 -> 8526 (left off below 4 sequences)
                 S_ = nb // (4 * B)
                 for u in range(4 * B):
-                    for ch in range(min(S_, int(os.environ.get("MK_PF_ATT_CH", "5")))):
+                    # 12-bit build at B <= 3 (s11, nsys main-kernel median over 1024 greedy steps, 3 cards, 3 runs each):
+                    # 20 chunks -7.5 / -8.6 / -7.3 us against 5 at contexts to 1088 (-1.5 at contexts <= 364); 16 / 24
+                    # within 2 us of 20, 28 = 5, 38 +14. (Chunks of 256 keys: most of the 20 are beyond the context;
+                    # the mechanism is not understood - see notes/journal.md.)
+                    ch_n = int(os.environ.get("MK_PF_ATT_CH", "20" if (self.w12 and B <= 3) else "5"))
+                    # chunks from k_max on: nothing asked at all (the block still skips its o_proj piece). 12-bit build
+                    # at B <= 3, with the whole o_proj share for the other blocks and 40 idle-block prefetches before
+                    # the recurrent op (nsys, 3 runs each): -11.0 us at contexts to 1088 (cards 2, 3), -10.8 at <= 364
+                    # (card 1) against 20 K chunks / 256 KB / 32 (s0015). Chunks of 256 keys: 5 cover contexts to 1280.
+                    k_max = int(os.environ.get("MK_PF_ATT_KMAX", "5" if (self.w12 and B <= 3) else "64"))
+                    for ch in range(min(S_, ch_n)):
                         t[o, u * S_ + ch, 0] = int(a[o + 1, 12]) + u * self.mc * 512 + ch * 131072
-                        t[o, u * S_ + ch, 1] = 131072
+                        t[o, u * S_ + ch, 1] = 131072 if ch < k_max else 0
                         off[u * S_ + ch] = 0   # nothing of the next matrix asked for yet by this block
         return torch.from_numpy(t).to(self.dev)
 
@@ -735,8 +1070,15 @@ class Engine:
                 prog = self.prog["full2_b1"] if fuse else self.prog_b1
             else:
                 prog = self.prog["full2"] if fuse else self.prog_full
+        if getattr(self, "sk", False) and P == 1 and B <= 8 and not (flags & F_LOGITS) and nops is None:
+            nm = self.name_by_ptr.get(prog.data_ptr())   # greedy pass without logits: the head through the sketch
+            if nm is not None and B > 1 and nm + "_sk7" in self.prog:
+                prog = self.prog[nm + "_sk7"]
+            elif nm is not None and nm + "_sk" in self.prog:
+                prog = self.prog[nm + "_sk"]
         nops = prog.shape[0] if nops is None else nops
         NC = B * P
+        flags |= XFLAGS   # MK_XFLAGS: debug / A-B launch flags (0 in normal use)
         cx = Ctx()
         cx.B, cx.P, cx.NC, cx.NG = B, P, NC, ngroups(NC)
         cx.nwarps, cx.nblocks, cx.max_ctx, cx.flags = self.nwarps, self.nblocks, self.mc, flags
@@ -777,9 +1119,21 @@ class Engine:
         if self.w12:   # the W12 area after the GEMM work area of this many column groups (W12S_F in mk.cu)
             smem = max(smem, 1280 + (32 * 2 * cx.NG * 512 + int(os.environ.get("MK_HC", "6")) * 16 * NCM * 2 + 4096) + 72 * 32 * 4)
         smem = max(smem, int(os.environ.get("MK_SMEM_MIN", "0")))   # A/B tests of the L1 / shared-memory split
-        if self.lib.mk_launch(prog.data_ptr(), nops, ctypes.byref(cx), smem):
+        ks = self.sk_split.get(prog.data_ptr(), 0) if getattr(self, "sk", False) else 0
+        if ks and nops == prog.shape[0]:   # greedy pass through the head sketch: the main kernel, then the head kernel
+            if pft is not None:
+                cx.pft = pft.data_ptr()
+            if self.lib.mk_launch(prog.data_ptr(), ks, ctypes.byref(cx), smem):
+                raise RuntimeError("mk_launch failed")
+            cx.bar_base = self.bar_base + ks * self.nblocks
+            if pft is not None:
+                cx.pft = pft.data_ptr() + ks * self.nblocks * 16
+            if self.lib.mk_launch_head(prog.data_ptr() + ks * OPW * 8, nops - ks, ctypes.byref(cx), self.hk_smem):
+                raise RuntimeError("mk_launch_head failed")
+        elif self.lib.mk_launch(prog.data_ptr(), nops, ctypes.byref(cx), smem):
             raise RuntimeError("mk_launch failed")
-        self.bar_base += nops * self.nblocks
+        # SK_LAST: the head kernel's last op has no barrier
+        self.bar_base += (nops - (1 if (ks and nops == prog.shape[0] and getattr(self, "sk_last", False)) else 0)) * self.nblocks
         self.pos_ub += P if advance is None else advance
         self.launches += 1
 
@@ -791,6 +1145,8 @@ class Engine:
 
     def step(self, tokens: torch.Tensor) -> torch.Tensor:
         B = tokens.shape[0]
+        if B > self.Bmax:
+            raise ValueError("batch larger than max_batch")
         logits = torch.empty(B, VOCAB, dtype=torch.bfloat16, device=self.dev)
         self._launch(B, 1, tokens.data_ptr(), tokens.stride(0), F_LOGITS, logits_ptr=logits.data_ptr())
         self._hold = (tokens, logits)
@@ -798,6 +1154,8 @@ class Engine:
 
     def generate(self, tokens: torch.Tensor, n_steps: int) -> torch.Tensor:
         B = tokens.shape[0]
+        if B > self.Bmax:
+            raise ValueError("batch larger than max_batch")
         tb = self.buf["tokbuf"]
         tb[:B] = tokens
         out = torch.empty(n_steps, B, dtype=torch.int64, device=self.dev)
@@ -817,7 +1175,10 @@ class Engine:
              "max_shared_memory": self.max_smem,
              "load_seconds": round(self.load_seconds, 1)}
         s.update(self.counters)
+        if getattr(self, "l0_table", None) is not None:
+            s["layer0_table"] = {"rows": VOCAB, "bytes": VOCAB * MROW * 2, "mismatched_rows": getattr(self, "l0t_mismatched_rows", None)}
         if self.w12:
+            s["w12_rows_scaled"] = bool(self.w12_rs)
             s["w12"] = dict(self.w12_stats, bits_per_weight=round((self.weight_bytes * 8 + self.w12_stats["escapes"] * 64) / max(1, self.w12_stats["weights"]), 4))
         if self.counters["passes"]:
             s["tokens_per_verify_pass"] = round(self.counters["tokens"] / self.counters["passes"], 3)
@@ -825,7 +1186,12 @@ class Engine:
 
     # ------------------------------------------------------------------ the online contract (HTTP server)
     def submit(self, rid, prompt, n) -> None:
-        self.waiting.append((int(rid), list(prompt), int(n)))
+        prompt = [int(t) for t in prompt]
+        if not prompt or min(prompt) < 0 or max(prompt) >= VOCAB:   # an id past the vocabulary would read past the
+            raise ValueError("prompt token ids must be in [0, %d)" % VOCAB)   # embedding (and the layer-0 table)
+        if len(prompt) + int(n) > self.mc:
+            raise ValueError("prompt + new tokens longer than max_context")
+        self.waiting.append((int(rid), prompt, int(n)))
         if self.first_wait is None:
             self.first_wait = time.perf_counter()
 

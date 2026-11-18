@@ -6,15 +6,19 @@ cd "$(dirname "$0")"
 TRACK="${MK_TRACK:-$(cat TRACK 2>/dev/null || echo A)}"
 mkdir -p build
 FLAGS="-O3 -std=c++17 -arch=sm_100 -shared -Xcompiler -fPIC"
-if [ "$TRACK" = "B" ]; then FLAGS="$FLAGS -DTRACK_B"; fi
-EARLY=""; if [ "$TRACK" = "B" ] && { [ -f EARLY_ROUTE ] || [ -n "${MK_EARLY:-}" ]; }; then EARLY=1; FLAGS="$FLAGS -DEARLY_ROUTE"; fi      # experimental, see notes
+# A: the checkpoint's formats (s0077). B: the same arithmetic plus lossless model-specific formats (this run: the
+# certified int8 sketch of the head on the greedy paths, -DHSK). F: the float32 stream of the previous run (not
+# bit-identical to A; kept buildable).
+if [ "$TRACK" = "B" ]; then FLAGS="$FLAGS -DHSK=1"; fi
+if [ "$TRACK" = "F" ]; then FLAGS="$FLAGS -DTRACK_B"; fi
+EARLY=""; if [ "$TRACK" = "F" ] && { [ -f EARLY_ROUTE ] || [ -n "${MK_EARLY:-}" ]; }; then EARLY=1; FLAGS="$FLAGS -DEARLY_ROUTE"; fi      # experimental, see notes
 if [ -z "$EARLY" ] && { [ -f SPEC_ROUTE ] || [ -n "${MK_SPEC:-}" ]; }; then EARLY=S; FLAGS="$FLAGS -DSPEC_ROUTE"; fi      # speculative routing
 if [ -n "${MK_POLL_PLAIN:-}" ]; then FLAGS="$FLAGS -DPOLL_PLAIN"; fi
 if [ -n "${MK_EXTRA:-}" ]; then FLAGS="$FLAGS $MK_EXTRA"; fi      # experiments with compiler options
 if [ -n "${MK_PLAIN_STORE:-}" ]; then FLAGS="$FLAGS -DPLAIN_STORE"; fi
 if [ -n "${MK_FENCE_MASK:-}" ]; then FLAGS="$FLAGS -DFENCE_MASK=$MK_FENCE_MASK"; fi
 if [ -n "${MK_NACC:-}" ]; then FLAGS="$FLAGS -DNACC=$MK_NACC"; elif [ -f NACC_$TRACK ]; then FLAGS="$FLAGS -DNACC=$(cat NACC_$TRACK)"; fi
-SRC_HASH=$( (cat mk.cu build.sh TRACK NACC_A NACC_B 2>/dev/null || true) | sha1sum | cut -c1-16)-$TRACK-${MK_NACC:-}-${MK_POLL_PLAIN:-}-${MK_EXTRA:-}-${MK_PLAIN_STORE:-}-${MK_FENCE_MASK:-}-$EARLY
+SRC_HASH=$( (cat mk.cu build.sh TRACK NACC_A NACC_B NACC_F 2>/dev/null || true) | sha1sum | cut -c1-16)-$TRACK-${MK_NACC:-}-${MK_POLL_PLAIN:-}-${MK_EXTRA:-}-${MK_PLAIN_STORE:-}-${MK_FENCE_MASK:-}-$EARLY
 if [ ! -f build/libmk.so ] || [ "$(cat build/hash 2>/dev/null)" != "$SRC_HASH" ]; then
   nvcc $FLAGS --resource-usage -o build/libmk.so mk.cu
   echo "$SRC_HASH" > build/hash

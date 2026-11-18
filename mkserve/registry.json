@@ -60,23 +60,23 @@
       "track": "A",
       "kind": "offline",
       "source": "../engines/flint_b200/offline-a",
-      "sha256": "6dd34618b3ad6ee8",
-      "from": "run s4-flint-b200-a2, submission s0077",
+      "sha256": "8115c4c808ce705d",
+      "from": "run s11-flint-b200-b1, submission s0026",
       "max_batch": 8,
       "max_context": 2048,
       "what": "the checkpoint's BF16 formats; steady decode only; step mode: sampling works, the prompt is fed one token per step",
-      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+      "verified": "pending: release checks of 2026-11-17 (rel-flint-head-k2 rematch done)"
      },
      "offline-b": {
       "track": "B",
       "kind": "offline",
       "source": "../engines/flint_b200/offline-b",
-      "sha256": "1dbc234aa69135a7",
-      "from": "run s4-flint-b200-a2, submission s0055",
+      "sha256": "654b9d19098f823e",
+      "from": "run s11-flint-b200-b1, submission s0027",
       "max_batch": 8,
       "max_context": 2048,
       "what": "float32 intermediates (outputs differ from offline-a); steady decode only; step mode: sampling works, the prompt is fed one token per step",
-      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+      "verified": "pending: release checks of 2026-11-17"
      }
     }
    }
@@ -100,12 +100,12 @@
       "track": "B",
       "kind": "offline",
       "source": "../engines/qwen3.8-27b_b200/offline-b",
-      "sha256": "865d811d7ca068be",
-      "from": "run s9-qwen38-27b-b200-f1, submission s0023",
+      "sha256": "f5c4604999ecad9e",
+      "from": "run s11-q27-b200-b1, submission s0020",
       "max_batch": 8,
       "max_context": 2048,
       "what": "12-bit lossless weights, logits bit-identical to offline-a; steady decode only; step mode: sampling works, the prompt is fed one token per step",
-      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+      "verified": "pending: release checks of 2026-11-17 (rel-q27-head-k2 rematch done)"
      }
     }
    }
