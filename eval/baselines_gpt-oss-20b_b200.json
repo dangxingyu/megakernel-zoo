@@ -1,0 +1,59 @@
+{
+ "model": "openai/gpt-oss-20b",
+ "gpu": "NVIDIA B200 (one card of a GB200 node)",
+ "hw": "b200",
+ "provisional": false,
+ "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, one SSE chunk per token; 3 server starts x 3 repeats per system, eval/client.py through scripts/compare.sh, both systems in turns on one card in one job). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
+ "source": "megakernel-mm3-oss20-compare-1: sglang B=1 646.4 tok/s, vllm B=1 567.8 tok/s, sglang B=8 3695.2 tok/s, vllm B=8 3303.2 tok/s",
+ "systems": {
+  "sglang": {
+   "version": "0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on; SGLang picks its gpt-oss kernels itself); SGLang's gpt-oss page gives no single-card flags",
+   "general_engine": true,
+   "b1": 1547,
+   "decode_tok_s": {
+    "b1": 646.4,
+    "b8": 3695.2
+   },
+   "per_round_tok_s": {
+    "b1": [
+     646.4,
+     646.4,
+     646.5
+    ],
+    "b8": [
+     3689.5,
+     3695.6,
+     3695.2
+    ]
+   },
+   "job": "megakernel-mm3-oss20-compare-1",
+   "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16",
+   "b8": 2165
+  },
+  "vllm": {
+   "version": "0.32.0 (torch 2.13.0+cu132), vLLM recipe flags for gpt-oss without the ones that change number formats or streaming (as on the H100 and for gpt-oss-120b on the B200): --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192; left out: --stream-interval 20 (20 tokens per SSE chunk: the client times one chunk per token) and the Blackwell recipe's --kv-cache-dtype fp8 / VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1. MXFP4 experts as stored, BF16 activations and KV: track A",
+   "general_engine": true,
+   "b1": 1761,
+   "decode_tok_s": {
+    "b1": 567.8,
+    "b8": 3303.2
+   },
+   "per_round_tok_s": {
+    "b1": [
+     568.3,
+     567.0,
+     567.8
+    ],
+    "b8": [
+     3303.2,
+     3304.2,
+     3287.4
+    ]
+   },
+   "job": "megakernel-mm3-oss20-compare-1",
+   "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90 --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192",
+   "b8": 2422
+  }
+ },
+ "eval_timeout_scale": 3
+}

@@ -1,0 +1,20 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 829,
+  "note": "6.63 GB read per step at batch 1 at 8000 GB/s (derived figure for this card, not measured): 2.99 GB of non-expert weights (incl. the tied embedding/head table) + 3.62 GB of experts (8 of 128 per layer) + K/V at context 192; at batch 8 between 6.76 GB (all route alike) and 32.13 GB (all apart): 846-4016 us"
+ },
+ {
+  "name": "1.10x the fastest general engine",
+  "metric": "http_step_us_b1",
+  "value": 2479,
+  "note": "2727 / 1.10 (vllm); at batch 8: 4105 us per step (4516 / 1.10, vllm). The project's claim is at least this, at both batch sizes"
+ },
+ {
+  "name": "vllm (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 2727,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-north-compare-1; batch 8: 4516 us per step. 0.32.0 (torch 2.13.0+cu132), default flags plus --max-model-len 32768 (as on the H100)"
+ }
+]

@@ -1,0 +1,32 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 1896,
+  "note": "15.17 GB read per step at batch 1 (every BF16 weight but the input embedding, plus K/V at context 192) at 8000 GB/s (derived figure for this card, not measured); batch 8: 15.36 GB, 1920 us"
+ },
+ {
+  "name": "1.10x the fastest general engine",
+  "metric": "http_step_us_b1",
+  "value": 2949,
+  "note": "3244 / 1.10 (sglang); at batch 8: 3035 us per step (3338 / 1.10, sglang). The project's claim is at least this, at both batch sizes"
+ },
+ {
+  "name": "sglang (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 3244,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-q8b-compare-1; batch 8: 3338 us per step. 0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on)"
+ },
+ {
+  "name": "vllm (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 3581,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-q8b-compare-1; batch 8: 3652 us per step. 0.32.0 (torch 2.13.0+cu132), default flags"
+ },
+ {
+  "name": "sglang_0518_tc (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 3722,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-q8b-sg18tc-1; batch 8: 3876 us per step. 0.5.18 (torch 2.13.0+cu130) with --enable-torch-compile (CUDA graphs on); the strongest line on the H100"
+ }
+]

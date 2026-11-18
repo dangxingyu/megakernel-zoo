@@ -1,0 +1,26 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 464,
+  "note": "3.72 GB read per step at batch 1 at 8000 GB/s (derived figure for this card, not measured): 2.44 GB of non-expert weights (BF16 attention, router, head) + 1.27 GB of experts (4 of 32 per layer, MXFP4 codes + scales + BF16 biases, as stored) + K/V at context 192; at batch 8 between 3.77 GB (all route alike) and 12.67 GB (all apart): 471-1583 us"
+ },
+ {
+  "name": "1.10x the fastest general engine",
+  "metric": "http_step_us_b1",
+  "value": 1406,
+  "note": "1547 / 1.10 (sglang); at batch 8: 1968 us per step (2165 / 1.10, sglang). The project's claim is at least this, at both batch sizes"
+ },
+ {
+  "name": "sglang (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 1547,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-oss20-compare-1; batch 8: 2165 us per step. 0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on; SGLang picks its gpt-oss kernels itself); SGLang's gpt-oss page gives no single-card flags"
+ },
+ {
+  "name": "vllm (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 1761,
+  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-oss20-compare-1; batch 8: 2422 us per step. 0.32.0 (torch 2.13.0+cu132), vLLM recipe flags for gpt-oss without the ones that change number formats or streaming (as on the H100 and for gpt-oss-120b on the B200): --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192; left out: --stream-interval 20 (20 tokens per SSE chunk: the client times one chunk per token) and the Blackwell recipe's --kv-cache-dtype fp8 / VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1. MXFP4 experts as stored, BF16 activations and KV: track A"
+ }
+]

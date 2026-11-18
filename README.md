@@ -17,32 +17,31 @@
 <p align="center"><img src="assets/demo.gif" width="860" alt="The same question answered by a megakernel engine and by the fastest general engine on the same card, replayed at the recorded speed"></p>
 
 **megakernel-zoo** is a collection of LLM inference engines, each built for exactly one checkpoint on one GPU
-architecture. A megakernel fuses the whole autoregressive decode path (every transformer layer, next-token selection and
-the token feedback loop) into a single GPU program: one persistent CUDA kernel for the steady-decode engines, a
-device-scheduled kernel loop for the serving engines. Steady-state decoding performs no per-operator kernel launch and no
-host–device synchronization, and the kernel's work partitioning, weight layout and memory traffic are fixed at compile
-time for the checkpoint's shapes.
+architecture. A megakernel runs the whole decode step (every transformer layer, choosing the next token and feeding it back)
+as one GPU program: one persistent CUDA kernel for the steady-decode engines, a
+device-scheduled kernel loop for the serving engines. Between tokens there is no kernel launch per operator and no
+synchronization with the host, and the work split, weight layout and memory traffic are fixed at compile time for the
+checkpoint's shapes.
 
 Every engine in this repository was written by a coding agent (Claude) in an autonomous optimization run against a fixed
 evaluator, and audited afterwards. The repository contains the engines, an OpenAI-compatible server for them, the
 evaluator and benchmark suite, and the tooling to run the same kind of optimization on another model or GPU.
 
-- **Faster steady-state decoding.** With the checkpoint's own number formats (track A), 1.13–1.43× the speed of the
-  fastest general engine (vLLM, SGLang) at batch 1 on five models from 8 B to 594 B parameters; up to 1.68× with
-  model-specific lossless weight storage (track B).
-- **Stall-free serving.** On a production request trace at 8 requests per second, the serving engine for
-  Inkling-2-Small keeps 99.2% of requests within the service levels (SGLang: 81.7%), with a longest stall of 0.15 s
-  (SGLang: 4.4 s).
-- **Drop-in server.** `mkserve` exposes any engine through the OpenAI completions and chat-completions API, with
-  streaming and sampling.
-- **Verified numerics.** An engine is timed only after its logits match a float64 reference of the model at every
-  position; the evaluator, the reference builder and the extended checks are part of the repository.
-- **Reproducible.** The source, hypothesis and score of all 412 submissions of the 12 agent runs are in [`runs/`](runs).
+- With the checkpoint's own number formats (track A), steady decoding is 1.13–1.43× as fast as the fastest general
+  engine on the same card (vLLM, SGLang, or Cohere's megakernel for North Mini Code) with one sequence, on five models
+  from 8 B to 594 B parameters. With lossless model-specific weight storage (track B) it reaches 1.68×.
+- On a production request trace at 8 requests per second, the Inkling-2-Small serving engine keeps 99.2% of requests
+  within the service levels (SGLang 81.7%). Its longest stall is 0.15 s (SGLang 4.4 s).
+- `mkserve` serves any engine through the OpenAI completions and chat-completions API, with streaming and sampling.
+- An engine is timed only after its logits match a float64 reference of the model at every position. The evaluator
+  and the reference builder are in the repository.
+- [`runs/`](runs) has the source, the hypothesis and the score of every submission of the agent runs.
 
 ## News
 
-- **2026-11-17** `mkserve doctor`, `pull`, `chat` and `bench`; `--api-key`, `--served-model-name` and a `/metrics` endpoint. The
-  autoresearch kit gains an in-kernel phase profiler, an A/B bit-identity check and a playbook of what the earlier runs measured.
+- **2026-11-17** New `mkserve` commands `doctor`, `pull`, `chat` and `bench`; options `--api-key` and `--served-model-name`; a
+  `/metrics` endpoint. The autoresearch kit adds a phase profiler for persistent kernels, a bit-identity check between two
+  builds, and a playbook of what the earlier runs measured.
 - **2026-11-16** Initial release: 13 engines for 5 models on H100 and B200, `mkserve`, the evaluation suite and the
   autoresearch kit. Write-up: [A Megakernel per Model](https://dangxingyu.github.io/megakernel-dashboard/).
 
@@ -167,8 +166,8 @@ divided by ours, with one sequence and with eight.
 |---|---|---|---|---|---|---|
 | Qwen3-8B | H100 | SGLang 6.13 / 6.84 | 5.38 / 5.64 | **1.14×** / **1.21×** | 4.16 / 4.47 | **1.47×** / **1.53×** |
 | North Mini Code | H100 | Cohere's own megakernel 3.62 / 7.07 | 2.54 / 6.90 | **1.43×** / 1.02× | 2.15 / 6.05 | **1.68×** / **1.17×** |
-| flint | B200 | vLLM 1.99 / 3.79 | 1.48 / 3.40 | **1.35×** / **1.12×** | 1.48 / 3.95 | **1.35×** / 0.96× |
-| Qwen3.8-27B | B200 | SGLang 9.53 / 10.23 | 8.45 / 8.89 | **1.13×** / **1.15×** | 7.71 / 8.18 | **1.24×** / **1.25×** |
+| flint | B200 | vLLM 1.99 / 3.79 | 1.39 / 3.35 | **1.43×** / **1.13×** | 1.36 / 3.35 | **1.47×** / **1.13×** |
+| Qwen3.8-27B | B200 | SGLang 9.53 / 10.30 | 8.45 / 8.89 | **1.13×** / **1.16×** | 7.26 / 7.72 | **1.31×** / **1.33×** |
 | Inkling-2-Small | 4 × B200 | SGLang 4.74 / 6.55 | 3.30 / 5.39 | **1.43×** / **1.22×** | 3.29 / 5.38 | **1.44×** / **1.22×** |
 
 How the comparison is made:
@@ -189,14 +188,14 @@ average at most 0.1 s apart):
 
 | Model, GPU | Rate | Within service levels | Longest stall |
 |---|---|---|---|
-| Inkling-2-Small, 4 × B200 | 1–4 req/s | **100%** vs 83–85% (SGLang) | 0.08–0.09 s vs 2.4–2.6 s |
-| Inkling-2-Small, 4 × B200 | 8 req/s | **99.2%** vs 81.7% (SGLang) | 0.15 s vs 4.4 s |
-| Qwen3-8B, 1 × H100 | 1–2 req/s | **95–97%** vs 68–75% (SGLang, vLLM) | 0.09–0.11 s vs 0.5–6.9 s |
-| Qwen3-8B, 1 × H100 | 3 req/s | **90–93%** vs 59–68% (SGLang, vLLM) | 0.09 s vs 0.6–7.3 s |
+| Inkling-2-Small, 4 × B200 | 1–4 req/s | 100% vs 83–85% (SGLang) | 0.08–0.09 s vs 2.4–2.6 s |
+| Inkling-2-Small, 4 × B200 | 8 req/s | 99.2% vs 81.7% (SGLang) | 0.15 s vs 4.4 s |
+| Qwen3-8B, 1 × H100 | 1–2 req/s | 95–97% vs 68–75% (SGLang, vLLM) | 0.09–0.11 s vs 0.5–6.9 s |
+| Qwen3-8B, 1 × H100 | 3 req/s | 90–93% vs 59–68% (SGLang, vLLM) | 0.09 s vs 0.6–7.3 s |
 
 <p align="center"><img src="assets/serving-inkling.png" width="820" alt="Inkling-2-Small on four B200 under a production request trace"></p>
 
-The serving engines pay for this with a slower 99th-percentile first token and, on Inkling-2-Small, a slower median time
+The serving engines have a slower 99th-percentile first token and, on Inkling-2-Small, a slower median time
 between tokens. Every measurement, including batch sizes from 1 to 64, long generations, long prompts, natural-text
 prompts and sampling, is in the [benchmark data tables](https://dangxingyu.github.io/megakernel-dashboard/full.html); the write-up discusses the limits.
 
