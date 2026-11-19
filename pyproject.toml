@@ -31,7 +31,7 @@ dependencies = [
 eval = ["transformers", "accelerate", "nvidia-ml-py", "pytest"]
 
 [project.urls]
-Homepage = "https://dangxingyu.github.io/megakernel-dashboard/"
+Homepage = "https://dangxingyu.github.io/megakernel/"
 Repository = "https://github.com/dangxingyu/megakernel-zoo"
 
 [project.scripts]
