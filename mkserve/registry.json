@@ -75,7 +75,7 @@
       "from": "run s11-flint-b200-b1, submission s0027",
       "max_batch": 8,
       "max_context": 2048,
-      "what": "float32 intermediates (outputs differ from offline-a); steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "what": "certified int8 LM-head sketch with per-block error norms on the greedy path, logits bit-identical to offline-a; steady decode only; step mode: sampling works, the prompt is fed one token per step",
       "verified": "2026-11-17: 12 of 12 mkserve checks (zoo-serve-flint-k2) and every release check (relchk-flint-k2: every batch size, slots, neighbours, repeat, after a full context, restart)"
      }
     }

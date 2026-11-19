@@ -4,7 +4,7 @@ One folder per run: `progress.md` lists every submission (what was tried, why, w
 submission and `notes/` the agent's own notes. Numbers in these files are the run's own evaluator's; the audited, re-measured
 results are in the top-level README.
 
-| run | model and card | |
+| run | model and GPU | |
 |---|---|---|
 | [`s2-q8b-a1`](s2-q8b-a1/progress.md) | Qwen3-8B on H100 | Score: `step_us_b1` (lower is better). Budget 40.0 agent-hours. 66 submissions so far, 66 valid. |
 | [`s3-q8b-online-a1`](s3-q8b-online-a1/progress.md) | Qwen3-8B on H100 | Score: `slo_share_r2`. Budget 40.0 agent-hours. 39 submissions so far, 36 valid. |
@@ -18,3 +18,10 @@ results are in the top-level README.
 | [`s8-inkling2s-b200x4-on1`](s8-inkling2s-b200x4-on1/progress.md) | Inkling-2-Small on GB200 | Score: `slo_share_r8`. Budget 32.0 agent-hours. 43 submissions so far, 42 valid. |
 | [`s9-qwen38-27b-b200-f1`](s9-qwen38-27b-b200-f1/progress.md) | Qwen3.8-27B on GB200 | Score: `http_step_us_b1` (lower is better). Budget 8.0 agent-hours. 23 submissions so far, 23 valid. |
 | [`s10-q8b-h100-f1`](s10-q8b-h100-f1/progress.md) | Qwen3-8B on H100 | Score: `http_step_us_b1` (lower is better). Budget 3.0 agent-hours. 4 submissions so far, 4 valid. |
+| [`s11-q8b-h100-b1`](s11-q8b-h100-b1/progress.md) | Qwen3-8B on H100 | Score: `http_step_us_b1` (lower is better). Budget 20.0 agent-hours. 25 submissions so far, 24 valid. |
+| [`s11-north-h100-b1`](s11-north-h100-b1/progress.md) | North-Mini-Code-1.0 on H100 | Score: `http_step_us_b1` (lower is better). Budget 20.0 agent-hours. 26 submissions so far, 26 valid. |
+| [`s11-flint-b200-b1`](s11-flint-b200-b1/progress.md) | flint on GB200 | Score: `http_step_us_b1` (lower is better). Budget 20.0 agent-hours. 27 submissions so far, 27 valid. |
+| [`s11-q27-b200-b1`](s11-q27-b200-b1/progress.md) | Qwen3.8-27B on GB200 | Score: `http_step_us_b1` (lower is better). Budget 30.0 agent-hours. 29 submissions so far, 29 valid. |
+| [`s12-oss20-h100-a1`](s12-oss20-h100-a1/progress.md) | gpt-oss-20b on H100 | Score: `http_step_us_b1` (lower is better). Budget 32.0 agent-hours. 50 submissions so far, 49 valid. |
+| [`s12-q32-b200-a1`](s12-q32-b200-a1/progress.md) | Qwen3-32B on GB200 | Score: `http_step_us_b1` (lower is better). Budget 36.0 agent-hours. 47 submissions so far, 47 valid. |
+| [`s12-oss120-b200-a1`](s12-oss120-b200-a1/progress.md) | gpt-oss-120b on GB200 | Score: `http_step_us_b1` (lower is better). Budget 36.0 agent-hours. 59 submissions so far, 57 valid. |

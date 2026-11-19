@@ -19,7 +19,7 @@
 
 </div>
 
-<p align="center"><img src="assets/demo.gif" width="860" alt="The same question answered by a megakernel engine and by the fastest general engine on the same card, replayed at the recorded speed"></p>
+<p align="center"><img src="assets/demo.gif" width="860" alt="The same question answered by a megakernel engine and by the fastest general engine on the same GPU, replayed at the recorded speed"></p>
 
 **megakernel-zoo** is a collection of LLM inference engines, each built for exactly one checkpoint on one GPU
 architecture. A megakernel runs the whole decode step (every transformer layer, choosing the next token and feeding it back)
@@ -38,12 +38,15 @@ evaluator and benchmark suite, and the tooling to run the same kind of optimizat
 - On a production request trace at 8 requests per second, the Inkling-2-Small serving engine keeps 99.2% of requests
   within the service levels (SGLang 81.7%). Its longest stall is 0.15 s (SGLang 4.4 s).
 - `mkserve` serves any engine through the OpenAI completions and chat-completions API, with streaming and sampling.
-- An engine is timed only after its logits match a float64 reference of the model at every position. The evaluator
+- An engine is timed only after its logits match an FP64 reference of the model at every position. The evaluator
   and the reference builder are in the repository.
 - [`runs/`](runs) has the source, the hypothesis and the score of every submission of the agent runs.
 
 ## News
 
+- **2026-11-18** Engines for three more models: gpt-oss-20b (H100), Qwen3-32B and gpt-oss-120b (B200), and newer
+  steady-decode engines for Qwen3-8B; 19 engines for 8 models in all. `scripts/check_engine.py` checks an engine before a
+  pull request, and [CONTRIBUTING.md](CONTRIBUTING.md#your-own-hidden-set) shows how to build your own hidden test set.
 - **2026-11-17** New `mkserve` commands `doctor`, `pull`, `chat` and `bench`; options `--api-key` and `--served-model-name`; a
   `/metrics` endpoint. The autoresearch kit adds a phase profiler for persistent kernels, a bit-identity check between two
   builds, and a playbook of what the earlier runs measured.
@@ -68,15 +71,19 @@ evaluator and benchmark suite, and the tooling to run the same kind of optimizat
 |---|---|---|---|---|
 | [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) | 8.2 B, dense | 1 × H100 | track A, track B | track A, track B |
 | [CohereLabs/North-Mini-Code-1.0](https://huggingface.co/CohereLabs/North-Mini-Code-1.0) | 30.5 B, MoE (128 experts per layer) | 1 × H100 | track A, track B | – |
+| [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) | 20.9 B, MoE (32 experts per layer, MXFP4 experts) | 1 × H100 | track A, track B | – |
 | [RecursiveSI/flint](https://huggingface.co/RecursiveSI/flint) | 39.8 B, MoE (256 experts per layer) | 1 × B200 | track A, track B | – |
 | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | 27.8 B, dense | 1 × B200 | track A, track B | – |
+| [Qwen/Qwen3-32B](https://huggingface.co/Qwen/Qwen3-32B) | 32.8 B, dense | 1 × B200 | track A, track B | – |
+| [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b) | 116.8 B, MoE (128 experts per layer, MXFP4 experts) | 1 × B200 | track A, track B | – |
 | [thinkingmachines/Inkling-2-Small](https://huggingface.co/thinkingmachines/Inkling-2-Small) | 594 B, MoE (384 experts per layer, 4-bit experts) | 4 × B200 | track A, track B | track A |
 
 **Track A** keeps the checkpoint's weights, number formats and data flow, and changes only how the computation is
-organized on the card. **Track B** may additionally change how the model is stored and what is precomputed at load time,
+organized on the GPU. **Track B** may additionally change how the model is stored and what is precomputed at load time,
 as long as the function is unchanged in exact arithmetic (no quantization, pruning or approximation). The track-B engines
-of Qwen3.8-27B and Inkling-2-Small are bit-identical to track A; the other three keep intermediates in float32 where the
-reference implementation rounds to BF16, so they are at least as accurate but not bit-identical.
+of flint, Qwen3.8-27B, Qwen3-32B, gpt-oss-120b and Inkling-2-Small are bit-identical to track A. The other three are
+not: Qwen3-8B keeps the residual stream in FP32, gpt-oss-20b pre-multiplies the router weights by the norm weights in
+FP32, and North Mini Code adds its rare out-of-range weights in a separate pass, so the sums are rounded in another order.
 
 A **steady-decode** engine holds up to 8 sequences and a 2,048-token context and is the fastest at decoding. A **serving**
 engine admits requests while others decode, processes prompts in chunks inside the kernel, pages K/V memory and reuses
@@ -106,9 +113,9 @@ Check the machine, list the engines and serve one (the weights are downloaded fr
 local snapshot):
 
 ```bash
-mkserve doctor Qwen/Qwen3-8B                         # card, CUDA toolkit, Python packages, engines for this card
+mkserve doctor Qwen/Qwen3-8B                         # GPU, CUDA toolkit, Python packages, engines for this GPU
 mkserve list
-mkserve serve Qwen/Qwen3-8B --port 8000              # the default engine of this model on this card
+mkserve serve Qwen/Qwen3-8B --port 8000              # the default engine of this model on this GPU
 mkserve serve Qwen/Qwen3-8B --engine offline-b       # a specific engine
 ```
 
@@ -142,7 +149,7 @@ type; any other pair is refused. See [`mkserve/README.md`](mkserve/README.md) fo
 <details>
 <summary><b>All registered engines</b></summary>
 
-| Model | Card | Engine | Track | Kind | Sequences | Context | From |
+| Model | GPU | Engine | Track | Kind | Sequences | Context | From |
 |---|---|---|---|---|---|---|---|
 | Qwen/Qwen3-8B | h100 | `online-b` (default) | B | online | 64 | 34,816 | run s3-q8b-online-a1, submission s0039 |
 | Qwen/Qwen3-8B | h100 | `online-a` | A | online | 64 | 34,816 | run s3-q8b-online-a1, submission s0038 |
@@ -168,12 +175,13 @@ type; any other pair is refused. See [`mkserve/README.md`](mkserve/README.md) fo
 
 ## Benchmarks
 
-<p align="center"><img src="assets/speedup.png" width="820" alt="Speed of the megakernel engines relative to the fastest general engine on the same card"></p>
+<p align="center"><img src="assets/speedup.png" width="820" alt="Speed of every system relative to SGLang on the same GPU, by model and batch size"></p>
 
-Time per token over HTTP with a 64-token prompt and 1,024 greedy tokens. The factor is the fastest general engine's time
-divided by ours, with one sequence and with eight.
+Time per token over HTTP with a 64-token prompt and 1,024 greedy tokens, with one sequence and with eight. The figure
+is relative to SGLang (vLLM for flint, which SGLang cannot load, and for North Mini Code); the table gives each model's
+fastest general engine, and the factor is its time divided by ours.
 
-| Model | Card | Fastest general engine, ms | Track A, ms | Track A | Track B, ms | Track B |
+| Model | GPU | Fastest general engine, ms | Track A, ms | Track A | Track B, ms | Track B |
 |---|---|---|---|---|---|---|
 | Qwen3-8B | H100 | SGLang 6.09 / 6.85 | 5.13 / 5.48 | **1.19×** / **1.25×** | 3.83 / 4.25 | **1.59×** / **1.61×** |
 | North Mini Code | H100 | Cohere's own megakernel 3.62 / 7.07 | 2.54 / 6.90 | **1.43×** / 1.02× | 2.15 / 6.05 | **1.68×** / **1.17×** |
@@ -186,7 +194,7 @@ divided by ours, with one sequence and with eight.
 
 How the comparison is made:
 
-- **Same card, same job.** All systems of a row run on the same card in the same job, one after another, for three
+- **Same GPU, same job.** All systems of a row run on the same GPU in the same job, one after another, for three
   rounds; each round restarts every server.
 - **Same interface and client.** Every system is behind an OpenAI-compatible streaming endpoint and timed by one client
   ([`eval/client.py`](eval/client.py)) that records the arrival of each token.
@@ -213,17 +221,17 @@ The serving engines have a slower 99th-percentile first token and, on Inkling-2-
 between tokens. Every measurement, including batch sizes from 1 to 64, long generations, long prompts, natural-text
 prompts and sampling, is in the [benchmark data tables](https://dangxingyu.github.io/megakernel/full.html); the write-up discusses the limits.
 
-To reproduce a comparison on your own card:
+To reproduce a comparison on your own GPU:
 
 ```bash
-# serves each system in turn on this card and times it with one client
+# serves each system in turn on this GPU and times it with one client
 MK_MODEL=Qwen/Qwen3-8B COMPARE_SYSTEMS="mkserve:offline-a mkserve:offline-b sglang vllm" bash scripts/compare.sh
 ```
 
 ## Evaluation suite
 
 ```bash
-bash scripts/eval_selftest.sh Qwen/Qwen3-8B      # once per model: weights, a float64 reference on this card, the evaluator on the starter
+bash scripts/eval_selftest.sh Qwen/Qwen3-8B      # once per model: weights, an FP64 reference on this GPU, the evaluator on the starter
 MK_MODEL=Qwen/Qwen3-8B bash scripts/eval_setup.sh
 python eval/kernel_eval.py --workspace engines/qwen3-8b_h100/offline-a --out result.json
 ```
@@ -232,15 +240,15 @@ python eval/kernel_eval.py --workspace engines/qwen3-8b_h100/offline-a --out res
 
 | Gate | What is checked |
 |---|---|
-| `numeric`, `numeric_long` | logits against a float64 run of the reference model at every position to 128 and at every 8th position to 1,152, alone and in a batch of 8; relative error within 2× that of the Hugging Face BF16 implementation |
-| `tokens` | top-1 agreement with float64 within one point of the BF16 implementation's |
+| `numeric`, `numeric_long` | logits against an FP64 run of the reference model at every position to 128 and at every 8th position to 1,152, alone and in a batch of 8; relative error within 2× that of the Hugging Face BF16 implementation |
+| `tokens` | top-1 agreement with FP64 within one point of the BF16 implementation's |
 | `batch` | a sequence alone and inside a batch give the same logits |
 | `generate`, `http_tokens` | the engine's own decode loop and its HTTP path reproduce its step-by-step greedy tokens |
 | `timed_steps` | the steps that were timed are checked against the reference afterwards |
 
-The reference is computed on your card for the token sequences in [`eval/refs/`](eval/refs) (the ones our runs were
+The reference is computed on your GPU for the token sequences in [`eval/refs/`](eval/refs) (the ones our runs were
 scored on), so results are comparable with ours. [`eval/release_check.py`](eval/release_check.py) adds every batch size
-from 1 to 8, slot permutation, neighbour independence, repetition, state after a full context, and a process restart;
+from 1 to 8, slot permutation, neighbor independence, repetition, state after a full context, and a process restart;
 [`scripts/mkserve_check.py`](scripts/mkserve_check.py) tests a served engine through the API.
 
 ## Build your own engine
@@ -262,13 +270,13 @@ a shell can drive it. The prompts state the goal, the rules and the two tracks; 
 - [`autoresearch/skills/megakernel`](autoresearch/skills/megakernel): the skill every run starts from (the engine
   contract, how the evaluator scores, how to log).
 - [`autoresearch/skills_by_model`](autoresearch/skills_by_model): the skills of our runs, with the facts of each model
-  and card.
-- [`autoresearch/skills/megakernel/playbook.md`](autoresearch/skills/megakernel/playbook.md): what the 12 runs measured:
+  and GPU.
+- [`autoresearch/skills/megakernel/playbook.md`](autoresearch/skills/megakernel/playbook.md): what the earlier runs measured:
   where each engine's time went, which changes paid and by how much, track-B formats, dead ends, correctness traps.
 - [`autoresearch/tools`](autoresearch/tools): `mkprof` (phase timings inside a persistent kernel, which a profiler sees
   as one kernel), `bitcheck.py` (are two builds the same function, bit for bit?) and `weights_census.py` (exact
   statistics of a checkpoint's weights).
-- [`runs/`](runs): every submission of our 12 runs (source, hypothesis, score) and the agents' notes, as worked examples.
+- [`runs/`](runs): every submission of our 19 runs (source, hypothesis, score) and the agents' notes, as worked examples.
 
 For a model that is not in Hugging Face `transformers`, a reference implementation has to be written first;
 [`eval/inkling2_ref.py`](eval/inkling2_ref.py) is the one for Inkling-2-Small. To add an engine to this repository, see
