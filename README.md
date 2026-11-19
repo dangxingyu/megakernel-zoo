@@ -88,6 +88,10 @@ FP32, and North Mini Code adds its rare out-of-range weights in a separate pass,
 A **steady-decode** engine holds up to 8 sequences and a 2,048-token context and is the fastest at decoding. A **serving**
 engine admits requests while others decode, processes prompts in chunks inside the kernel, pages K/V memory and reuses
 shared prompt prefixes (64 sequences, 34,816-token context).
+Serving engines exist so far for two models at the two ends of the range, Qwen3-8B on one H100 and Inkling-2-Small on
+four B200: each takes an agent run of its own against the request-trace evaluator. For the other models, a serving engine
+can start from `engines/qwen3-8b_h100/online-a` with the [autoresearch kit](#build-your-own-engine); contributions are
+welcome ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Installation
 
