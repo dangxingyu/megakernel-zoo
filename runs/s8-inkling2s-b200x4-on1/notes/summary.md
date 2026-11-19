@@ -3,7 +3,7 @@
 (The summary of the run that built the inherited decode megakernel is notes/s7_summary.md; its plan notes/s7_plan.md.)
 
 **Final state (end of the extension, 32 h): engine/ = s0043.** At 8 req/s 778 of 780 requests within the service
-levels (`slo_share_r8` 0.9974, the same as s0042, with one request more than the s0042 source on the same machine; SGLang
+levels (`slo_share_r8` 0.9974, the same as s0042, with one request more than the s0042 source on the same pod; SGLang
 0.823 over HTTP, 0.854 on the board), at 2 req/s 189 of 189 with the stall and tail figures of s0035. The section "Extension" below has the path from s0035 (0.336 at 8 req/s over HTTP) and the
 figures at every rate; the section that follows here is the state at the end of the first 24 hours (s0035).
 
@@ -216,7 +216,7 @@ input) are at the links' rate. A 1-row pass: 11.3 ms (48 layers x 22 kernels).
   | s0040 | 0.990 | audit doubts: a failed page allocation surfaces as an error; an open request id is refused |
   | s0041 | 0.994 | page store sized from the memory really free: 2149 -> 2439 pages (7.7 GB per card stay free) |
   | s0042 | **0.997** | the largest passes 2 s (not 0.3 s) before a projected miss while 32 or more sequences decode |
-  | s0043 | **0.997** | a prompt goes ahead of the shortest-first order when that saves it and costs nobody (A/B on one machine: 777 -> 778 of 780) |
+  | s0043 | **0.997** | a prompt goes ahead of the shortest-first order when that saves it and costs nobody (A/B on one pod: 777 -> 778 of 780) |
 
 - 300 s at 8 req/s in process (the operator's window): s0035 0.336 (over HTTP) -> 128 slots 0.947 -> priority admission
   0.982 -> larger page store 0.987 -> load-dependent pressure margin **0.991** (2101 of 2120; TTFT p50 0.18 s, p90 1.5 s,
@@ -224,7 +224,7 @@ input) are at the links' rate. A 1-row pass: 11.3 ms (48 layers x 22 kernels).
   (6471 requests, s0042 source): 0.992 (6418), every request finishes, TTFT p99 4.8 s, time between tokens p50 61 / p99
   80 ms, longest gap 94 ms: the share does not decay. 6 req/s 0.997; 10 req/s 0.956 on the s0042 source (0.89 with s0038; arrival order would give 0.17
   in the simulator).
-  All of these are in process; the HTTP calibre could not be run from the machine (no aiohttp in its Python).
+  All of these are in process; the HTTP calibre could not be run from the pod (no aiohttp in its Python).
 - The tool that made this quick: tools/sched_sim.cpp runs the scheduler's own code on a virtual clock; with a pass
   model fitted to one measured result it predicted the next three device results to the third digit.
 - Still true: median time between tokens (58 ms at 8 req/s, 25 ms at 2; SGLang 17.5 / 9-10 ms), TTFT p99, steady
@@ -255,12 +255,12 @@ runs have polls of at most 0.5 ms and a longest gap of 86 ms.)
   levels, 120 s in process; SGLang 0.823 and s0035 0.336 in the operator's 300 s over HTTP); TTFT p50 177 ms / p90
   1.66 s / p99 4.35 s, time between tokens p50 59.7 / p99 81.3 ms, longest gap 91 ms. At 2 req/s 1.000 with TTFT p50
   176 ms / p99 4.02 s, time between tokens p50 25.1 / p99 58.6 ms, longest gap 87 ms. Steady decode 10.72 / 13.57
-  ms. s0042 has the same number on the board (evaluated on another machine); on one machine the s0042 source gives 777 and
+  ms. s0042 has the same number on the board (evaluated on another pod); on one pod the s0042 source gives 777 and
   s0043 778. Over 300 s at 8 req/s 0.991 and over 15 minutes 0.992 with the s0042 source, in process.
 - **How firm the third digit is**: one request of the 780 (a 32,768-token prompt in the burst at 2.5 s) answers after
-  4.95 s in the simulator, inside the 5 s on one machine and after 5.01 - 5.02 s on the next. Its burst needs 4.9 s at
+  4.95 s in the simulator, inside the 5 s on one pod and after 5.01 - 5.02 s on the next. Its burst needs 4.9 s at
   the largest passes: no order of service or margin moves it by more than 0.09 s. The score is 777 - 779 of 780
-  depending on the machine; only a cheaper pass makes it firm.
+  depending on the pod; only a cheaper pass makes it firm.
 - **What worked**: finding the limit before touching a kernel (the simulator with the scheduler's own code and one
   fitted pass model); 128 slots (0.336 -> 0.947 at 300 s); admission by priority (-> 0.982; graceful past capacity:
   0.89 at 10 req/s); the page store sized from measured free memory (-> 0.987); the largest passes earlier under

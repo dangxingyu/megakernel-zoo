@@ -103,7 +103,7 @@ convolutions' histories), and the attention-residual mixes of later layers depen
   signed zeros included (3096 values around every tie, e0038); a NaN input gives 6 instead of 0.
 - The placement of the runtime buffers (allocation order) moves the B=1 step by up to 1.5 % (e0020); the same binary ran
   the layer loop 25 us slower after the 12-bit packer had run before the buffers were allocated (e0018).
-- The second machine's node runs the same binary 0.45 % faster than the first (s0012 / s0015, in process 4236 / 4217).
+- The second pod's node runs the same binary 0.45 % faster than the first (s0012 / s0015, in process 4236 / 4217).
 
 ## G7. The B=8 step time depends on the text, and the text on the rounding  [execs e0082-e0084]
 A change that alters only the summation order (not bit-identical) flips near-tie choices, the greedy continuation of the
@@ -127,7 +127,7 @@ scratch/ink_qpre_variant.cu, scratch/api_qpre_variant.py.
 ## G9. Track B on the sibling's kernel (run fa1, s0020): what carries over, what does not  [execs e0105-e0109, s0029-s0031]
 
 The two items of G3/G4 were moved onto the faster kernel of run fa1 (plain kernel at batch 1-3, tcgen05 kernel from
-batch 4). Measured on one machine, in process, greedy 1024 tokens after a 64-token prompt (text identical in all builds,
+batch 4). Measured on one pod, in process, greedy 1024 tokens after a 64-token prompt (text identical in all builds,
 the logits are bit-identical): s0020 source 3304 / 5454 us; 12-bit unembedding alone 3298 / 5444; layer-0 tables alone
 3299 / 5450; both 3289 / 5437: -15 us at B=1, -17 us at B=8 between these separately built libraries. The figure from
 one binary, by the evaluator, is **-12.3 us (0.37 %) at B=1 and -11.8 us (0.22 %) at B=8** (s0035 against s0034; G12

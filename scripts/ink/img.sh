@@ -1,8 +1,8 @@
-# Sourced (after scripts/env.sh): run a general engine from its own Docker image in a machine that has no docker.
+# Sourced (after scripts/env.sh): run a general engine from its own Docker image in a pod that has no docker.
 #   img_pull NAME REPO@sha256:DIGEST     unpack the image (this host's architecture) into $MK_ROOT/img/NAME
 #   img_exec NAME 'shell command'        run the command in the image's environment
 # Two ways, the first that works: (1) chroot into the unpacked tree with the node's /dev, /proc, /sys, /tmp and
-# $MK_ROOT bound in (needs a machine that may mount); (2) "transplant": the image's own Python and libraries run on the
+# $MK_ROOT bound in (needs a pod that may mount); (2) "transplant": the image's own Python and libraries run on the
 # host kernel and C library (its glibc is older than the host's), with the image's install prefixes (/opt/...,
 # /usr/local/lib/python3.*) reachable by symlink. Which one was used is printed (MK_ENV img_mode).
 

@@ -1,6 +1,6 @@
 # Journal (run s4-flint-b200-a2)
 
-## Card measurements (tools/bench1.cu, bench2.cu; card = one B200 of the machine)
+## Card measurements (tools/bench1.cu, bench2.cu; card = one B200 of the pod)
 - Streaming read, 16 B per thread per load, one block per SM: 152 blocks x 1024 threads 7.5 TB/s; 128 blocks x 1024 threads
   7.6 TB/s; 96 x 1024 7.4 TB/s; 152 x 512 6.7 TB/s; 152 x 256 4.4 TB/s. So 128 "main" blocks are enough to saturate
   the memory and 24 SMs are free for other work. The 8000 GB/s used for MBU is close to real (7.5 measured).
@@ -111,7 +111,7 @@ So L1 caches are not coherent across SMs: the stale copy is in the READER's L1, 
 it globally (which is why it costs 1.2 us in the kernel, where 144 blocks hold the line). The engine now reads every
 buffer another block wrote in the same launch with ld.global.cg and writes without fences (to be verified bit for
 bit against the fenced build with tools/digest.py).
-- Machine replaced twice so far by the infrastructure ("machine ended: signal", nothing of mine in flight the second time).
+- Pod replaced twice so far by the infrastructure ("pod ended: signal", nothing of mine in flight the second time).
   All in-kernel waits now have a watchdog (about 1 s) and every index derived from data is clamped, so a bug
   cannot leave a kernel spinning or produce a wild pointer.
 
@@ -214,7 +214,7 @@ variants compared the same binary three times.)
 Track B's tokens gate moved too with the new tree: s0005 95.65% -> s0007 93.2% (limit 91.9%): the precision mode
 does not remove the near-tie lottery, it only shifts it.
 
-## After s0008: batch-8 work, a rare nondeterminism, and a run of machine losses
+## After s0008: batch-8 work, a rare nondeterminism, and a run of pod losses
 - Profiler made usable again (it had become the biggest cost in the build it measures: 2317 us against 1634): events
   only in the layers with l % 6 == 2, fine-grained ids only with MK_PROF_FINE=1, clock read with ld.global.cg.
   Sliding MoE layer at batch 1 (track B, us): A 4.0, attention chain 6.4, C 2.2, C->D 2.0, D 2.3, router wait 0.7,
@@ -237,14 +237,14 @@ does not remove the near-tie lottery, it only shifts it.
   the submitted kernels have it. Not explained by the L1 rule (every cross-block read is ld.global.cg). Candidate:
   phases A and E store results from several warps (A: 5 leaders, E: 2) while thread 0 alone bumps the counter after a
   __syncthreads; a partial-line store (2 or 8 bytes into a line that is not in L1) may reach L2 after another warp's
-  atomic. Change prepared (not yet measured, the machine is down): every warp that stores bumps the counter itself after
+  atomic. Change prepared (not yet measured, the pod is down): every warp that stores bumps the counter itself after
   its stores (KA = 5 bumps per block in A, KE = 2 in E), as the attention blocks already do.
   tools/flake.py repeats four workloads in one process and counts bitwise mismatches (which path flakes, how often).
-- Machine: epochs 4 to 7 lived 3.5 to 9 minutes each (lost with jobs running and with nothing running; "machine ended:
+- Pod: epochs 4 to 7 lived 3.5 to 9 minutes each (lost with jobs running and with nothing running; "pod ended:
   signal"), epochs 8 and 9 never came up. The clock is paused during the outages. tools/ids.npy now holds my token
   ids so that digest/profile/flake do not need the 2.5-minute Hugging Face reference run after every replacement.
 
-## Offline work during the long machine outage (nothing below is measured yet; variants kept as tools/mk_x|z1..z4.cu.bak)
+## Offline work during the long pod outage (nothing below is measured yet; variants kept as tools/mk_x|z1..z4.cu.bak)
 - X  (fix): the routing union kept its "first occurrence" flags at smi[480..543]; smi has 512 ints, so for batches over 4
   the flags of sequences 4..7 lay on un[0..31] and a warp could read a unit another warp had just written as a flag
   -> wrong unit count/index in that block only -> blocks disagree. This is the best explanation of the rare
@@ -264,14 +264,14 @@ does not remove the near-tie lottery, it only shifts it.
 - Ideas with a measurement prepared: tools/bench13.cu (can L2 be filled without registers: prefetch.global or dead
   loads?), tools/spec_study.py (are a layer's experts predictable from the stream before its attention?).
 
-## State when the loop service stopped (2026-11-11 01:35: "4 machines in a row ended before they were warm; the loop service stops trying")
-The machine was lost at 3.78 agent-hours (epoch 7, 2026-11-11 00:02) and epochs 8-11 never became warm; the loop service then
+## State when the loop service stopped (2026-11-11 01:35: "4 pods in a row ended before they were warm; the loop service stops trying")
+The pod was lost at 3.78 agent-hours (epoch 7, 2026-11-11 00:02) and epochs 8-11 never became warm; the loop service then
 stopped and waits for the operator. The clock is stopped. Nothing after s0008 has been evaluated.
 - engine/ is again exactly the kernel of s0007 (track B) / s0008 (track A): the last sealed-valid source. engine/TRACK
   says which one is built (B during development; A + engine/NACC_A = 2 is s0008).
 - Known defect of that kernel: the routing scratch overlap described above (rare wrong result at batch > 4, seen as
   1 differing digest in 40 runs). Fix prepared but not run on a GPU: tools/mk_x.cu.bak (minimal), or any z variant.
-- Untested work, in the order it should be tried when a machine is back (each is the previous plus one change; all
+- Untested work, in the order it should be tried when a pod is back (each is the previous plus one change; all
   type-check with tools/hostcheck/check.sh; the routing and fragment-copy index logic were emulated in Python):
     tools/mk_x.cu.bak   s0008 + attention pairs 24..31 on main blocks + pipelined F copy (both measured, bit-identical)
                         + the routing scratch fix
@@ -282,7 +282,7 @@ stopped and waits for the operator. The clock is stopped. Nothing after s0008 ha
   First commands: tools/flake.py 60 on mk_x (is the nondeterminism gone?), then digest/check/time per variant,
   tools/bench13.cu, tools/spec_study.py.
 
-## Back on a machine (epoch 15, 2026-11-11 10:14): the nondeterminism is found and fixed; what the offline variants gave
+## Back on a pod (epoch 15, 2026-11-11 10:14): the nondeterminism is found and fixed; what the offline variants gave
 Measured (track A unless said; step = tools/test_engine.py --time, us per step at B=1 / B=8):
 - tools/spec_study.py (HF BF16, 8 x 384 tokens): the real 6 experts of a layer are among the top-k of the router applied
   to the stream BEFORE attention with recall 82.6% (k=6), 90.2% (8), 93.5% (10), 95.3% (12), 97.1% (16); early layers
@@ -511,7 +511,7 @@ hidden units at batch 8 are 12k 32-bit exchanges per layer). 0 mismatches in 79 
 ### Results and the second round (s0017 - s0019)
 s0017 (track B, sentinel + signal at the phase start, exchange result read back at once): expected http 1755 / 4250,
 measured 1786 / 4298 (s0015: 1733 / 4100). Worse than expected at batch 1, most at long contexts.
-Decomposition on one machine (track B, step us batch 1 / batch 8, and the 64+1024 workload through generate):
+Decomposition on one pod (track B, step us batch 1 / batch 8, and the 64+1024 workload through generate):
   racy s0015 kernel                          1564 / 3955     1747 / 4075
   s0017                                      1596 / 4105     1797 / 4261
   s0017 without reading the results back     1550 / 4042     1735 / 4185   (not strict; shows what the read-back costs)
@@ -701,7 +701,7 @@ score measures (submit/poll), and no profile of mine had covered it (tools/prof.
   card, us per token): track B generate 1528 -> 1487, workload 1644 -> 1606, serve 1530 -> 1486 (step 1505 -> 1486);
   track A generate 1526 -> 1477, workload 1645 -> 1593, serve 1526 -> 1479 (step 1499 -> 1472).
 Digests, bcheck, api_stress, long_ctx unchanged/ok, flake 0 of 69 on both tracks.
-(The machine was replaced twice during this test: 20:50 - 23:25 without a machine, clock stopped.)
+(The pod was replaced twice during this test: 20:50 - 23:25 without a pod, clock stopped.)
 s0037 (track B, token gather in one trip, batch 1-2 kernel): expected http 1612 / 4117, measured 1606 / 4116 (board best; 1.227x vLLM at batch 1).
 s0038 (track A build of the s0037 kernel): expected http 1622 / 4099, measured 1606 / 4094 (the board's best; both tracks at 1606 at batch 1 = 1.227x vLLM).
 
@@ -1325,7 +1325,7 @@ Best track-A figures so far: 1492 (s0065) / 3527 (s0066): 1.32x and 1.076x vLLM'
   lane index, which put both arrays on the stack (14 stack accesses per thread). The lane's candidate is now read
   from shared memory, where the rank merge has left it. Stack frame of the batch > 2 kernel 160 -> 144 bytes.
   Scored workload in process 3589.2 -> 3577.5 (two alternations); HTTP path 3591.5 -> 3575.5; batch 1 unchanged.
-  Bits unchanged (bcheck, digests, flake 0 of 59 x 4, api_stress, gates, long_ctx, watchdog). (The machine was replaced
+  Bits unchanged (bcheck, digests, flake 0 of 59 x 4, api_stress, gates, long_ctx, watchdog). (The pod was replaced
   before these runs: this card is about 14 us slower at batch 8 than the last.)
   Expected for the submission (track A): batch 8 3527 -> about 3512 (+-30), batch 1 1493 +-6.
 - Earlier negatives measured again on the current kernel (scored workload in process, base 3576.4, same spill line
@@ -1819,4 +1819,4 @@ s0077 (the last valid submission; bits of s0058). Best figures of this engine fa
 `engine/` = source of s0077 (checked against submissions/s0077/src.tgz), supersedes the "End of the extension"
 paragraph above, which was written one submission earlier. Track A, bits of s0058. Sealed, over HTTP: s0075 1478 /
 3397, s0076 1483 / 3394, s0077 1479 / 3397: one engine to the evaluation's precision, 1.33x / 1.117x of vLLM's
-trial figures (1971 / 3796), 73-76 us inside the extension's goal of 3470 at batch 8. Nothing is running in the machine.
+trial figures (1971 / 3796), 73-76 us inside the extension's goal of 3470 at batch 8. Nothing is running in the pod.

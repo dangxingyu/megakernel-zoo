@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Choose idle CPU cores on a shared node: prints `SERVER_CPUS=... CLIENT_CPUS=...` for eval-ing in bash.
 
-Machines here see every core of the node and have no CPU quota, and other tenants (and our own other jobs) run
+Pods here see every core of the node and have no CPU quota, and other tenants (and our own other jobs) run
 on the same cores. Per-CPU busy time is sampled for two seconds; physical cores all of whose hardware threads
 (two on the x86 H100 hosts, one on the Grace GB200 hosts, which have no SMT) were under 3% busy are taken first,
 on the GPU's NUMA node when it has enough of them; then the next quietest (cores over 20% busy are refused). The server
@@ -35,7 +35,7 @@ def main() -> None:
     parser.add_argument("--server", type=int, default=8, help="physical cores for the server")
     parser.add_argument("--client", type=int, default=4, help="physical cores for the client")
     parser.add_argument("--extra", type=int, default=0, help="further physical cores, printed as EXTRA_CPUS")
-    parser.add_argument("--gpu", type=int, default=0, help="index of the card whose NUMA node is preferred (machines with several cards)")
+    parser.add_argument("--gpu", type=int, default=0, help="index of the card whose NUMA node is preferred (pods with several cards)")
     parser.add_argument("--exclude", default="", help="comma-separated CPUs that are already given to other jobs")
     args = parser.parse_args()
     excluded = {int(x) for x in args.exclude.split(",") if x.strip().isdigit()}

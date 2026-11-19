@@ -53,7 +53,7 @@
 - s0004 (track B, exact W12 incl. prefill passes): predicted ~8730 / ~9170; VALID, measured 8670 / 9193 us over HTTP
   (s0001: 8940 / 9808): -3.0 % / -6.3 %; gates identical to s0001 (logits bit-identical by construction).
   B=8 is below the 1.10x line (9301); B=1 is 13 us above it (8657).
-- s0005 (W12-only build): lost twice to "machine ended: signal" during its evaluation (not run a third time). The same
+- s0005 (W12-only build): lost twice to "pod ended: signal" during its evaluation (not run a third time). The same
   build then ran a 1024-token online decode at B=1 and B=8 + timing on a card without incident: infrastructure.
 - Ring A/B (tools/ring_ab.sh): 96 KB more shared memory alone costs +3.5 % per B=1 pass (8579 -> 8879 us), all of it
   in the GEMMs (gate_up +188 us, in_proj +57, down +41; tools/op_times_p.py with MK_SMEM_MIN); the cp.async ring
@@ -114,7 +114,7 @@
   I could not get around. Reverted to s0010.
 - Open: ~300 us per B=1 pass (3.7 %) are tied up in exact escape handling. A packer that removes escapes altogether
   (no fixed-width code does, K4) or a kernel structure with registers to spare (fewer, fatter warps) would release it.
-- mk profile ncu on the W12 engine was running when machines 3 and 4 died (not retried; kernel replay of a persistent grid-barrier kernel may hang). Weight bytes per step are exact from storage: 38.45 GB (W12, incl. per-row bases) vs 51.24 GB.
+- mk profile ncu on the W12 engine was running when pods 3 and 4 died (not retried; kernel replay of a persistent grid-barrier kernel may hang). Weight bytes per step are exact from storage: 38.45 GB (W12, incl. per-row bases) vs 51.24 GB.
 - Last loop variant: two-quad loads issued whenever 2+ quads remain, the tile-end test after the loads (so the spilled
   tend is not needed before them): 8247 vs 8224 us, reverted. engine/ = s0010's source (diff -r against its src.tgz).
 
@@ -128,7 +128,7 @@
   load 8328, without the second-descriptor patch 8501, without both and without the raw branch 8343. So with no
   memory access and no shuffle left in it, the escape path still costs ~1.2 us per pair with an escape (~2.5x a plain
   pair), the size of a memory round trip. Not found without a profiler (Nsight Compute on this kernel coincided with
-  machine losses). Reverted to s0010.
+  pod losses). Reverted to s0010.
 - Per-lane lists, branch-free: every quad applies the lane's descriptor with selects (no vote, no branch; quads with
   2+ escapes in one lane raw: 3363): bit-identical, but 9885 us (+20 %). ~54 extra integer instructions per quad
   cost ~1.6 ms: in the engine the W12 loop is sensitive to its instruction count (the isolated bench was not).
@@ -162,9 +162,9 @@
   far (next matrix into L2 during small ops) 32 KB 8095, 64 KB 8091, 96 KB 8083, 128 KB 8089, 192 KB 8117 vs 0:
   8102 us. Default far = 96 KB for the W12 engine (BF16 stays 0): whole-engine A/B vs s0014 8104 -> 8088 (-0.2 %),
   B=8 9248 -> 9242.
-- s0015 (far prefetch 96 KB, W12): predicted ~8105 / ~8910; VALID 8104 / 8860 (machine lost once during its evaluation; rerun).
+- s0015 (far prefetch 96 KB, W12): predicted ~8105 / ~8910; VALID 8104 / 8860 (pod lost once during its evaluation; rerun).
 - Grid-barrier spin back-off (BAR_SLEEP_NS) on the s0015 engine, 4 alternations: 400 ns 8115, 200 ns 8092, 100 ns
   8086, 50 ns 8082, 25 ns 8078, 0 ns 8081 us (B=8: 9240 -> 9229 at 25 ns). A kernel knob: submitted on track A first.
 - s0016 (track A, barrier back-off 25 ns): VALID 8880 / 9827 vs s0007 8892 / 9812: noise level on BF16.
-- s0017 (W12 + 25 ns barrier back-off): predicted ~8090 / ~8850; VALID 8095 / 8862 (machine lost once during it; rerun).
+- s0017 (W12 + 25 ns barrier back-off): predicted ~8090 / ~8850; VALID 8095 / 8862 (pod lost once during it; rerun).
 - Far-prefetch re-check with the 25 ns back-off (s0017 engine): 64 KB 8097, 96 KB 8090, 128 KB 8096 us: 96 KB stays. End of run: engine/ = s0017.

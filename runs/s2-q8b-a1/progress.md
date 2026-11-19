@@ -325,55 +325,55 @@ The source of submission `sNNNN` is `src/sNNNN.tgz`; the run's own notes are in 
 ### #52 s0052: attention: no fence behind the K/V append
 
 - status: **valid**, step_us_b1 = 4083, at 31.38 agent-hours, parent s0051, category sync
-- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. The attention block that appends this step's K/V row fenced it before its block barrier, but only the block itself reads the row in this phase (the block barrier makes the block's global stores visible to its threads), and other blocks read it only behind the grid barrier, before which the block fences anyway. Dropping the fence shortens the attention prep by one store round trip. Results bitwise unchanged; same-machine A/B -10 us at B=1 and B=8. Expect ~4075 / ~4280 us (-0.3%).
+- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. The attention block that appends this step's K/V row fenced it before its block barrier, but only the block itself reads the row in this phase (the block barrier makes the block's global stores visible to its threads), and other blocks read it only behind the grid barrier, before which the block fences anyway. Dropping the fence shortens the attention prep by one store round trip. Results bitwise unchanged; same-pod A/B -10 us at B=1 and B=8. Expect ~4075 / ~4280 us (-0.3%).
 - evaluator: valid: 4088 us/step at B=1 (MBU 1.107), 4296 us/step at B=8
 
 ### #53 s0053: track A with the fence removal of s0052 and the V batching of s0051
 
 - status: **valid**, step_us_b1 = 5230, at 31.41 agent-hours, parent s0050, category sync
-- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Same two changes as s0051 (6 V loads in flight in the one-block path at 1136+ positions with 3+ sequences: long context only) and s0052 (no fence behind the K/V append). Results bitwise unchanged. Expect B=1 5284 -> ~5270, B=8 ~5390 (the suite measured 5230 / 5385 at B=1 / B=8 on this machine, so maybe more).
+- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Same two changes as s0051 (6 V loads in flight in the one-block path at 1136+ positions with 3+ sequences: long context only) and s0052 (no fence behind the K/V append). Results bitwise unchanged. Expect B=1 5284 -> ~5270, B=8 ~5390 (the suite measured 5230 / 5385 at B=1 / B=8 on this pod, so maybe more).
 - evaluator: valid: 5235 us/step at B=1 (MBU 0.865), 5429 us/step at B=8
 
 ### #54 s0054: 1-2 sequences: loader warps fetch their own input slice; no block copy/barrier
 
 - status: **valid**, step_us_b1 = 4061, at 33.49 agent-hours, parent s0052, category sync
-- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. With 1-2 sequences every phase started with a block-wide copy of the input fragments into shared memory and a block barrier (down projection: 0.77 us, others ~0.17 us per phase at B=1). Now each loader warp requests only the slice it multiplies, issues its first weight loads, then stores the slice (no block barrier); the coordinator's exception MMAs read the compact global copy. Bitwise equal; same-machine A/B B=1 4082 -> 4062, B=2 4157 -> 4121, B=8 unchanged. Expect ~4065 / ~4280 us.
+- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. With 1-2 sequences every phase started with a block-wide copy of the input fragments into shared memory and a block barrier (down projection: 0.77 us, others ~0.17 us per phase at B=1). Now each loader warp requests only the slice it multiplies, issues its first weight loads, then stores the slice (no block barrier); the coordinator's exception MMAs read the compact global copy. Bitwise equal; same-pod A/B B=1 4082 -> 4062, B=2 4157 -> 4121, B=8 unchanged. Expect ~4065 / ~4280 us.
 - evaluator: valid: 4066 us/step at B=1 (MBU 1.113), 4310 us/step at B=8
 
 ### #55 s0055: track A with the per-warp input slices of s0054 (phases without a norm)
 
 - status: **valid**, step_us_b1 = 5233, at 33.62 agent-hours, parent s0053, category sync
-- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). With 1-2 sequences the o and down projections no longer start with a block-wide input copy and block barrier: each loader warp fetches the slice it multiplies (norm phases keep the block-wide normalising copy). Bitwise equal to s0053; same-machine A/B B=1 5240 -> 5229, B=2 5344 -> 5317. Expect ~5220 / ~5410 us.
+- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). With 1-2 sequences the o and down projections no longer start with a block-wide input copy and block barrier: each loader warp fetches the slice it multiplies (norm phases keep the block-wide normalising copy). Bitwise equal to s0053; same-pod A/B B=1 5240 -> 5229, B=2 5344 -> 5317. Expect ~5220 / ~5410 us.
 - evaluator: valid: 5237 us/step at B=1 (MBU 0.864), 5416 us/step at B=8
 
 ### #56 s0056: 3+ sequences: no block barrier at the start of each phase
 
 - status: **valid**, step_us_b1 = 4057, at 33.93 agent-hours, parent s0054, category sync
-- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. With 3+ sequences the loaders read their input from L2, so the block barrier that ended every phase's entry only waited for the 1/rms of norm phases (loader warps 12-19), which the coordinator reads behind the first tile's barrier anyway. Removing it: same-machine A/B B=8 4286/4300 -> 4247/4249 us per step, B=1-2 unchanged, bitwise equal. Expect B=8 ~4255 (-1%), B=1 ~4060.
+- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. With 3+ sequences the loaders read their input from L2, so the block barrier that ended every phase's entry only waited for the 1/rms of norm phases (loader warps 12-19), which the coordinator reads behind the first tile's barrier anyway. Removing it: same-pod A/B B=8 4286/4300 -> 4247/4249 us per step, B=1-2 unchanged, bitwise equal. Expect B=8 ~4255 (-1%), B=1 ~4060.
 - evaluator: valid: 4062 us/step at B=1 (MBU 1.115), 4257 us/step at B=8
 
 ### #57 s0057: q/k/v, gate+up, down on 128 of the 132 SMs: every block gets the same tile count
 
 - status: **valid**, step_us_b1 = 4043, at 34.43 agent-hours, parent s0056, category scheduling
-- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. 384 / 1536 / 256 tiles over 132 blocks leave some blocks with one tile more than others (gate+up: 84 blocks x 12, 48 x 11), so the tail of each phase runs on fewer SMs than needed to saturate HBM. On 128 blocks every block has exactly 3 / 12 / 2 tiles and all finish together; the 4 other SMs idle in these phases. Bitwise equal (a tile's arithmetic does not depend on its block). Same-machine A/B: B=1 4059 -> 4045, B=2 4122 -> 4101, B=8 4248 -> 4222. Expect ~4045 / ~4225.
+- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. 384 / 1536 / 256 tiles over 132 blocks leave some blocks with one tile more than others (gate+up: 84 blocks x 12, 48 x 11), so the tail of each phase runs on fewer SMs than needed to saturate HBM. On 128 blocks every block has exactly 3 / 12 / 2 tiles and all finish together; the 4 other SMs idle in these phases. Bitwise equal (a tile's arithmetic does not depend on its block). Same-pod A/B: B=1 4059 -> 4045, B=2 4122 -> 4101, B=8 4248 -> 4222. Expect ~4045 / ~4225.
 - evaluator: valid: 4048 us/step at B=1 (MBU 1.118), 4224 us/step at B=8
 
 ### #58 s0058: track A: no entry barrier with 3+ sequences, matvec tiles on 128 SMs with 3+
 
 - status: **valid**, step_us_b1 = 5235, at 34.58 agent-hours, parent s0055, category scheduling
-- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Two scheduling changes of track B (s0056, s0057) applied where they measured better in track A: with 3+ sequences the o / down phases start without a block barrier, and q/k/v, gate+up, down run on 128 blocks (even tile counts); with 1-2 sequences all 132 blocks as before (128 measured +20 us there). Bitwise equal. Same-machine: B=1 5230 -> 5230, B=8 5425 -> 5402. Expect ~5230 / ~5390 us.
+- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Two scheduling changes of track B (s0056, s0057) applied where they measured better in track A: with 3+ sequences the o / down phases start without a block barrier, and q/k/v, gate+up, down run on 128 blocks (even tile counts); with 1-2 sequences all 132 blocks as before (128 measured +20 us there). Bitwise equal. Same-pod: B=1 5230 -> 5230, B=8 5425 -> 5402. Expect ~5230 / ~5390 us.
 - evaluator: valid: 5241 us/step at B=1 (MBU 0.864), 5413 us/step at B=8
 
 ### #59 s0059: only the attention blocks wait at the q/k/v barrier; the others go on
 
 - status: **valid**, step_us_b1 = 4047, at 35.68 agent-hours, parent s0057, category sync
-- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. In the one-block attention path the blocks without attention need nothing q/k/v produces before the end of attention, so they count in at the q/k/v barrier without waiting and start their o stash at once; before counting in for the attention barrier they check that the q/k/v barrier is complete (else their increment could complete it early for the attention blocks). Bitwise equal; same-machine A/B B=1 -12..-19, B=8 -11..-27 us. Expect ~4030 / ~4200 us.
+- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. In the one-block attention path the blocks without attention need nothing q/k/v produces before the end of attention, so they count in at the q/k/v barrier without waiting and start their o stash at once; before counting in for the attention barrier they check that the q/k/v barrier is complete (else their increment could complete it early for the attention blocks). Bitwise equal; same-pod A/B B=1 -12..-19, B=8 -11..-27 us. Expect ~4030 / ~4200 us.
 - evaluator: valid: 4052 us/step at B=1 (MBU 1.117), 4208 us/step at B=8
 
 ### #60 s0060: track A: only attention blocks wait at the q/k/v barrier (3+ sequences)
 
 - status: **valid**, step_us_b1 = 5234, at 35.87 agent-hours, parent s0058, category sync
-- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Same change as s0059, used in track A only with 3+ sequences (it measured +30 us with one): the blocks without attention count in at the q/k/v barrier and go on to their o stash; they check that barrier is complete before counting in at the end of attention. Bitwise equal; same-machine B=1 5230 -> 5232, B=8 5406 -> 5374. Expect ~5233 / ~5370 us.
+- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Same change as s0059, used in track A only with 3+ sequences (it measured +30 us with one): the blocks without attention count in at the q/k/v barrier and go on to their o stash; they check that barrier is complete before counting in at the end of attention. Bitwise equal; same-pod B=1 5230 -> 5232, B=8 5406 -> 5374. Expect ~5233 / ~5370 us.
 - evaluator: valid: 5239 us/step at B=1 (MBU 0.864), 5390 us/step at B=8
 
 ### #61 s0061: re-evaluation of the final track B source (s0059 unchanged)
@@ -385,30 +385,30 @@ The source of submission `sNNNN` is `src/sNNNN.tgz`; the run's own notes are in 
 ### #62 s0062: re-evaluation of the final track A source (s0060 unchanged)
 
 - status: **valid**, step_us_b1 = 5237, at 37.88 agent-hours, parent s0060, category other
-- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). No change: the source of s0060. A second evaluator sample of the final track-A engine on the current machine. Expect 5220-5245 us at B=1 and 5365-5390 at B=8.
+- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). No change: the source of s0060. A second evaluator sample of the final track-A engine on the current pod. Expect 5220-5245 us at B=1 and 5365-5390 at B=8.
 - evaluator: valid: 5243 us/step at B=1 (MBU 0.863), 5385 us/step at B=8
 
 ### #63 s0063: attention blocks: L2 prefetch of 3 (not 6) loads per warp of their cold o tile
 
 - status: **valid**, step_us_b1 = 4020, at 38.22 agent-hours, parent s0061, category memory
-- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. After attention each attention block asks L2 for the start of its first (cold) o tile; with fewer requests in flight its own first loads and the barrier polls queue behind less. Prefetch only, results bitwise unchanged. Same-machine 5 rounds: B=1 4048 -> 4043 (mean), B=8 4204 -> 4195. Expect -5..-10 us at both batch sizes, i.e. within the spread between machines (~20 us).
+- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. After attention each attention block asks L2 for the start of its first (cold) o tile; with fewer requests in flight its own first loads and the barrier polls queue behind less. Prefetch only, results bitwise unchanged. Same-pod 5 rounds: B=1 4048 -> 4043 (mean), B=8 4204 -> 4195. Expect -5..-10 us at both batch sizes, i.e. within the spread between pods (~20 us).
 - evaluator: valid: 4025 us/step at B=1 (MBU 1.125), 4192 us/step at B=8
 
 ### #64 s0064: track A with the o-tile prefetch of s0063 (3 loads per warp)
 
 - status: **valid**, step_us_b1 = 5235, at 38.36 agent-hours, parent s0062, category memory
-- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Same change as s0063: the attention blocks ask L2 for 3 instead of 6 loads per warp of their cold o tile. Prefetch only, bitwise unchanged. Same-machine 4 rounds: B=1 5233 -> 5232, B=8 5387 -> 5372. Expect ~5235 / ~5360 us.
+- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). Same change as s0063: the attention blocks ask L2 for 3 instead of 6 loads per warp of their cold o tile. Prefetch only, bitwise unchanged. Same-pod 4 rounds: B=1 5233 -> 5232, B=8 5387 -> 5372. Expect ~5235 / ~5360 us.
 - evaluator: valid: 5242 us/step at B=1 (MBU 0.864), 5383 us/step at B=8
 
 ### #65 s0065: final track B source (s0063 kernel; host-side diagnostic export only)
 
 - status: **valid**, step_us_b1 = 4047, at 39.33 agent-hours, parent s0063, category other
-- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. The committed final source: s0063's kernel unchanged, plus mk_stat 4-6 returning buffer addresses (host code, not on the step path). Expect s0063's numbers within the machine spread: ~4020-4045 us at B=1, ~4180-4200 at B=8.
+- hypothesis: track B; formats that differ from the checkpoint: 12-bit lossless weight code with exact power-of-two row/column scales, float32 residual stream. The committed final source: s0063's kernel unchanged, plus mk_stat 4-6 returning buffer addresses (host code, not on the step path). Expect s0063's numbers within the pod spread: ~4020-4045 us at B=1, ~4180-4200 at B=8.
 - evaluator: valid: 4051 us/step at B=1 (MBU 1.117), 4186 us/step at B=8
 
 ### #66 s0066: final track A source (s0064 kernel; host-side diagnostic export only)
 
 - status: **valid**, step_us_b1 = 5236, at 39.36 agent-hours, parent s0064, category other
-- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). The committed final source built with engine/TRACK=A: s0064's kernel unchanged plus a host-side diagnostic export. Expect s0064's numbers within the machine spread: ~5230-5245 / ~5365-5380 us.
+- hypothesis: track A; formats that differ from the checkpoint: none (BF16 weights as stored, BF16 activations and KV cache, RMSNorm computed per step before each matvec). The committed final source built with engine/TRACK=A: s0064's kernel unchanged plus a host-side diagnostic export. Expect s0064's numbers within the pod spread: ~5230-5245 / ~5365-5380 us.
 - evaluator: valid: 5242 us/step at B=1 (MBU 0.864), 5381 us/step at B=8
 

@@ -3,7 +3,7 @@
  "gpu": "NVIDIA H100 80GB HBM3",
  "hw": "h100",
  "provisional": true,
- "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, 5 repeats). These are TRIAL numbers, measured in other machines than the engine under test, which is timed in its own process (step, no sampling, no HTTP): the easier calibre. A speedup here is an upper bound on the end-to-end one until both are measured on one card by one client (scripts/compare.sh).",
+ "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, 5 repeats). These are TRIAL numbers, measured in other pods than the engine under test, which is timed in its own process (step, no sampling, no HTTP): the easier calibre. A speedup here is an upper bound on the end-to-end one until both are measured on one card by one client (scripts/compare.sh).",
  "source": "<job> (2026-11-10, one H100): vLLM 0.33.0 did not start with this model (flags --gpu-memory-utilization 0.97 --max-model-len 4096, two attempts; the cause is in the job's stored server log, not in its printed output). No general engine serves Flint on this card in our measurements. The Hugging Face starter passes the evaluation on one H100 (56111 / 56657 us per step, 82.2 GB in use). Flint's run is on the B200; this file is information only",
  "systems": {},
  "eval_timeout_scale": 3,

@@ -452,13 +452,13 @@ Bit-identity tricks and failures:
 ### 6.1 What slowed the agents
 - **Evaluation turnaround**: median submit-to-result 1.9 min (s2), 2.1 (s4f), 4-4.5 (Inkling), 5-6 (s4n, s4q, s5, s9),
   8.4 (s8 serving); eval seconds median 106-330 for decode, 492 for serving. Worst cases 17 min (s2), 129 min (s4q),
-  192-265 min (s6, s7a) when a machine was lost during evaluation.
-- **Machine loss**: machine epochs per run: s2 9, s4n 11, s4f 24, s4q 26 (replaced four times in hours 2.5-2.6), s5 7. s6 had no
-  machine access from 14.0 h to the end (its B=8 work, −4% in process, never reached the evaluator; s0014 had failed to
+  192-265 min (s6, s7a) when a pod was lost during evaluation.
+- **Pod loss**: pod epochs per run: s2 9, s4n 11, s4f 24, s4q 26 (replaced four times in hours 2.5-2.6), s5 7. s6 had no
+  pod access from 14.0 h to the end (its B=8 work, −4% in process, never reached the evaluator; s0014 had failed to
   build through an agent error just before). Engines that time themselves at start-up (s4f counter placement, ~13 s)
-  and own HF references had to be rebuilt after each replacement. Nsight Compute runs coincided with machine losses on s5.
-- **Noise floor**: same kernel re-evaluated: s2 ~20-30 us between machines (s0059 4047 vs s0061 4026); s4f ~6 us B=1,
-  ~30 us B=8; s7b 1.2 / 2.6 us on one machine; nodes differ ~0.5%; s4n ±10 us run-to-run (role placement). Separate builds
+  and own HF references had to be rebuilt after each replacement. Nsight Compute runs coincided with pod losses on s5.
+- **Noise floor**: same kernel re-evaluated: s2 ~20-30 us between pods (s0059 4047 vs s0061 4026); s4f ~6 us B=1,
+  ~30 us B=8; s7b 1.2 / 2.6 us on one pod; nodes differ ~0.5%; s4n ±10 us run-to-run (role placement). Separate builds
   of the same code differ more than repeat runs (s7b: up to 10 us B=1, 60-110 us B=8; s4f: code compiled in but never
   run moves B=8 by 0.6%). Late-run gains of 0.1-0.4% (s2 s0052-s0063, s4f s0072-s0077) were below one evaluation's spread.
 - **Profiling a megakernel**: nsys shows one kernel ("the pass is the kernel", s4q); Nsight Compute gave stall shares

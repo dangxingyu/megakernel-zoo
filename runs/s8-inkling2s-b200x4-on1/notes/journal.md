@@ -2,7 +2,7 @@
 
 ## 0.0-0.5 h: bring-up
 
-- Machine facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
+- Pod facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
   the starter loads in ~2 min, my loader 48 layers in ~50 s with one thread per card).
 - sm_100a has no warp-level block-scaled MMA (`mma ... kind::mxf4nvf4.block_scale` is sm_120a only); only tcgen05.
   `cvt.rn.f16x2.e2m1x2` and `cvt.rn.f16x2.e4m3x2` exist but need `-gencode arch=compute_100a,code=sm_100a`
@@ -16,7 +16,7 @@
   6 layers; attention outputs rel 1e-3..2e-2, MLP outputs rel 1e-2..8e-2 growing with depth; the four cards' replicated
   state bitwise identical.
 
-## 0.5 h (machine outage, clock stopped): structure changes written before any timing
+## 0.5 h (pod outage, clock stopped): structure changes written before any timing
 
 - Routing (top-8 + union) computed redundantly by every block from the router logits: -2 grid barriers per layer.
 - Per-token step state (8 finished attention-residual blocks, the partial block, the attention output) lives in the
@@ -29,7 +29,7 @@
   step parity (one writer, many readers). B>=2 keeps one block per token + barriers (`ink_step_std`).
 - L2 prefetch (cp.async.bulk.prefetch.L2) of the next GEMV's weights by blocks idle in latency phases.
 
-## 0.5-1.7 h: first full-model runs (machine epochs 3-4, long outages in between)
+## 0.5-1.7 h: first full-model runs (pod epochs 3-4, long outages in between)
 
 - Correct from the first full run: argmax identical to the fork reference at 12/12 steps x 2 sequences, the 4 cards'
   replicated state bitwise identical, online submit/poll and generate() == step-by-step greedy at B=1/2/8.
@@ -61,7 +61,7 @@
   0.21-0.42 us after streaming 8 GB; fence.sc.sys after remote writes 2.05 us; fence.gpu 0.53 us.
 - Instruction cache is not the problem (routing phase 4.6 us cold vs 4.0 us warm, -DICTEST).
 
-## 5.4 h: s0003 submitted (queued by a machine loss); findings since s0002 (all with in-kernel globaltimer stamps)
+## 5.4 h: s0003 submitted (queued by a pod loss); findings since s0002 (all with in-kernel globaltimer stamps)
 - Strided GEMV warp mapping (logical warp = warp x 152 + block) made the same ~6-10 blocks 2x slower in every
   expert GEMV (per-block end times correlate 0.94-0.99 across layers and runs; the slow blocks' indices form
   arithmetic progressions, their SM ids look random -> a mapping effect: a block's 32 streams sit 729 KB apart in
@@ -275,7 +275,7 @@
   two-stage block reductions (the reducing warp runs alone at ~5 ns per instruction: 0.15 us); output-side scaling
   of the FP4 MMAs at B=1 (13 instead of 10 instructions per MMA).
 
-## 5.5-5.6 h: register allocation as a knob (not yet submitted when the machine was lost)
+## 5.5-5.6 h: register allocation as a knob (not yet submitted when the pod was lost)
 - 896 / 1024-thread blocks on the final engine: REG:72 / REG:64 with STACK:112 / 136, slower at both batch sizes
   (B=8 4858 -> 4961 / 5125, B=1 3270 -> 3412 / 3520).
 - Compiling phase bodies out of line (`__noinline__`) changes what the GEMV loops get (fixed tokens, B=1 / B=8,
@@ -284,9 +284,9 @@
   bitwise identical results); all phases 3292 / 4788. Kept: attention + routing + w2 quantization.
   The combinations are not additive: this is the compiler's register allocation in one 19 000-instruction
   kernel, so each candidate has to be measured.
-- Machine lost (epoch 1 -> 2) during the next A/B (GEMV schedulers out of line); the clock stopped at 5.59 h.
+- Pod lost (epoch 1 -> 2) during the next A/B (GEMV schedulers out of line); the clock stopped at 5.59 h.
 
-## s0013 (5.8 h, machine epoch 2): 3296 / 5484 us = 1.429x / 1.204x SGLang (predicted ~3290 / ~5460)
+## s0013 (5.8 h, pod epoch 2): 3296 / 5484 us = 1.429x / 1.204x SGLang (predicted ~3290 / ~5460)
 - Attention, routing and w2-quantization phase bodies compiled out of line: results bitwise identical to s0012,
   B=8 -1.3% over HTTP (5558 -> 5484), B=1 unchanged within the trial spread (3299 -> 3296). The prediction for B=8
   (-1.8%, from the fixed-token step 4858 -> 4770) was a little optimistic: generated text has more distinct experts
@@ -480,15 +480,15 @@ tensor-core / fragment = 0.9864-0.9871). Their source is kept in prev/exp_tcmx/ 
   builds, 99.9 GB per card, t_gate 0.0503 / 0.1069 / 100%, batch 1 bitwise as the default build; fixed-token step at
   B=8 4742 us against 4686 with the tensor-core kernel (tools/t_b1time.py --batch 8).
 
-## 11.1-11.2 h: one more placement fix, submitted as s0019; machine lost during its evaluation
+## 11.1-11.2 h: one more placement fix, submitted as s0019; pod lost during its evaluation
 - The w13 scale-factor stores (tensor memory, beside the routing phase) spread over three groups of four idle warps
   (12-23) instead of warps 20-23 alone: bitwise the results of s0018; replay at B=8 5383 -> 5345 us per step (-0.7%):
   the routing phase had been waiting for the nine stores. Soaks with 1, 2, 8 distinct sequences clean.
-- The machine was replaced while s0019 was evaluated (clock stopped at 11.23 h); the evaluation is queued for the new machine.
+- The pod was replaced while s0019 was evaluated (clock stopped at 11.23 h); the evaluation is queued for the new pod.
 
-## 11.23 h (clock stopped): s0019 still not evaluated, no machine for more than three hours
-- The machine lost at 04:27 has not been replaced by 07:48 (the status went from epoch 3 to epoch 4, both
-  "starting"); s0019 is queued and will be evaluated when a machine comes. Nothing was started, stopped or worked
+## 11.23 h (clock stopped): s0019 still not evaluated, no pod for more than three hours
+- The pod lost at 04:27 has not been replaced by 07:48 (the status went from epoch 3 to epoch 4, both
+  "starting"); s0019 is queued and will be evaluated when a pod comes. Nothing was started, stopped or worked
   around on my side.
 - engine/ is the s0019 source (git 'tensor-core w13: scale-factor stores ... three warp groups'). It is bitwise
   s0018 in its results; the only difference is which idle warps issue nine tensor-memory stores.
@@ -496,21 +496,21 @@ tensor-core / fragment = 0.9864-0.9871). Their source is kept in prev/exp_tcmx/ 
 - If s0019 comes back valid: nothing to do but record it (engine/ already is that source). If it does not:
   `git checkout 1ccd66b -- engine/` restores the s0018 source (valid, 3298 / 5440 us).
 
-## s0019 (11.3 h, machine epoch 6): valid, 3307 / 5390 us = 1.424x / 1.225x (predicted step_us at B=8 ~5395, HTTP ~5400 +- 40, B=1 ~3298)
-- Evaluated after the machine came back (4.5 h of outage, not counted). In process at B=8: step 5433.5 -> 5392.4 us
+## s0019 (11.3 h, pod epoch 6): valid, 3307 / 5390 us = 1.424x / 1.225x (predicted step_us at B=8 ~5395, HTTP ~5400 +- 40, B=1 ~3298)
+- Evaluated after the pod came back (4.5 h of outage, not counted). In process at B=8: step 5433.5 -> 5392.4 us
   (-0.76%, as the replay said), W1-like 5652 -> 5612, generate 5443 -> 5403; over HTTP 5440 -> 5390, the best B=8
-  figure of the run. B=1 on this machine: step 3257 against 3250 on the previous machine with the same plain kernel (HTTP
-  3307 against 3298): machine-to-machine spread of ~0.3%, not the change (the B=1 kernel does not contain it).
+  figure of the run. B=1 on this pod: step 3257 against 3250 on the previous pod with the same plain kernel (HTTP
+  3307 against 3298): pod-to-pod spread of ~0.3%, not the change (the B=1 kernel does not contain it).
 
 ## s0020 (11.5 h): valid, 3307 / 5378 us = 1.424x / 1.228x (predicted step_us at B=8 ~5380, HTTP ~5380 +- 40)
 - The w13 quantization emit of the tensor-core kernel inlined in its team phase (it was out of line from the time
   both paths shared a kernel). Bitwise the results of s0019. In process at B=8: step 5392.4 -> 5380.9 us (-0.21%, the
   replay had said -0.22%), HTTP 5390 -> 5378: the best B=8 figure of the run. B=1 unchanged (3307.3 -> 3307.5 on
-  this machine; the plain kernel).
+  this pod; the plain kernel).
 
 ## End of the run (11.5 h; engine/ = s0020)
-- Final engine: s0020, 3307 us per token at B=1 and 5378 us per step at B=8 over HTTP on the last machine (1.424x /
-  1.228x SGLang's 4711 / 6604); the same B=1 kernel measured 3296-3300 us on the previous machine (s0013, s0016-s0018).
+- Final engine: s0020, 3307 us per token at B=1 and 5378 us per step at B=8 over HTTP on the last pod (1.424x /
+  1.228x SGLang's 4711 / 6604); the same B=1 kernel measured 3296-3300 us on the previous pod (s0013, s0016-s0018).
   Best headline figure on the board: s0013, 3295.6 us.
 - B=8 since s0013 (in-process step_us, the stable figure): 5522 (s0013) -> 5433 (s0016, tcgen05 w13 with its calls
   out of the kernel body) -> 5434 (s0018, sub-items of 12) -> 5392 (s0019, scale-factor stores over three warp
@@ -523,8 +523,8 @@ tensor-core / fragment = 0.9864-0.9871). Their source is kept in prev/exp_tcmx/ 
   (+0.6%: warps 8-11 are not as idle in the routing phase as 12-23; three groups stay).
 - Without the progress words (-DTC_NOPROG): 5333 us: they cost nothing, they stay.
 
-## 11.8 h: the final engine (s0020 source) checked once more on the last machine
-- Float64 reference regenerated on this machine (tools/ref_dump.py, 2 sequences x 12 positions): tensor-core kernel
+## 11.8 h: the final engine (s0020 source) checked once more on the last pod
+- Float64 reference regenerated on this pod (tools/ref_dump.py, 2 sequences x 12 positions): tensor-core kernel
   forced at B=1/2 (MK_TC_MINB=1) rel median 0.0525 / max 0.0958 / top-1 100%; inside a batch of 8 with a large
   union (t_gate8) 0.0507 / 0.0927 / 100%.
 - Soaks, 12 000 steps each without host synchronisation: B=4 (1 distinct sequence), B=5 (2), B=6 (6), B=7 (3),
@@ -839,7 +839,7 @@ pressure rule lets it (shortest first, largest passes).
 - Softmax path without selects and mask for half pages wholly inside every row's window (like the far-key path):
   bitwise the same, no gain (2560 rows at position 12000: 67.2 vs 67.7 ms).
 - Small expert tiles (up to 64 pairs) with six row groups per block instead of three (ring and operation threads for
-  six): bitwise the same, slower (2560 rows 59.2 -> 62.0 ms on the same machine); an 8-row pass 15.7 -> 15.2 ms, a 32-row
+  six): bitwise the same, slower (2560 rows 59.2 -> 62.0 ms on the same pod); an 8-row pass 15.7 -> 15.2 ms, a 32-row
   pass 18.7 -> 19.3 ms. Six chains in one block do not run side by side.
 - Dense GEMMs with the K range as two halves accumulated side by side in one block (one row group per block; the
   summation changes for every pass size, so it stays canonical; checked against the reference and bitwise across
@@ -848,7 +848,7 @@ pressure rule lets it (shortest first, largest passes).
   shorter chains need other SMs, i.e. partial sums combined through memory. Not worth a change of arithmetic.
 - Long context against the reference with the s0019 source (tools/t_long.py, 6000 tokens): rel L2 of the centred
   logits at the last 16 positions median 0.050 / max 0.091, top-1 13 of 16; chunks of 3584 == chunks of 700 bitwise.
-- Machine replaced once more (epoch 3) during these; same timings on the new machine (59.2 ms per 2560 rows).
+- Pod replaced once more (epoch 3) during these; same timings on the new pod (59.2 ms per 2560 rows).
 
 ## 11.5 - 12.0 agent-hours: what the attention kernel's time is (measured with timestamps), and three more dead ends
 - Fetch kernels with their remote loads issued before the first is used (expert sum: eight pair rows; gather: three
@@ -879,7 +879,7 @@ pressure rule lets it (shortest first, largest passes).
 - The stats' `recomputes` was never counted. The device scheduler now keeps the keys of evicted blocks (direct-mapped,
   4096) and counts a later miss on one as a recomputation. Replay with 420 pages instead of 2156: 1890 evictions, 22
   recomputations, probes 6/6 identical, 188 of 189 (one first token at 6.2 s: the price of recomputing).
-- Machine replaced twice more; build products are rebuilt by engine/build.sh, nothing else was lost.
+- Pod replaced twice more; build products are rebuilt by engine/build.sh, nothing else was lost.
 - **s0020 (counter + source comments, no change to passes or rules): expected 1.000 (or 0.995 on a 60-120 ms
   margin), measured valid 1.000**: TTFT p50 175 ms / p99 4.4 s, time between tokens p50 28.7 / p99 80 ms.
 
@@ -933,7 +933,7 @@ pressure rule lets it (shortest first, largest passes).
   passes composed (the empty passes above kept it quiet).
 - After the fix: mix 150 requests / 700 pages 22.4 s, 727 evictions, 44 recomputations, 10 of 10 sampled requests
   equal alone; edges 26 of 26 equal; flood 1500 requests in 9.3 s; mix with 150 pages (two requests of full length)
-  38 s, 1582 evictions, 472 recomputations, 10 of 10. Replay in the machine 189 of 189, probes 12 of 12.
+  38 s, 1582 evictions, 472 recomputations, 10 of 10. Replay in the pod 189 of 189, probes 12 of 12.
 - **s0024: expected the figures of s0023, measured valid 1.000**: TTFT p50 169 ms / p99 4.28 s, time between tokens
   p50 26.4 / p99 76.5 ms, longest gap 89 ms; offline 11.2 ms (B=1) / 14.0 ms (B=8) per step.
 - Estimated and not built: a hot expert's weights on all four cards (each card runs its own rows' pairs: no fetch of
@@ -1018,7 +1018,7 @@ pressure rule lets it (shortest first, largest passes).
 - Checks: old against new swap search on the host, 3000 random steps, 1480 swaps: equal (also with precomputed
   proposals); simulator output byte-identical on four traces (up to 7416 evictions); device == host tokens, cache
   test, stress 150 requests / 150 pages (1582 evictions, 472 recomputations as before), edges 26 of 26.
-- k_sched on prompt passes 2.1 ms -> 0.13 ms (268 calls of 100-300 us). Replay in the machine: TTFT p99 4.28 -> 4.15 s,
+- k_sched on prompt passes 2.1 ms -> 0.13 ms (268 calls of 100-300 us). Replay in the pod: TTFT p99 4.28 -> 4.15 s,
   time between tokens p50 26.4 -> 26.0, p99 76.5 -> 74.8 ms. 400 s replay: **643 of 643**, TTFT p90 1.84 -> 1.52 s,
   p99 4.07 -> 3.43 s, longest 5.25 -> 4.63 s, time between tokens p50 43.5 -> 36.3 ms, p99 82.9 -> 74.7 ms.
 - **s0026: expected 1.000 with TTFT p99 ~4.15 s, tbt 26.0 / 74.8 ms; measured valid 1.000**, TTFT p50 166 ms / p99
@@ -1038,7 +1038,7 @@ pressure rule lets it (shortest first, largest passes).
   32k tokens on one thread): its block keys stay in the free slot they were written to.
 - Checks: simulator identical on four traces; device == host; cache test; stress 150 / 150 pages, 1500 at once,
   300 requests on 40 pages; replay 189 of 189, probes 12 of 12.
-- **s0027: expected the figures of s0026, measured valid 1.000**: TTFT p50 176 ms (166 in the machine's replay and in
+- **s0027: expected the figures of s0026, measured valid 1.000**: TTFT p50 176 ms (166 in the pod's replay and in
   s0026; the median sits between two requests ~20 ms apart) / p99 4.15 s / max 4.62 s, time between tokens p50 26.0 /
   p99 74.8 ms, offline 11.2 / 14.0 ms.
 - 20-minute replay of the s0027 engine (2120 requests, 11.1M prompt rows, 18,697 evictions, 1901 recomputations; the
@@ -1051,8 +1051,8 @@ pressure rule lets it (shortest first, largest passes).
   units up to 16 rows): 1572 units with a scratch hand-over each, 207 us per pass. Those forms shorten a chain; the
   unembedding (393 row groups on 148 SMs) is bound by operations. It now always runs 393 units of both halves in
   one block. Same bits (stepwise == chunked on the logits, reference error unchanged at 0.1299845278263092).
-- A/B on the same machine (two builds each, 41 passes): 1 row 11.60 -> 11.48 ms, 8 rows 13.34 -> 13.20, 32 rows 15.7 ->
-  15.6. (A comparison across a machine replacement had shown the same size of effect in both directions: A/B on one machine.)
+- A/B on the same pod (two builds each, 41 passes): 1 row 11.60 -> 11.48 ms, 8 rows 13.34 -> 13.20, 32 rows 15.7 ->
+  15.6. (A comparison across a pod replacement had shown the same size of effect in both directions: A/B on one pod.)
 - Decode-only passes through the device loop (tools/t_gap.py: B requests with different contents) against the same
   pass launched from the host: 11.71 / 11.74 ms at 1 row, 14.64 / 14.57 at 8, 19.14 / 18.27 at 32: the loop adds
   nothing (it is not bound by the host's launches). Rows of different sequences with unrelated tokens cost 0.24 -
@@ -1071,7 +1071,7 @@ pressure rule lets it (shortest first, largest passes).
   the free list, reserved pages covered by free + evictable, cache nodes found by their keys, children counts,
   the stripe records of the eviction (never above the stripe's true minimum), the rows and tables of the composed
   pass, tokens per request, the token ring never lapped, no rows composed while it is full; at the end free ==
-  total. 24,000 runs on the machine's CPUs (2.1M requests, 13.8M evictions, 1.0M recomputations): all pass.
+  total. 24,000 runs on the pod's CPUs (2.1M requests, 13.8M evictions, 1.0M recomputations): all pass.
 - The harness finds seeded bugs: the 64-entry key table of s0024 (at step 0-25), a missing eviction candidate on
   release or for a parent, deleted marks cleared without looking at the next slot, the admission memo without its
   slot, pinned pages not counted at admission, late hits that keep their reserve, no hold for a host that does not
@@ -1095,7 +1095,7 @@ pressure rule lets it (shortest first, largest passes).
   profile is that of a small pass: 24 kernels per layer, none of them dominant.
 - (1) post_mlp of layer i and the attention mix of layer i + 1 as one kernel (`k_post_mix`); (2) the fetch kernels
   (attention input, routing) with 3 / 6 blocks per SM that loop over rows instead of one block per row (the device
-  loop's grids are those of the largest pass). A/B on one machine: 1 row 11.47 -> 11.26 ms, 8 rows 13.20 -> 12.98, 32
+  loop's grids are those of the largest pass). A/B on one pod: 1 row 11.47 -> 11.26 ms, 8 rows 13.20 -> 12.98, 32
   rows 15.6 -> 15.4; 2560 rows 61.4 -> 61.5, 3584 rows 79.6 -> 80.0 (builds with one of the two changes: 11.34 and
   11.42 at 1 row; their large-pass times scatter by 0.3-0.5 ms between builds, so the 0.4 ms is not attributed).
 - **s0029: expected 1.000, gap p50 12.94, tbt p50 25.75 / p99 75.2 ms, TTFT p99 4.158 s, steady decode ~10.87 /
@@ -1110,7 +1110,7 @@ pressure rule lets it (shortest first, largest passes).
 - The fuzz harness also drives the expert placement now (random pair counts per pass, a rebalance every 1-6 prompt
   passes): after every step the placement must still be one (96 experts per card and layer, every place taken
   once) and equal the previous one with the pass's swaps applied, each swap naming where its experts were. 12,800
-  more runs on the machine's CPUs (1.1M requests, 6.0M swaps, 7.4M evictions): all pass.
+  more runs on the pod's CPUs (1.1M requests, 6.0M swaps, 7.4M evictions): all pass.
 
 ## 19.6 - 20.2 agent-hours: s0030, the two APIs on one engine
 - step() / generate() on an engine whose device loop runs were not refused: the offline code checked the host
@@ -1210,7 +1210,7 @@ pressure rule lets it (shortest first, largest passes).
   2.4 s. Open and dead ends: notes/plan.md.
 - Final checks on the s0035 engine: crowd of 150 requests on 700 pages PASS (10 of 10 sampled requests equal alone),
   edge lengths 26 of 26, host == device tokens.
-- Last runs: the scheduler fuzz with 32 new seeds x 300 runs on the machine's CPUs: all pass. Low rates with the s0035
+- Last runs: the scheduler fuzz with 32 new seeds x 300 runs on the pod's CPUs: all pass. Low rates with the s0035
   engine: 0.5 req/s 53 of 53 (TTFT p50 234 ms / p99 4.66 s, time between tokens 20.7 / 70.3 ms), 1 req/s 103 of 103
   (211 ms / 4.01 s, 21.2 / 70.7 ms), 3 req/s 284 of 284 (160 ms / 4.00 s, 34.5 / 71.6 ms).
 - Measured, not adopted (the engine stays s0035): the attention-input fetch of the global layers with one input per
@@ -1221,7 +1221,7 @@ pressure rule lets it (shortest first, largest passes).
 - Exchange kernels of the s0035 engine at 2560 rows (nsys, us per layer): gather 27.4 (31.8 at s0032), routing fetch
   22.7 / 30.7 in FP8 layers (27.4 / 36.3; 67 before s0032 at 3584 rows), convolution-state fetch 5.8 (11.2),
   attention-input fetch 53.7 / 136.9 in global layers (unchanged: link-bound). Pass under nsys 61.0 ms (61.8).
-- On the s0035 source itself (fresh machine): online / offline in turns PASS, close() with 40 requests open 0.12 s, 150
+- On the s0035 source itself (fresh pod): online / offline in turns PASS, close() with 40 requests open 0.12 s, 150
   requests on 150 pages PASS (10 of 10 sampled requests equal alone), 6000-token prompt against the reference rel L2
   median 0.0524 / max 0.0805, top-1 13 of 16, bitwise equal between chunks of 3584 and 700 rows. Host: fuzz (60 runs,
   new seed) and ring test pass.
@@ -1262,7 +1262,7 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
   time between tokens p50 51 / 51 ms). With 128 slots and nothing else: 0.991 at 120 s, 0.952 at 300 s (96 slots:
   0.94; 192 and 256: as 128, the page store binds at ~120 sequences).
 - Built: S_NSLOT 128 (multiword slot masks, the fixed program's counts, 2.8 MB of convolution state per slot and
-  card). Machine, 300 s at 8 req/s in process: 2007 of 2120 = 0.947, TTFT p50 0.44 s / p99 9.6 s, time between tokens
+  card). Pod, 300 s at 8 req/s in process: 2007 of 2120 = 0.947, TTFT p50 0.44 s / p99 9.6 s, time between tokens
   p50 60 / p99 78 ms, at most 118 in flight: the simulator's figures (0.952; 0.42 s; 9.3 s; 59 / 80 ms; 120).
 - **s0037: expected slo_share_r8 ~0.99, measured valid 0.990** (772 of 780; TTFT p50 232 ms / p90 2.9 s / p99 5.0 s,
   time between tokens p50 58.7 / p99 77.3 ms, longest gap 90 ms); 2 req/s 1.000 (TTFT p99 4.03 s, 25.3 / 62 ms);
@@ -1277,7 +1277,7 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
 - The fuzz found the first version's flaw in a minute: with a small page store the reserve for late requests was
   larger than the store, and they never got in. Reserve capped at an eighth of the store and dropped when no prompt
   is being served. 400 runs + colliding keys pass.
-- Simulator: 8 req/s 300 s 0.952 -> 0.982; 10 req/s 0.17 -> 0.95 (drain 51 s). Machine, 8 req/s 300 s: 2082 of 2120 =
+- Simulator: 8 req/s 300 s 0.952 -> 0.982; 10 req/s 0.17 -> 0.95 (drain 51 s). Pod, 8 req/s 300 s: 2082 of 2120 =
   0.982 (the simulator's number), TTFT p50 0.44 -> 0.19 s, p90 4.2 -> 1.8 s, p99 9.6 -> 12.1 s, tbt 60 / 78 ms.
 - **s0038: expected slo_share_r8 ~0.992 with TTFT p50 ~0.13 s, p90 ~1.8 s; measured valid 0.990** (772 of 780, the
   same count as s0037), TTFT p50 183 ms, p90 1.94 s, p99 5.04 s; time between tokens p50 58.6 / p99 77.5 ms; 2 req/s
@@ -1286,20 +1286,20 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
   instead of the pure row rate (8 req/s 300 s: 38 -> 34 late, 120 s 6 -> 6: nothing to measure); other pass caps (tmax
   4096, normal pass 2048 - 3584): 34 - 38 late in every case.
 - Tried on the device, not adopted: a normal pass of 2048 rows while 48 or more sequences decode (simulated: same
-  share, time between tokens p50 59 -> 51 ms). Machine, 8 req/s 120 s: 771 of 780 (s0038: 772), time between tokens p50
+  share, time between tokens p50 59 -> 51 ms). Pod, 8 req/s 120 s: 771 of 780 (s0038: 772), time between tokens p50
   58.6 -> 54.3 ms, TTFT p90 1.94 -> 1.76 s, p99 5.0 -> 5.9 s. One request less on the score for 7% on the median gap:
   left out.
 - For the record (s0038 source, 300 s in process): 6 req/s 1591 of 1598 (TTFT p50 164 ms / p99 3.8 s, time between
   tokens 55 / 75 ms); 10 req/s 2323 of 2608 = 0.891 (TTFT p50 0.35 s, p90 5.5 s; every request finishes 53 s after
   the last arrival; longest gap 147 ms). The simulator had 0.946 for 10 req/s: its 0.07 ms per decode row is fitted
-  at ~60 decoding sequences and is optimistic at ~120. Scheduler fuzz on the machine's CPUs, 32 seeds x 300 runs: pass.
+  at ~60 decoding sequences and is optimistic at ~120. Scheduler fuzz on the pod's CPUs, 32 seeds x 300 runs: pass.
 - Robustness on the s0038 source: slow host (no poll until the device stops, 134,400 tokens) PASS, edge lengths 26 of
   26, online / offline in turns PASS, close with 40 requests open 0.17 s, max_batch 8 with 24 requests PASS, crowd
   with drop_cache PASS; 400 s at 2 req/s 643 of 643 (TTFT p99 3.34 s, time between tokens 35.3 / 67.5 ms), probes 12
   of 12.
 
 ## 26.4 - 27.0 agent-hours: s0039, a prompt nobody waits behind
-- Operator: a lone 32,000-token prompt answers after 0.76 s (SGLang 0.41 s). Machine (tools/t_lone.py): 808 ms; 13 normal
+- Operator: a lone 32,000-token prompt answers after 0.76 s (SGLang 0.41 s). Pod (tools/t_lone.py): 808 ms; 13 normal
   passes of 2560 rows, each with its base cost, although no sequence decodes. Rule: while no sequence is decoding
   and the shortest waiting prompt has more rows left than a normal pass, the pass is the largest (3584 rows).
   32,000 tokens 808 -> 752 ms, 8,000 tokens 196 -> 182 ms. (Unconditionally "largest pass while nobody decodes" gave
@@ -1338,7 +1338,7 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
 - Now sized after everything else is allocated: the driver's free memory less 0.6 GB (swap space, scheduler arrays)
   and 2.7 GB: 2439 pages; 7.7 GB per card free while serving, the same on every card and run. (With 5 GB subtracted
   9.8 GB stayed free: the driver reports ~4.8 GB less at that point than is free later.)
-- Simulator: 8 req/s 120 s 6 -> 5 late, 300 s 37 -> 27. Machine: 300 s 2082 -> 2093 of 2120 (0.987: the predicted
+- Simulator: 8 req/s 120 s 6 -> 5 late, 300 s 37 -> 27. Pod: 300 s 2082 -> 2093 of 2120 (0.987: the predicted
   number), TTFT p90 1.82 -> 1.58 s. With this store the slots bind for moments (128 in flight; 160 or 192 slots:
   the same result).
 - **s0041: expected slo_share_r8 ~0.994 (775 of 780), measured valid 0.9936 (775 of 780)**: TTFT p50 175 ms, p90 1.71 s,
@@ -1352,7 +1352,7 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
 - Dropped again with the larger store: the shorter normal pass while many sequences decode costs one request of 780
   in the simulator too (5 -> 6 late) for a median gap of 51-54 instead of 58 ms.
 - The operator's calibre (the harness's serve_engine.py + client.py around the engine) cannot be run from here: the
-  machine's Python has no aiohttp (tools/http_replay.sh is the attempt; not worked around). What the client does that
+  pod's Python has no aiohttp (tools/http_replay.sh is the attempt; not worked around). What the client does that
   the in-process driver does not: it counts a request only if it has finished 60 s after the last arrival (the
   driver waits 90 s). The engine drains 11-18 s after the last arrival at 8 req/s.
 - 20 minutes at 2 req/s on the s0041 source: **2120 of 2120** within the service levels (s0033: 2119; the request that
@@ -1372,7 +1372,7 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
   while 32 or more sequences decode (S_LOAD_ND), 0.3 s below: 2 req/s rarely has 32 decoding (its median gap is the
   cost of the larger passes, so the rule must not fire there).
 - Simulator: 8 req/s 120 s 5 -> 2 late of 780, 300 s 27 -> 20 of 2120, 6 req/s 7 -> 6, 10 req/s 141 -> 103; 2 req/s
-  (trace400) unchanged to the digit. Machine before submitting: 778 of 780 at 120 s (TTFT p99 4.85 -> 4.34 s, time
+  (trace400) unchanged to the digit. Pod before submitting: 778 of 780 at 120 s (TTFT p99 4.85 -> 4.34 s, time
   between tokens 58.8 -> 59.6 / 80.0 -> 82.7 ms), 300 s 2093 -> 2101 of 2120 (0.991; TTFT p99 9.7 -> 4.9 s), probes
   12 of 12 at both rates, 2 req/s 189 of 189; fuzz 60 runs.
 - **s0042: expected slo_share_r8 ~0.9974 (778 of 780) and 2 req/s unchanged; measured valid 0.9974 (778 of 780)**:
@@ -1395,18 +1395,18 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
     windows recomputation (563 of 8286 missed blocks at 120 s) is worth ~0.3 points.
   The score is at what this pass cost allows on this window.
 - Host fuzz on the s0042 scheduler: 4 seeds x 100 runs and 60 runs with colliding keys pass; ring test passes.
-- The other rates on the s0042 source, 300 s of the trace each, in process (machine epoch 6): 4 req/s 1046 of 1046 (TTFT
+- The other rates on the s0042 source, 300 s of the trace each, in process (pod epoch 6): 4 req/s 1046 of 1046 (TTFT
   p50 0.13 / p99 3.41 s, time between tokens 45.8 / 73.5 ms, longest gap 88 ms); 6 req/s 1593 of 1598 = 0.997 (0.15 /
   3.27 s, 54.7 / 76.2 ms, 90 ms); **10 req/s 2494 of 2608 = 0.956** (s0038: 0.891; simulator 0.960): TTFT p50 0.28 /
   p90 3.6 s, 69.2 / 82.3 ms, longest gap 94 ms, 128 in flight, every request finishes inside the drain. Probes 6 of 6
   at each rate; free == total afterwards. With 8 req/s (2101 of 2120) the s0042 matrix is complete; 1 and 2 req/s
   were not rerun (the rule differs only from 32 decoding sequences; the evaluator's 2 req/s figures are those of s0041).
-- Test set on the s0042 source (device loop, machine epoch 6), all pass: t_stress mix (150 requests on 700 pages: 10 of
+- Test set on the s0042 source (device loop, pod epoch 6), all pass: t_stress mix (150 requests on 700 pages: 10 of
   10 sampled requests identical alone and in the crowd, 542 evictions, free == total), edges (26 of 26, prompts 1 to
   34,815 tokens on 300 pages, 186 recomputations), flood (1500 requests, 128 in flight, 10 of 10), slow poller (2
   of 2), t_small (max_batch 8 with 24 requests at once), t_mix (online == online again == offline; an offline call
   with a request open is refused), t_close (0.13 s with 40 requests open).
-- 15 minutes at 8 req/s on the s0042 source (in process, machine epoch 7 after a machine replacement of ~7 minutes): 6471
+- 15 minutes at 8 req/s on the s0042 source (in process, pod epoch 7 after a pod replacement of ~7 minutes): 6471
   requests, **6418 within the service levels (0.9918; s0041 0.988)**, every one finishes, TTFT p50 179 ms / p90 1.52 s /
   p99 4.79 s (9.5 s with s0041: the p99 is now inside the service level), time between tokens p50 61.1 / p99 80.0 ms,
   longest gap 94 ms (100), probes 6 of 6 identical, 59,034 evictions, 6614 recomputations, 128 in flight at most, no
@@ -1420,7 +1420,7 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
   perfectly even arrivals, R = 37 x (18.6 + 0.016 R) -> ~1690 rows per pass and 46 ms per pass. The engine's 59.6 ms
   is that bound plus the trace's bursts; a rule can only move the median between the two, and pays with the tail.
   The median gap at this rate falls with the pass cost (base and per row), nothing else.
-- 2 req/s over 300 s on the s0042 source (machine epoch 7), twice: 483 of 483 both times, TTFT p50 0.17 / p99 3.44 and
+- 2 req/s over 300 s on the s0042 source (pod epoch 7), twice: 483 of 483 both times, TTFT p50 0.17 / p99 3.44 and
   3.42 s, time between tokens 28.0 / 72.7 ms, probes 12 of 12, at most 27 sequences in flight: the 2-s margin (from
   32 decoding) never applies at this rate, as intended. Longest gap 102.0 ms in the first run, 86.7 ms in the
   second. The first run had one poll() call of 89 ms (the evaluator's runs: 0.06 - 0.5 ms): a token's time is when
@@ -1428,7 +1428,7 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
   (`POLL_LOG=1`): in the second run three polls of 3 - 25 ms at 16 - 19 s, one of them with no event to return (a
   path that reads two words of host memory), no generation-2 garbage collection in the run. The engine's poll
   touches host memory only and its enqueue threads are native: the stall is the driver process's (my `mk exec` runs
-  are not pinned to cores, the machine was minutes old and had just read the checkpoint). Recorded as seen, not explained
+  are not pinned to cores, the pod was minutes old and had just read the checkpoint). Recorded as seen, not explained
   further: the share and the percentiles are the same in both runs.
 
 ### s0043: promotion ahead of the shortest-first order (scheduling)
@@ -1446,29 +1446,29 @@ now the share at 8 req/s (`slo_share_r8`); 2 req/s must stay at 0.99 or above wi
   req/s 6 -> 3 of 1598, 10 req/s 103 -> 89 of 2608, 2 req/s identical to the digit; TTFT p90 at 8 req/s 1.63 -> 1.69
   s. Earlier triggers (margin 1 - 3 s) reach 10 - 11 of 2120 at 300 s but move 2 req/s (TTFT p90 1.9 -> 3.4 s): not
   taken.
-- Machine, and a lesson about the headline: on machine epoch 7 the s0042 source gives **777** of 780, not the 778 of its
+- Pod, and a lesson about the headline: on pod epoch 7 the s0042 source gives **777** of 780, not the 778 of its
   evaluation (epoch 6): a 32,768-token prompt of the burst at 2.5 s answers after 5.02 s (simulator 4.95 s). That
   request is at the limit by capacity (no order or margin moves it by more than 0.09 s in the simulator), so the
-  third digit of the score depends on the machine. A/B on epoch 7, 120 s: s0042 source 777 (late: 2.5 s, 65.0 s, 70.0
+  third digit of the score depends on the pod. A/B on epoch 7, 120 s: s0042 source 777 (late: 2.5 s, 65.0 s, 70.0
   s), promotion 778 (late: 2.5 s, 70.0 s; 7 promotions), probes 12 of 12 at 8 and 2 req/s, 2 req/s 189 of 189 with 0
   promotions. Fuzz: 4 seeds x 100 runs and 60 with colliding keys pass.
 - **s0043: expected slo_share_r8 0.9974 (778 of 780; 0.9987 if the request at the limit falls inside), 2 req/s
   unchanged; measured valid 0.9974 (778 of 780)**: TTFT p50 177 ms / p90 1.66 s / p99 4.35 s (max 12.1 s; s0042 17.2
   s), time between tokens 59.7 / 81.3 ms, longest gap 91 ms. 2 req/s 1.000 (TTFT p50 176 ms / p99 4.02 s, 25.1 / 58.6
   ms, longest gap 87 ms). Steady decode 10.72 / 13.57 ms. Same number on the board as s0042, one request more than
-  the s0042 source on the same machine.
+  the s0042 source on the same pod.
 - After s0043, the request at the limit (8 req/s, the 32,768-token prompt of the burst at 2.5 s: 4.95 s in the
-  simulator, inside on machine epoch 6, 5.01 - 5.02 s on epoch 7):
+  simulator, inside on pod epoch 6, 5.01 - 5.02 s on epoch 7):
   - the 2-s margin from 20 decoding sequences instead of 32 (S_LOAD_ND; simulator 4.95 -> 4.88 s, 2 req/s unchanged
-    in both windows; from 12 the 2 req/s time between tokens p99 moves 64 -> 73 ms): machine epoch 7, 5.01 s, still
+    in both windows; from 12 the 2 req/s time between tokens p99 moves 64 -> 73 ms): pod epoch 7, 5.01 s, still
     outside, 778 of 780. Not submitted; the constant stays 32.
   - the scheduler's first-token clock starts at the step that first sees a request, up to one pass (60 - 76 ms)
     after submit(); the device clock is the card's timer and the host has none in common with it. Stamping the
     previous step's time instead (the earliest the request can have arrived): simulator 4.95 -> 4.90 s, nothing
-    else moves, 10 req/s 89 -> 100 late. Not built into the engine: 0.05 s where the machine-to-machine difference is 0.07.
+    else moves, 10 req/s 89 -> 100 late. Not built into the engine: 0.05 s where the pod-to-pod difference is 0.07.
   - promotion with earlier triggers: the request stays at 4.90 - 4.92 s. Its burst needs 4.9 s at the largest
     passes; it is at the limit by capacity. Whether the board shows 778 or 779 for s0043 is this one request.
-- The s0043 source over 300 s at 8 req/s (in process, machine epoch 7): **2103 of 2120 (0.992)**, the simulator's 17 late
+- The s0043 source over 300 s at 8 req/s (in process, pod epoch 7): **2103 of 2120 (0.992)**, the simulator's 17 late
   to the request (all prompts of 24,913 - 32,768 tokens in the bursts at 120, 192, 222 and 280 s, plus the two of
   the first 120 s), TTFT p50 0.19 / p90 1.58 / p99 4.52 s, time between tokens 61.2 / 81.1 ms, longest gap 92 ms, 27
   promotions, probes 6 of 6, free == total. (s0042 source on epoch 6: 2101.) Test set on the s0043 source: stress

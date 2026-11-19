@@ -6,7 +6,7 @@ one-token passes, context ~600) unless they say "HTTP"; tv.py also hashes the lo
 variant below has the hash of the inherited kernel (bit-identical) unless stated.
 
 ## hour 0-0.3: baseline and where B=8 loses
-- Inherited engine on this machine: events 8875-8895 us at B=1, 9770-9810 at B=8. s0001 (inherited + stats() label):
+- Inherited engine on this pod: events 8875-8895 us at B=1, 9770-9810 at B=8. s0001 (inherited + stats() label):
   VALID 8885 / 9836 over HTTP. Gates: numeric max 0.14 (limit 0.38), numeric_long max 0.457 (limit 0.592).
 - Per-op times (tools/b8_split.py, stamped build, us per op, B=1 -> B=8): gate_up in recurrent layers 54.7 -> 62.1,
   gate_up in attention layers 53.4 -> 55.0, recurrent op 8.8 -> 17.2, in_proj 26.6 -> 27.7, down 28.6 -> 28.9,
@@ -220,7 +220,7 @@ variant below has the hash of the inherited kernel (bit-identical) unless stated
   bench/variants/mk_hubown_vlate.cu.
 - Negative: cs loads for the K / V tiles of the one-op attention layer (-DKVL_K=1; the appended tile is read with
   relaxed loads anyway): B=1 +5 us, B=8 +15. Left on cg.
-- The machine was replaced once (epoch 2) during this measurement; the job re-ran by itself.
+- The pod was replaced once (epoch 2) during this measurement; the job re-ran by itself.
 
 ## hour 6.0-6.4: final per-op profile; the barrier's prefetch behind its increment
 - Final-state profiles (tools/b8_split.py, tools/warp_map.py, stamped build, context ~600), us per op at B=1 / B=8:
@@ -251,14 +251,14 @@ variant below has the hash of the inherited kernel (bit-identical) unless stated
   1.252x / 1.267x the same-card SGLang rematch.
 
 ## End of run
-- Track A: s0020, 8455 us per token at B=1 and 8880 us per step at B=8 over HTTP (inherited: 8885 / 9836 on this machine):
+- Track A: s0020, 8455 us per token at B=1 and 8880 us per step at B=8 over HTTP (inherited: 8885 / 9836 on this pod):
   -4.8 % / -9.7 %; 1.135x / 1.156x SGLang 0.5.23 (target 1.10x at both).
 - Track B: s0021, 7665 / 8102 (inherited s0017 of s5: 8117 / 8864 in the operator's rematch): 1.252x / 1.267x.
 - engine/ = the s0020 source (TRACK "A"; "A W12" builds s0021). 21 submissions, all valid, all bit-identical in their
   logits to the inherited engine.
 - After the last pair, measured and left as notes (engine/ stays the s0020 source): prefetch pieces of 32 KB under the
   stepping: +125 / +145 us (B=1 / B=8); 128 KB pieces: +18 / +17; 64 KB stays. Far piece 128 KB (BF16 engine): -10 /
-  -11 us in three A/Bs on one card - and +8 (B=1), +38 (B=2), +37 (B=5), +58 (B=8) on another card of the machine; 12-bit
+  -11 us in three A/Bs on one card - and +8 (B=1), +38 (B=2), +37 (B=5), +58 (B=8) on another card of the pod; 12-bit
   engine: +2 / +2. So it is not a gain, and prefetch constants at the 10-us level are card-specific: the ones in the
   engine were each confirmed by an evaluation on the evaluator's card (near 160 KB, far 64 / 80 KB, the idle-block and
   K-chunk entries).

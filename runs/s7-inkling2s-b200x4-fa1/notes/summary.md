@@ -6,7 +6,7 @@
   Goal (>= 1.10x at both batch sizes: 4283 / 6004 us) met with margin. Milestones: build, correct, device_loop,
   gpu_never_waits, parity, h0_step.
 - Best headline (B=1) figure on the board: **s0013, 3295.6 us** (5484 at B=8). s0020 runs the same B=1 kernel; its
-  3307 was measured on the last machine, where that kernel is ~0.3% slower in process (3257 against 3250 us). At B=8
+  3307 was measured on the last pod, where that kernel is ~0.3% slower in process (3257 against 3250 us). At B=8
   s0020 is the best of the run (in-process step 5381 us against 5522 for s0013).
 - `MK_CFLAGS=-DNO_TC13` builds the single-layout, single-kernel engine of s0013 (99.9 GB per card instead of 145.8).
 

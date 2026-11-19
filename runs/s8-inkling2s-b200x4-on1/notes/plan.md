@@ -7,7 +7,7 @@ notes/summary.md says
 what the engine is, notes/journal.md how it got there, notes/findings.md (F10 - F28) what was measured.
 prev/ holds three attention kernels that were measured and not adopted (each with the reason).
 
-## How to check a change (all through `mk exec`, machine python, MK_SCHED=host unless noted)
+## How to check a change (all through `mk exec`, pod python, MK_SCHED=host unless noted)
 - `LAYER=5 T=2400 python tools/t_pe_layer.py` (also LAYER=2 T=1500, LAYER=41 T=300): one layer against the
   reference's attention / MoE on the same inputs (attention + o_proj ~0.002, NVFP4 MoE median ~0.003, MXFP8 ~3e-5).
 - `L=12 R=2 T=40 CH=7 python tools/t_pe_ref.py` (and `R=1 T=2500 CH=501 STEPWISE=0`, `R=3 T=600 CH=64 STEPWISE=0`,

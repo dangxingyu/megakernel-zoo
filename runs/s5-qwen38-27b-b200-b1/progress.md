@@ -17,7 +17,7 @@ The source of submission `sNNNN` is `src/sNNNN.tgz`; the run's own notes are in 
 ### #1 s0001: Inherited engine s4/s0048 re-measured as this run's baseline
 
 - status: **valid**, http_step_us_b1 = 8940 (B=8: 9808), at 0.12 agent-hours, category other
-- hypothesis: track A (checkpoint BF16 formats, unchanged). The inherited s0048 engine as-is, to measure the baseline in this run's machine; expect ~8940 us at B=1 and ~9800 us at B=8 over HTTP, within 1%.
+- hypothesis: track A (checkpoint BF16 formats, unchanged). The inherited s0048 engine as-is, to measure the baseline in this run's pod; expect ~8940 us at B=1 and ~9800 us at B=8 over HTTP, within 1%.
 - evaluator: valid: 8940 us/step at B=1 and 9808 at B=8 over HTTP (online (submit/poll)); in process 8913 us/step at B=1 (generate, MBU 0.721)
 
 ### #2 s0002: W12: exact 12-bit weights, per-row exponent windows, escapes as sparse correction
@@ -44,9 +44,9 @@ The source of submission `sNNNN` is `src/sNNNN.tgz`; the run's own notes are in 
 
 - status: **error**, no score, at 1.46 agent-hours, parent s0004, category cleanup
 - hypothesis: track B (same storage as s0004: exact 12-bit codes with per-row exponent windows, escapes patched into the MMA operands; logits bit-identical to s0001). One change vs s0004: the W12 build no longer contains the call sites of the unused BF16 / old W12 stream loops; same-card events 8645 -> 8591 us at B=1 (-0.6 %), B=8 9522 -> 9508. Expect ~8620 us at B=1 and ~9180 at B=8 over HTTP.
-- evaluator: pod_lost: this job was running when machines [1, 2] died; it is not run a third time
+- evaluator: pod_lost: this job was running when pods [1, 2] died; it is not run a third time
 
-### #6 s0006: Exact W12, W12-only build (resubmission of s0005, lost to machine failures)
+### #6 s0006: Exact W12, W12-only build (resubmission of s0005, lost to pod failures)
 
 - status: **valid**, http_step_us_b1 = 8557 (B=8: 9136), at 1.54 agent-hours, parent s0004, category cleanup
 - hypothesis: track B (storage as s0004: exact 12-bit codes, per-row exponent windows, escapes patched into the MMA operands; logits bit-identical to s0001). One change vs s0004: the W12 build omits the call sites of the unused BF16 / old W12 stream loops (the inactive -DW12_RING code is not compiled). Same-card events 8645 -> ~8580 us at B=1, 9522 -> ~9495 at B=8; expect ~8610 / ~9170 over HTTP.

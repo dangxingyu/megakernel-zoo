@@ -37,22 +37,22 @@ pass buffers, and CUTLASS / ThunderKittens-style header code you compile into yo
 
 ## Your tools
 
-Everything that needs the GPU or real compute runs on the machine, never on the machine you are on (a login node
+Everything that needs the GPU or real compute runs on the pod, never on the machine you are on (a login node
 with no GPU for you; keep local commands light: editing, reading, git).
 
-- `mk exec [--timeout S] -- CMD` runs CMD in the machine's copy of your workspace: builds, tests, measurements.
-  The machine has the CUDA 13.2 toolkit (`nvcc`, headers), `nsys`, `ncu`, and `python` (also `$MK_PY`) with torch,
-  transformers, safetensors, numpy and pytest. Build products stay in the machine between calls but are lost when
-  the machine is replaced (`engine/build.sh` has to be able to rebuild everything). The command's output comes back
+- `mk exec [--timeout S] -- CMD` runs CMD in the pod's copy of your workspace: builds, tests, measurements.
+  The pod has the CUDA 13.2 toolkit (`nvcc`, headers), `nsys`, `ncu`, and `python` (also `$MK_PY`) with torch,
+  transformers, safetensors, numpy and pytest. Build products stay in the pod between calls but are lost when
+  the pod is replaced (`engine/build.sh` has to be able to rebuild everything). The command's output comes back
   to you (64 kB at most); files written to `$MK_EXEC_OUT` (2 MB at most in total) come back to
   `../execs/EID/out/` next to your workspace.
-- **The whole node.** The machine is one GB200 node and the engine's target is all of it: every job (`mk exec`, `mk profile`, the
+- **The whole node.** The pod is one GB200 node and the engine's target is all of it: every job (`mk exec`, `mk profile`, the
   sealed evaluation) sees **all four cards** (devices 0-3, `$MK_CARDS` = 4, `$MK_TARGET` = node) and the jobs run **one
   at a time** in the order sent (`--card` is ignored). `$MK_SERVER_CPUS` holds most of the node's cores. `mk gpu` shows
   every card's memory, utilization and job. A long job delays everything behind it, a submission included.
-- **The model's files** are in the machine at `$MK_MODEL_DIR`: `config.json`, `hf_quant_config.json`, the tokenizer, and the
+- **The model's files** are in the pod at `$MK_MODEL_DIR`: `config.json`, `hf_quant_config.json`, the tokenizer, and the
   safetensors shards listed in `model.safetensors.index.json` (393.5 GB; a shard's header lists every tensor's name, dtype and
-  shape). The specification's source files are not in the machine's Python: fetch them from GitHub at the pinned commit (the machine
+  shape). The specification's source files are not in the pod's Python: fetch them from GitHub at the pinned commit (the pod
   has network access), or read `$MK_HARNESS/eval/inkling2_ref.py`. Any measurement on the real weights or on real
   activations is an `mk exec` away. `$MK_HARNESS/eval/weights_census.py` is one example of an exact measurement over every
   weight of a checkpoint (integer counts on the GPU, no sampling); it is an example of how to measure exactly, not a list of
@@ -66,7 +66,7 @@ with no GPU for you; keep local commands light: editing, reading, git).
 - `mk board` shows every submission, the best so far, the reference lines and the time left.
 - `mk note "..."` puts a line on the run's timeline. `mk gpu` shows every card's memory, utilization and job.
 
-The machine can be replaced at any moment (a pause, then a fresh machine; a machine lives at most six hours). Nothing in it
+The pod can be replaced at any moment (a pause, then a fresh pod; a pod lives at most six hours). Nothing in it
 is durable. Your workspace, your notes and git are.
 
 ## What the evaluator does with a submission
@@ -103,7 +103,7 @@ is durable. Your workspace, your notes and git are.
 4. **Trace** (batch 1, under CUPTI): per decode step, kernel launches, host synchronizations, runtime API
    calls, memcpys, the share of time the GPU ran nothing, and idle gaps of 20 us or more.
 5. **Serve and measure over HTTP: this is the score.** The evaluator starts the engine behind the harness's HTTP
-   server (`$MK_HARNESS/eval/serve_engine.py`: an engine process, in the machine's Python with the workspace as
+   server (`$MK_HARNESS/eval/serve_engine.py`: an engine process, in the pod's Python with the workspace as
    working directory, and a front-end process that tokenizes, detokenizes and streams; a Unix socket between
    them) and measures it with the client that measured the baselines (`$MK_HARNESS/eval/client.py steady`):
    prompt 64, 1024 new tokens, greedy, one SSE chunk per token, batch 1 and batch 8, one warm-up and three
@@ -169,8 +169,8 @@ The project's claim for a model is a speed of at least **1.10x** the fastest gen
 batch 8: 4283 us per token at batch 1 (4711 / 1.10) and 6004 us per step at batch 8 (6604 / 1.10).
 
 These are trial numbers: a server end to end over HTTP on the client's clock (prompt 64, 1024 new tokens,
-greedy). Your headline is measured the same way, by the same client, in the evaluation's own machine; the baselines
-were measured in other machines on the same kind of node.
+greedy). Your headline is measured the same way, by the same client, in the evaluation's own pod; the baselines
+were measured in other pods on the same kind of node.
 
 ## Two results, kept apart
 
@@ -282,7 +282,7 @@ Where this list and the source disagree, the source is right.
   256 MiB from the other three at the same time: 1895 GB/s in total. A kernel reading its own card's memory:
   6445-6458 GB/s per card.
 - The host is **aarch64**: two Grace CPUs (Neoverse-V2), 144 cores, no SMT; cards 0 and 1 are on NUMA node 0
-  (cores 0-71), cards 2 and 3 on NUMA node 1 (cores 72-143). Host code and build scripts must build on Arm. The machine
+  (cores 0-71), cards 2 and 3 on NUMA node 1 (cores 72-143). Host code and build scripts must build on Arm. The pod
   is the whole node: nothing else runs on it.
 - Peak memory bandwidth used for MBU: **32000 GB/s** for the node (4 x 8000 GB/s; the per-card figure is derived
   from the vendor's system numbers, not published per card and not measured; our read kernel above reaches about

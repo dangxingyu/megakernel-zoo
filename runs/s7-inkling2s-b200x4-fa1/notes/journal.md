@@ -2,7 +2,7 @@
 
 ## 0.0-0.5 h: bring-up
 
-- Machine facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
+- Pod facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
   the starter loads in ~2 min, my loader 48 layers in ~50 s with one thread per card).
 - sm_100a has no warp-level block-scaled MMA (`mma ... kind::mxf4nvf4.block_scale` is sm_120a only); only tcgen05.
   `cvt.rn.f16x2.e2m1x2` and `cvt.rn.f16x2.e4m3x2` exist but need `-gencode arch=compute_100a,code=sm_100a`
@@ -16,7 +16,7 @@
   6 layers; attention outputs rel 1e-3..2e-2, MLP outputs rel 1e-2..8e-2 growing with depth; the four cards' replicated
   state bitwise identical.
 
-## 0.5 h (machine outage, clock stopped): structure changes written before any timing
+## 0.5 h (pod outage, clock stopped): structure changes written before any timing
 
 - Routing (top-8 + union) computed redundantly by every block from the router logits: -2 grid barriers per layer.
 - Per-token step state (8 finished attention-residual blocks, the partial block, the attention output) lives in the
@@ -29,7 +29,7 @@
   step parity (one writer, many readers). B>=2 keeps one block per token + barriers (`ink_step_std`).
 - L2 prefetch (cp.async.bulk.prefetch.L2) of the next GEMV's weights by blocks idle in latency phases.
 
-## 0.5-1.7 h: first full-model runs (machine epochs 3-4, long outages in between)
+## 0.5-1.7 h: first full-model runs (pod epochs 3-4, long outages in between)
 
 - Correct from the first full run: argmax identical to the fork reference at 12/12 steps x 2 sequences, the 4 cards'
   replicated state bitwise identical, online submit/poll and generate() == step-by-step greedy at B=1/2/8.
@@ -61,7 +61,7 @@
   0.21-0.42 us after streaming 8 GB; fence.sc.sys after remote writes 2.05 us; fence.gpu 0.53 us.
 - Instruction cache is not the problem (routing phase 4.6 us cold vs 4.0 us warm, -DICTEST).
 
-## 5.4 h: s0003 submitted (queued by a machine loss); findings since s0002 (all with in-kernel globaltimer stamps)
+## 5.4 h: s0003 submitted (queued by a pod loss); findings since s0002 (all with in-kernel globaltimer stamps)
 - Strided GEMV warp mapping (logical warp = warp x 152 + block) made the same ~6-10 blocks 2x slower in every
   expert GEMV (per-block end times correlate 0.94-0.99 across layers and runs; the slow blocks' indices form
   arithmetic progressions, their SM ids look random -> a mapping effect: a block's 32 streams sit 729 KB apart in
@@ -275,7 +275,7 @@
   two-stage block reductions (the reducing warp runs alone at ~5 ns per instruction: 0.15 us); output-side scaling
   of the FP4 MMAs at B=1 (13 instead of 10 instructions per MMA).
 
-## 5.5-5.6 h: register allocation as a knob (not yet submitted when the machine was lost)
+## 5.5-5.6 h: register allocation as a knob (not yet submitted when the pod was lost)
 - 896 / 1024-thread blocks on the final engine: REG:72 / REG:64 with STACK:112 / 136, slower at both batch sizes
   (B=8 4858 -> 4961 / 5125, B=1 3270 -> 3412 / 3520).
 - Compiling phase bodies out of line (`__noinline__`) changes what the GEMV loops get (fixed tokens, B=1 / B=8,
@@ -284,9 +284,9 @@
   bitwise identical results); all phases 3292 / 4788. Kept: attention + routing + w2 quantization.
   The combinations are not additive: this is the compiler's register allocation in one 19 000-instruction
   kernel, so each candidate has to be measured.
-- Machine lost (epoch 1 -> 2) during the next A/B (GEMV schedulers out of line); the clock stopped at 5.59 h.
+- Pod lost (epoch 1 -> 2) during the next A/B (GEMV schedulers out of line); the clock stopped at 5.59 h.
 
-## s0013 (5.8 h, machine epoch 2): 3296 / 5484 us = 1.429x / 1.204x SGLang (predicted ~3290 / ~5460)
+## s0013 (5.8 h, pod epoch 2): 3296 / 5484 us = 1.429x / 1.204x SGLang (predicted ~3290 / ~5460)
 - Attention, routing and w2-quantization phase bodies compiled out of line: results bitwise identical to s0012,
   B=8 -1.3% over HTTP (5558 -> 5484), B=1 unchanged within the trial spread (3299 -> 3296). The prediction for B=8
   (-1.8%, from the fixed-token step 4858 -> 4770) was a little optimistic: generated text has more distinct experts
@@ -480,15 +480,15 @@ tensor-core / fragment = 0.9864-0.9871). Their source is kept in prev/exp_tcmx/ 
   builds, 99.9 GB per card, t_gate 0.0503 / 0.1069 / 100%, batch 1 bitwise as the default build; fixed-token step at
   B=8 4742 us against 4686 with the tensor-core kernel (tools/t_b1time.py --batch 8).
 
-## 11.1-11.2 h: one more placement fix, submitted as s0019; machine lost during its evaluation
+## 11.1-11.2 h: one more placement fix, submitted as s0019; pod lost during its evaluation
 - The w13 scale-factor stores (tensor memory, beside the routing phase) spread over three groups of four idle warps
   (12-23) instead of warps 20-23 alone: bitwise the results of s0018; replay at B=8 5383 -> 5345 us per step (-0.7%):
   the routing phase had been waiting for the nine stores. Soaks with 1, 2, 8 distinct sequences clean.
-- The machine was replaced while s0019 was evaluated (clock stopped at 11.23 h); the evaluation is queued for the new machine.
+- The pod was replaced while s0019 was evaluated (clock stopped at 11.23 h); the evaluation is queued for the new pod.
 
-## 11.23 h (clock stopped): s0019 still not evaluated, no machine for more than three hours
-- The machine lost at 04:27 has not been replaced by 07:48 (the status went from epoch 3 to epoch 4, both
-  "starting"); s0019 is queued and will be evaluated when a machine comes. Nothing was started, stopped or worked
+## 11.23 h (clock stopped): s0019 still not evaluated, no pod for more than three hours
+- The pod lost at 04:27 has not been replaced by 07:48 (the status went from epoch 3 to epoch 4, both
+  "starting"); s0019 is queued and will be evaluated when a pod comes. Nothing was started, stopped or worked
   around on my side.
 - engine/ is the s0019 source (git 'tensor-core w13: scale-factor stores ... three warp groups'). It is bitwise
   s0018 in its results; the only difference is which idle warps issue nine tensor-memory stores.
@@ -496,21 +496,21 @@ tensor-core / fragment = 0.9864-0.9871). Their source is kept in prev/exp_tcmx/ 
 - If s0019 comes back valid: nothing to do but record it (engine/ already is that source). If it does not:
   `git checkout 1ccd66b -- engine/` restores the s0018 source (valid, 3298 / 5440 us).
 
-## s0019 (11.3 h, machine epoch 6): valid, 3307 / 5390 us = 1.424x / 1.225x (predicted step_us at B=8 ~5395, HTTP ~5400 +- 40, B=1 ~3298)
-- Evaluated after the machine came back (4.5 h of outage, not counted). In process at B=8: step 5433.5 -> 5392.4 us
+## s0019 (11.3 h, pod epoch 6): valid, 3307 / 5390 us = 1.424x / 1.225x (predicted step_us at B=8 ~5395, HTTP ~5400 +- 40, B=1 ~3298)
+- Evaluated after the pod came back (4.5 h of outage, not counted). In process at B=8: step 5433.5 -> 5392.4 us
   (-0.76%, as the replay said), W1-like 5652 -> 5612, generate 5443 -> 5403; over HTTP 5440 -> 5390, the best B=8
-  figure of the run. B=1 on this machine: step 3257 against 3250 on the previous machine with the same plain kernel (HTTP
-  3307 against 3298): machine-to-machine spread of ~0.3%, not the change (the B=1 kernel does not contain it).
+  figure of the run. B=1 on this pod: step 3257 against 3250 on the previous pod with the same plain kernel (HTTP
+  3307 against 3298): pod-to-pod spread of ~0.3%, not the change (the B=1 kernel does not contain it).
 
 ## s0020 (11.5 h): valid, 3307 / 5378 us = 1.424x / 1.228x (predicted step_us at B=8 ~5380, HTTP ~5380 +- 40)
 - The w13 quantization emit of the tensor-core kernel inlined in its team phase (it was out of line from the time
   both paths shared a kernel). Bitwise the results of s0019. In process at B=8: step 5392.4 -> 5380.9 us (-0.21%, the
   replay had said -0.22%), HTTP 5390 -> 5378: the best B=8 figure of the run. B=1 unchanged (3307.3 -> 3307.5 on
-  this machine; the plain kernel).
+  this pod; the plain kernel).
 
 ## End of the run (11.5 h; engine/ = s0020)
-- Final engine: s0020, 3307 us per token at B=1 and 5378 us per step at B=8 over HTTP on the last machine (1.424x /
-  1.228x SGLang's 4711 / 6604); the same B=1 kernel measured 3296-3300 us on the previous machine (s0013, s0016-s0018).
+- Final engine: s0020, 3307 us per token at B=1 and 5378 us per step at B=8 over HTTP on the last pod (1.424x /
+  1.228x SGLang's 4711 / 6604); the same B=1 kernel measured 3296-3300 us on the previous pod (s0013, s0016-s0018).
   Best headline figure on the board: s0013, 3295.6 us.
 - B=8 since s0013 (in-process step_us, the stable figure): 5522 (s0013) -> 5433 (s0016, tcgen05 w13 with its calls
   out of the kernel body) -> 5434 (s0018, sub-items of 12) -> 5392 (s0019, scale-factor stores over three warp
@@ -523,8 +523,8 @@ tensor-core / fragment = 0.9864-0.9871). Their source is kept in prev/exp_tcmx/ 
   (+0.6%: warps 8-11 are not as idle in the routing phase as 12-23; three groups stay).
 - Without the progress words (-DTC_NOPROG): 5333 us: they cost nothing, they stay.
 
-## 11.8 h: the final engine (s0020 source) checked once more on the last machine
-- Float64 reference regenerated on this machine (tools/ref_dump.py, 2 sequences x 12 positions): tensor-core kernel
+## 11.8 h: the final engine (s0020 source) checked once more on the last pod
+- Float64 reference regenerated on this pod (tools/ref_dump.py, 2 sequences x 12 positions): tensor-core kernel
   forced at B=1/2 (MK_TC_MINB=1) rel median 0.0525 / max 0.0958 / top-1 100%; inside a batch of 8 with a large
   union (t_gate8) 0.0507 / 0.0927 / 100%.
 - Soaks, 12 000 steps each without host synchronisation: B=4 (1 distinct sequence), B=5 (2), B=6 (6), B=7 (3),

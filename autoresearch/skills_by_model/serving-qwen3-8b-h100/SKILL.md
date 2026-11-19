@@ -22,7 +22,7 @@ This run tests that on a real workload.
 A replay of a production trace from Moonshot's Kimi (Mooncake, FAST'25; tool and agent traffic). Each request
 has an arrival time, an input length, an output length and the hashes of its 512-token prefix blocks; prompts
 are synthesized so that requests sharing leading hashes share exactly those tokens. In the replayed window
-(`$MK_TRACE` in the machine, the first 120 s at a nominal 2 requests/s; about 190 requests):
+(`$MK_TRACE` in the pod, the first 120 s at a nominal 2 requests/s; about 190 requests):
 
 - inputs average about 9,000 tokens (median about 6,000, a few above 30,000, cut at 32,768);
 - outputs average about 200 tokens, the median is about 30;
@@ -79,7 +79,7 @@ returns it. Everything else is yours: when to admit, how to batch, how to prefil
    better), reported with TTFT, time between tokens (p50 / p99) and the longest stall, next to the engines.
 
 `mk submit --quick` runs 40 s of the replay with 6 probes (logged, never ranked). The evaluator itself is in your
-workspace as `tools/online_eval.py` (with `tools/_online_runner.py`, `tools/prompts.py`): in the machine,
+workspace as `tools/online_eval.py` (with `tools/_online_runner.py`, `tools/prompts.py`): in the pod,
 `mk exec -- $MK_PY tools/online_eval.py --workspace . --out $MK_EXEC_OUT/r.json --quick` runs the same checks
 without submitting, and `--rates "1 2 4"` sweeps the load. Use it to measure a hypothesis before you spend a
 submission on it, and say in the hypothesis when you did.
@@ -106,8 +106,8 @@ size. Memory budget: weights 15 GB; K and V cost about 147 KB per token of conte
 
 ## Rules that carry over
 
-- GPU work happens in the machine through `mk exec` / `mk profile` / `mk submit`; this machine is a login node.
-  `mk gpu` shows leaked memory. The machine can be replaced at any moment; `engine/build.sh` must rebuild everything.
+- GPU work happens in the pod through `mk exec` / `mk profile` / `mk submit`; this machine is a login node.
+  `mk gpu` shows leaked memory. The pod can be replaced at any moment; `engine/build.sh` must rebuild everything.
 - Not allowed: another inference engine or library in the serving path (vLLM, SGLang, MPK, TensorRT, torch
   modules of the model), caching or hard-coding outputs, recognizing the evaluator's requests, reading the
   evaluator's reference data. The trace and the evaluator's code are open to you; the float64 reference is not.

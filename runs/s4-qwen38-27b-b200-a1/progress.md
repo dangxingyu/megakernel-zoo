@@ -29,7 +29,7 @@ The source of submission `sNNNN` is `src/sNNNN.tgz`; the run's own notes are in 
 
 - status: **error**, no score, at 2.49 agent-hours, parent s0002, category scheduling
 - hypothesis: track B (no format differs from the checkpoint: BF16 weights and activations, float32 recurrent state; what changes is the decode loop). submit()/poll() draft P-1 tokens with the checkpoint's own mtp.* head (not part of the model's function) and run the full model on P positions in one pass (8 at B=1, 4 at B=8): the extra positions are extra MMA columns of the same weight stream, the recurrent state is committed afterwards by replaying the accepted rank-1 updates, and every position is computed with the arithmetic of a single step (multi-position logits are bit-identical to step() logits on 9 (B,P) settings; 1024-token decodes of the three timed seeds are identical to step-by-step greedy at B=1 and B=8). step() and generate() are unchanged (one token per pass, 10.2 ms). Measured in process on the client's seeds: B=1 7.7 tokens per pass on two of the three prompts (two-token loops) and 3.0 on the third (prose), 2158 / 2158 / 5401 us per token; B=8 2.2-2.4 tokens per pass, 8239-8644 us per step before the recurrent-op fix. I expect http_step_us_b1 about 2100 (the median repeat is a loop prompt; the prose repeat would be about 5400) and b8 about 7500, i.e. 4.5x and 1.35x SGLang; the http_tokens gate must stay 8/8 identical.
-- evaluator: pod_lost: this job was running when machines [5, 6] died; it is not run a third time
+- evaluator: pod_lost: this job was running when pods [5, 6] died; it is not run a third time
 
 ### #4 s0004: Exact draft-and-verify: MTP head + context copy, up to 16 positions per pass
 

@@ -317,7 +317,7 @@ units smaller than a tile at the end of a phase.
 Bugs found on the way: (1) my single-run A/B script compiled the current source whatever SRC said, which
 made s0015 look 140 us slower for an hour ("environment drift" that did not exist); (2) the phase
 descriptor grew into the control block in shared memory (hang at step 1): layout now has static_asserts.
-Also: the software trace clock is not a stable time base (tick rate depends on memory traffic); the machine was
+Also: the software trace clock is not a stable time base (tick rate depends on memory traffic); the pod was
 replaced once (epoch 2) and reproduces the same timings.
 
 ## s0016: pipelining across the tile barrier
@@ -837,7 +837,7 @@ submitted one) is 8008. VPF stays 0, ONFLY 1.
 Stress test (tests/stress.py): random batch size 1-8, random start position up to 9216 (incl. around the
 split threshold), step / generate / mixed segments of 1-40 tokens, every segment run twice from the same state
 and compared bitwise. 20 minutes per track: B 6499 segments / 257952 steps, A 5114 / 202936: all identical
-and finite. (The machine was replaced once in the middle; the job re-ran by itself.)
+and finite. (The pod was replaced once in the middle; the job re-ran by itself.)
 Long context with 8 sequences (prompt 8192 + 256 tokens, us per token, repeatable to +-3): base 8010;
 idle blocks pull the first 16 K tiles of every unit into L2 at the start of attention (TOUCH_KL=128): 7954;
 32 tiles: 7955; pulling the start of V during the softmax behind the "K done" stamps: 14300-14600 (1564
@@ -845,14 +845,14 @@ warps polling for 47 us and then loading in the attention blocks' way). K touch 
 Expected: evaluator unchanged; measured s0045 4094.9 (B=1) - within the spread of equal builds.
 
 ## Correction: the long-context K touch (s0045 / s0046) does not hold up - switched off again
-Same-machine A/B over the full workload (prompt 8192 + 1024 tokens, 8 sequences, two runs each): without the
+Same-pod A/B over the full workload (prompt 8192 + 1024 tokens, 8 sequences, two runs each): without the
 touch 8178 / 8176 us per token, with it 8202 / 8202. It had won over the first 256 tokens (8010 -> 7954) and
 loses over the rest (context 8448..9216), so the 256-token A/B was not representative. TOUCH_KL is 0 again:
 the source now behaves as s0043 / s0044 (the two submissions s0045 / s0046 only differ at 3+ sequences beyond
 4096 positions). Also tried and left off: idle blocks prefetching their first gate+up tile during attention
 (NPF_GU: +15..+49 us at B=1).
-Note on comparing numbers: after the machine was replaced (epoch 6 -> 7) the same binary measures ~0.5% slower at
-8 sequences / long context (8138 -> 8177); A/B only within one machine.
+Note on comparing numbers: after the pod was replaced (epoch 6 -> 7) the same binary measures ~0.5% slower at
+8 sequences / long context (8138 -> 8177); A/B only within one pod.
 
 ## Where the run stands (2026-11-11, 27.5 of 40 hours)
 One source (engine/mk.cu + engine/api.py), two builds (engine/TRACK):
@@ -864,7 +864,7 @@ One source (engine/mk.cu + engine/api.py), two builds (engine/TRACK):
   (limit 2x), top-1 0.9507 against HF's 0.9512.
 Both: one launch per step (step) or per generate() call, no host sync in the loop, bitwise batch invariance,
 generate identical to step + argmax, context up to 12288 positions.
-Workloads, us per token, generate() / step() + argmax + host read (tests/workload.py, machine epoch 6):
+Workloads, us per token, generate() / step() + argmax + host read (tests/workload.py, pod epoch 6):
 | | track B B=1 | B=8 | track A B=1 | B=8 |
 | prompt 64 + 1024 | 4173 / 4219 | 4505 / 4549 | 5374 / 5413 | 5795 / 5839 |
 | prompt 8192 + 1024 | 4881 / 4928 | 8138 / 8179 | 6061 / 6100 | 9452 / 9494 |
@@ -898,7 +898,7 @@ s0048 5292.1 / 5569.6 - unchanged, as predicted. Results bitwise as before (whol
 The V pass itself is now bound by its instructions (544 ksteps per block at ~23 cycles: MMA 10 + building
 the bf16 probability operand), not by memory: touching V after the stash instead of before gives the same.
 
-Things measured on the way that did not help (all same-machine A/B; none in the source any more):
+Things measured on the way that did not help (all same-pod A/B; none in the source any more):
 - V loads in flight in the split V pass: 1 / 2 / 3 / 4 / 6 / 8 / 12 per warp -> 4839 / 4903 / 4863 / 4850 / 4863 /
   4918 / 5132 us (prompt 8192 + 256): no trend below 6, worse above. Stays 4.
 - V loads 2 or 4 in flight below 72 position tiles (one-block path): +8 us over the prompt-64 context range.
@@ -926,7 +926,7 @@ scores done 3.04 -> 2.80, phase 7.57 -> 7.43; 576 positions: phase 9.77 -> 10.14
 track B build with 16 spills on top. One more case of "what an SM has in flight delays everything else it asks
 for". Reverted.
 
-## Dead ends after s0048 (same-machine A/B, us per step B=1 / B=8)
+## Dead ends after s0048 (same-pod A/B, us per step B=1 / B=8)
 - V loads of the first VE ksteps requested before the score pass (held in registers; with nt <= 3 VE the
   "K done" stamp is set right after the K loads): VE=4/5/6: +55..+110 / +90..+170, and 39-55 spills. Reverted.
 - 3+ sequences, idle blocks pull the attention blocks' first o tile into L2 after their stash (TOUCH_O=2):
@@ -978,9 +978,9 @@ Only the block itself reads the new row in this phase, and a block barrier makes
 visible to all its threads (CUDA: __syncthreads; PTX: bar.sync has membar.cta semantics; the .cg cache operator
 of the score loads does not change the memory model); other blocks read the row only after the grid barrier,
 before which the block fences its attention output (same for the split path: fence at the end of
-att_k_chunk). Same-machine A/B (3 rounds): 4090 -> 4080 (B=1), 4298 -> 4287 (B=8); bitwise equal; whole suite and
+att_k_chunk). Same-pod A/B (3 rounds): 4090 -> 4080 (B=1), 4298 -> 4287 (B=8); bitwise equal; whole suite and
 the randomised stress test (6 min track B: 1988 segments / 77906 steps; 4 min track A: 1069 / 41706) pass.
-Machine epoch 8 from here (the machine was replaced; absolute numbers shift by ~0.5% between machines).
+Pod epoch 8 from here (the pod was replaced; absolute numbers shift by ~0.5% between pods).
 Measured: s0052 4082.8 / 4283.9 us generate (B=1 / B=8; step 4087.6 / 4296.0) - new best on track B.
 s0053 (track A, with s0051's V batching): 5229.7 / 5414.8 generate (step 5235 / 5429): B=1 -54 us against
 s0050 (more than track B gained: the track A prep has more rounding work between the stores and the fence).
@@ -1018,7 +1018,7 @@ identical logic); with the K/V address sensitivity above, a build or layout chan
   equal, 0 spills; prompt 8192 + 256: B=8 7812 -> 7866, B=1 4769 -> 4823 us per token; short contexts equal.
   Off (switch kept; addressing now goes through KVU / KVT).
 
-## Workloads at the current source (= s0052 track B / s0053 track A logic), machine epoch 8, 33 h
+## Workloads at the current source (= s0052 track B / s0053 track A logic), pod epoch 8, 33 h
 us per token, generate() / step() + argmax + host read of the token (tests/workload.py):
 | workload | track B B=1 | track B B=8 | track A B=1 | track A B=8 |
 | prompt 64 + 1024 | 4155 / 4199 | 4511 / 4557 | 5351 / 5393 | 5639 / 5684 |
@@ -1040,18 +1040,18 @@ phases without a norm (o, down); norm phases keep the block-wide normalising cop
 gridDim.x is now read through inline asm like the thread and block index (the compiler had hoisted it to the
 kernel start and spilled it: 17 local-memory instructions).
 Bitwise equal (cmp_so B=1/2/3/8, both tracks), 0 spills on both tracks, suite + 6-minute stress test pass.
-Same-machine A/B: track B B=1 4082 -> 4062, B=2 4157 -> 4121, B=8 unchanged; track A B=1 5240 -> 5229, B=2
+Same-pod A/B: track B B=1 4082 -> 4062, B=2 4157 -> 4121, B=8 unchanged; track A B=1 5240 -> 5229, B=2
 5344 -> 5317. Measured: s0054 4061.1 (B=1 generate, new best; step 4065.5) / 4297.1 (B=8; within the build
 spread of s0052's 4283.9).
 
 ## s0055 (track A): per-warp input slices for o and down (1-2 sequences)
 Measured 5233.2 / 5403.1 us generate (B=1 / B=8; step 5237 / 5416). B=1 about equal to s0053's 5229.7 (the
-same-machine A/B had -11), B=8 -12.
+same-pod A/B had -11), B=8 -12.
 
 ## No block barrier at the start of a phase with 3+ sequences (ENTRY_NB)
 With 3+ sequences nothing is copied at a phase start (the loaders read the input from L2), but the entry still
 ended with a block barrier: only the 1/rms of norm phases (loader warps 12-19, one per sequence) is produced
-there, and the coordinator reads it only behind the first tile's barrier. Without that barrier (same-machine, 2
+there, and the coordinator reads it only behind the first tile's barrier. Without that barrier (same-pod, 2
 rounds, us per step B=1 / B=2 / B=8): 4059 / 4117 / 4286 and 4063 / 4119 / 4300 -> 4061 / 4118 / 4247 and
 4056 / 4113 / 4249. Bitwise equal.
 Also tried: 1/rms computed by the coordinator warp (loads of 4 sequences at a time) so that loader warps 12-19
@@ -1070,7 +1070,7 @@ than HBM needs. 128 divides all three counts (3 / 12 / 2 tiles per block): all b
 remaining SMs own no tile in these phases (empty ranges; the narrow loop's stashed-first-tile branch now checks
 that the block has a tile). lm_head (9496 tiles: 124 x 72 + 8 x 71) and o (attention blocks first) keep all
 132. Bitwise equal (a tile's arithmetic does not depend on the block that runs it).
-Same-machine A/B (us per step, B=1 / B=2 / B=8): 4059 / 4122 / 4248 -> 4045 / 4101 / 4222 (two rounds, equal).
+Same-pod A/B (us per step, B=1 / B=2 / B=8): 4059 / 4122 / 4248 -> 4045 / 4101 / 4222 (two rounds, equal).
 Track A: 5230 / 5313 / 5425 -> 5250 / 5340 / 5398: worse with 1-2 sequences, better with 8; so the table is
 chosen per width now (NB_MAT for 1-2 sequences: 128 in track B, all blocks in track A; NB_MAT_W = 128 for 3+).
 Measured: s0057 4042.8 / 4212.1 us generate (step 4047.7 / 4224.1) - new best at both batch sizes.
@@ -1082,7 +1082,7 @@ Measured: s0057 4042.8 / 4212.1 us generate (step 4047.7 / 4224.1) - new best at
 - First 1-2 V loads of each warp requested before the score pass (below 72 position tiles; no spills this time):
   B=1 +2..+30, B=8 +5..+19 us per step. Not kept.
 
-## Workloads at s0057 (track B) / s0058 (track A), machine epoch 8, 35.5 h
+## Workloads at s0057 (track B) / s0058 (track A), pod epoch 8, 35.5 h
 us per token, generate() / step() + argmax + host read (tests/workload.py):
 | workload | track B B=1 | track B B=8 | track A B=1 | track A B=8 |
 | prompt 64 + 1024 | 4126 / 4168 | 4447 / 4491 | 5344 / 5384 | 5615 / 5658 |
@@ -1114,7 +1114,7 @@ Correctness on both tracks: evaluator gates passed by every one of the 58 submis
 sequence alone and inside a batch of 8 (also against the split attention path at long context); generate() equal
 to step() + argmax; randomised stress test (batch 1-8, positions up to 9216, step / generate segments repeated
 from the same state) bitwise repeatable.
-Like-for-like workloads (us per token; the table above, machine epoch 8):
+Like-for-like workloads (us per token; the table above, pod epoch 8):
   prompt 64 + 1024:   track A 5344 / 5384 (B=1), 5615 / 5658 (B=8); track B 4126 / 4168, 4447 / 4491
   prompt 8192 + 1024: track A 5918 / 5958, 9162 / 9202;               track B 4705 / 4753, 7909 / 7951
   (generate / step + argmax + host read). Fastest general engine measured by the operators on prompt 64: SGLang
@@ -1141,15 +1141,15 @@ first version was wrong (cmp_so: logits differ): a block that skips the wait can
 increment before every block has counted in for q/k/v, and that increment then completes the q/k/v barrier for
 the attention blocks too early. Fixed by having those blocks check that the q/k/v barrier is complete before
 they count in at the end of attention (by then it always is: one poll). Bitwise equal again.
-Same-machine A/B (us per step B=1 / B=8, 2 x 2 rounds): 4047 / 4225 and 4040 / 4218 -> 4036 / 4198 and 4028 / 4206.
+Same-pod A/B (us per step B=1 / B=8, 2 x 2 rounds): 4047 / 4225 and 4040 / 4218 -> 4036 / 4198 and 4028 / 4206.
 Measured s0059 (track B): 4047.0 / 4196.2 us generate (step 4051.8 / 4207.9): B=8 -16 against s0057, B=1 +4
-(the same-machine A/B had -12..-19 at B=1; within the build spread). Suites and stress tests pass on both tracks.
+(the same-pod A/B had -12..-19 at B=1; within the build spread). Suites and stress tests pass on both tracks.
 Track A (3 rounds): B=1 5231 -> 5261 (+30), B=2 equal, B=8 5407 -> 5380 (-27): in track A it is used only with
 3+ sequences (QKV_NW).
 Measured s0060 (track A, QKV_NOWAIT for 3+ sequences): 5234.3 / 5377.8 us generate (step 5239.3 / 5390.2): B=8
 -23 against s0058, B=1 equal.
 
-## Workloads at s0059 (track B) / s0060 (track A) - the final source - machine epoch 8, ~36.5 h
+## Workloads at s0059 (track B) / s0060 (track A) - the final source - pod epoch 8, ~36.5 h
 us per token, generate() / step() + argmax + host read (tests/workload.py):
 | workload | track B B=1 | track B B=8 | track A B=1 | track A B=8 |
 | prompt 64 + 1024 | 4125 / 4170 | 4415 / 4459 | 5347 / 5385 | 5638 / 5681 |
@@ -1167,23 +1167,23 @@ s0053 5229.7 (B=1) / s0060 5377.8 (B=8).
 - Attention blocks waiting only for the blocks that own their q/k/v tiles (each block stamps its q/k/v rows as
   stored; an attention block polls the ~17 stamps of its producers instead of the barrier counter): bitwise
   equal, 0 spills, but B=1 +60..+83, B=2 +54..+82, B=8 +50..+56 us. Like the flag barrier after attention:
-  polling per-block stamps costs more than the one counter. Reverted. (Machine epoch 9 from here.)
+  polling per-block stamps costs more than the one counter. Reverted. (Pod epoch 9 from here.)
   Second version with the table entries and the stamps of each lane loaded together (one round trip per poll):
   +25..+35 us (6 spills). Dropped.
-- Track A, 1-2 sequences, 128-block tables per phase (same-machine, us per step B=1): all on 132 blocks 5233;
+- Track A, 1-2 sequences, 128-block tables per phase (same-pod, us per step B=1): all on 132 blocks 5233;
   gate+up on 128: 5251; down on 128: 5234; q/k/v on 128: 5234. Track A keeps 132 blocks with 1-2 sequences
   (16-bit weights: each SM must stream 33% more bytes per tile; with 4 SMs fewer the per-SM rate limits).
-- Track A parameter sweep (same-machine, us per step B=1 / B=8): base 5233 / 5380; CAP_H 3: 5250 / 5391; CAP_H 6:
+- Track A parameter sweep (same-pod, us per step B=1 / B=8): base 5233 / 5380; CAP_H 3: 5250 / 5391; CAP_H 6:
   5253 / 5381; O2PF 9: 5233 / 5380; NPF 3: 5233 / 5388; SG 3: 5275 / 5389. Unchanged.
-- Clean rebuild through engine/build.sh in a fresh machine (epoch 9) for both tracks: builds, test_engine passes,
+- Clean rebuild through engine/build.sh in a fresh pod (epoch 9) for both tracks: builds, test_engine passes,
   stats() reports the track and its formats.
-- Track B, attention-phase stash wait for more sequences (ATT_WAIT_MAX_B 4 / 8; same machine, B=8): 4185 / 4232 us
+- Track B, attention-phase stash wait for more sequences (ATT_WAIT_MAX_B 4 / 8; same pod, B=8): 4185 / 4232 us
   generate against 4185; with ATT_POLITE 0 at 8: 4207. Unchanged (2). (B=1 varied by +-25 us between these
   builds although its code path is the same: codegen spread.)
 - Split threshold 64 / 60 position tiles instead of 72 (prompt-64 range, B=1, 2 rounds each): 4102 / 4103,
   4105 / 4126 against 4127 / 4127 - the differences appear from 64 positions on, where the threshold plays no
   role. Left at 72.
-- Measurement spread: the same library, six separate processes on one machine: time_step generate B=1 4038-4053,
+- Measurement spread: the same library, six separate processes on one pod: time_step generate B=1 4038-4053,
   B=8 4185-4212 us. Process-to-process (allocation-dependent) spread is ~15 us at B=1 and ~25 at B=8; A/B
   differences below that in this journal are not significant on their own.
 - QKV_NOWAIT confirmed with 6 interleaved rounds (track B, us per step, mean): B=1 4050.5 -> 4040.9, B=8
@@ -1222,21 +1222,21 @@ s0053 5229.7 (B=1) / s0060 5377.8 (B=8).
   4067, B=2 4092 -> 4118, B=8 4217 -> 4228 us per step. Reverted.
 - One cold o tile (not two) for the attention blocks with 6+ sequences (others then up to 3): B=8 4191 -> 4253
   us per step (3 rounds). Two stays.
-- s0061 = s0059's source evaluated again (machine epoch 9): 4026.1 / 4193.9 us generate (step 4030.4 / 4205.2)
-  against s0059's 4047.0 / 4196.2 on epoch 8: the headline of one unchanged engine moves by ~20 us between machines.
+- s0061 = s0059's source evaluated again (pod epoch 9): 4026.1 / 4193.9 us generate (step 4030.4 / 4205.2)
+  against s0059's 4047.0 / 4196.2 on epoch 8: the headline of one unchanged engine moves by ~20 us between pods.
 - s0062 = s0060's source (track A) evaluated again: 5236.6 / 5372.3 us generate (step 5243.1 / 5385.1),
   against 5234.3 / 5377.8.
 - o-phase prefetch sweep (3 rounds): NPF_ATT 9 / 3, O2PF 3, NPF_STW 12 against base; then NPF_ATT 2 / 3 / 4
   against 6 with 5 rounds (us per step, mean B=1 / B=8): 4048 / 4204 -> 4040 / 4193, 4043 / 4195, 4043 / 4196.
   The attention blocks' L2 prefetch of their cold o tile is now 3 loads per warp (was 6).
 Measured s0063 (track B, NPF_ATT 3): 4020.0 / 4180.3 us generate (step 4025.1 / 4192.2) against s0061's
-4026.1 / 4193.9 on the same machine epoch - new best at both batch sizes.
+4026.1 / 4193.9 on the same pod epoch - new best at both batch sizes.
 - Track A, NPF_ATT 6 / 3 / 2 (4 rounds, generate min B=1 / B=8): 5228 / 5374, 5228 / 5356, 5226 / 5357. Measured
   s0064 (track A, NPF_ATT 3): 5235.2 / 5370.2 us generate (step 5241.8 / 5383.4) - equal to s0062.
 - Further prefetch depths, track B (4 rounds, generate min B=1 / B=8): base 4019 / 4182; NPF_ST 2: 4037 / 4180;
   NPF_ST 6: 4021 / 4181; NPF_DN 2: 4020 / 4185; WPF_DEPTH 2: 4031 / 4183. Unchanged.
 
-## Workloads at s0063 (track B) / s0064 (track A) - the final source - machine epoch 9, ~38.7 h
+## Workloads at s0063 (track B) / s0064 (track A) - the final source - pod epoch 9, ~38.7 h
 us per token, generate() / step() + argmax + host read:
 | workload | track B B=1 | track B B=8 | track A B=1 | track A B=8 |
 | prompt 64 + 1024 | 4120 / 4163 | 4407 / 4452 | 5343 / 5384 | 5636 / 5680 |
@@ -1263,12 +1263,12 @@ Evaluator, best per track: track B s0063 4020.0 / 4180.3 us per step (generate, 
   no slow-mode sample this time, but three small modes (~7690 / ~7730 / ~7780) that do not follow the virtual
   addresses (offsets mod 1 GB of the K/V buffers vary independently of the mode; physical placement is not
   visible from here). Left as an open item: about 1 in 6 processes earlier at ~8400, otherwise 7690-7800.
-- s0065 = the committed final source (s0063's kernel + host-side diagnostic export), track B, same machine epoch 9:
+- s0065 = the committed final source (s0063's kernel + host-side diagnostic export), track B, same pod epoch 9:
   4047.3 / 4174.4 us generate (step 4051.2 / 4186.5) against s0063's 4020.0 / 4180.3: B=1 +27 with the same
   kernel - another sample of the ~20-30 us evaluator spread between evaluations of one engine.
 - s0066 = the committed final source built as track A: 5235.7 / 5367.5 us generate (step 5241.5 / 5380.5),
   equal to s0064. Both final builds are on the board as s0065 (B) and s0066 (A).
-- Last check of the committed source (track B, machine epoch 9): whole suite passes, 0 spills; time_step generate
+- Last check of the committed source (track B, pod epoch 9): whole suite passes, 0 spills; time_step generate
   4019.8 / 4179.8 us (B=1 / B=8).
 - Same for track A: whole suite passes, 0 spills; time_step generate 5228.9 / 5366.9 us.
 - Last stress tests of the committed source (4 min each): track B 1356 segments / 52758 steps, track A 1071 /

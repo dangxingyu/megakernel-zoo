@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sourced by every script. Everything a machine writes is under $MK_ROOT on the node's local disk and dies
-# with the machine; what must survive goes to the object store ($MK_S3) through scripts/store.py.
+# Sourced by every script. Everything a pod writes is under $MK_ROOT on the node's local disk and dies
+# with the pod; what must survive goes to the object store ($MK_S3) through scripts/store.py.
 export MK_ROOT="${MK_ROOT:-/tmp/mk}" MK_T0="${MK_T0:-$(date +%s)}"
 export MK_S3="${MK_S3:-}"   # empty: no object store; weights come from Hugging Face and nothing is uploaded
 export HF_HOME="$MK_ROOT/hf" XDG_CACHE_HOME="$MK_ROOT/cache" UV_CACHE_DIR="$MK_ROOT/uv-cache"
@@ -8,7 +8,7 @@ export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 HF_HUB_DISABLE_TELEMETRY=1 PYTHONDON
 export MK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export MK_TOOLS_PY="$MK_ROOT/tools/bin/python"
 mkdir -p "$MK_ROOT"/{logs,models,venvs,run} "$HF_HOME"
-# Jobs share the node's network namespace: a fixed port collides with other jobs on the node, and a client can
+# Pods share the node's network namespace: a fixed port collides with other jobs on the node, and a client can
 # end up talking to somebody else's server. Every job takes a free port of its own.
 export MK_PORT="${MK_PORT:-$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}"
 
@@ -32,7 +32,7 @@ env_report() {
 }
 
 # mk_hw: the card tag (h100 | b200) used in file names and for the card's parameters (eval/modelinfo.py CARDS):
-# $MK_HW when set, else from the name the driver reports for the machine's card.
+# $MK_HW when set, else from the name the driver reports for the pod's card.
 mk_hw() {
   if [ -n "${MK_HW:-}" ]; then echo "$MK_HW" | tr 'A-Z' 'a-z'; return; fi
   case "$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | tr 'A-Z' 'a-z')" in
