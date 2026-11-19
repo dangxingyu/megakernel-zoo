@@ -27,7 +27,7 @@ stage "eval venv" ok $t
 name="$(echo "$MK_MODEL" | tr '/A-Z' '-a-z')"
 short="$(echo "${MK_MODEL##*/}" | tr 'A-Z' 'a-z')"
 hw="$(mk_hw)"; export MK_HW="$hw"
-ref="$MK_ROOT/ref/$name" key="$MK_S3/ref/$name-${MK_REF_VERSION:-v2}"
+ref="$MK_ROOT/ref/$name" key="$MK_S3/ref/$name-${MK_REF_VERSION:-v3}"
 echo "MK_ENV model=$MK_MODEL short=$short hw=$hw model_dir=$model"
 "$py" eval/modelinfo.py "$model" --hw "$hw" | cut -c1-3000
 t=$(date +%s)
@@ -41,6 +41,24 @@ else
   stage "reference made" ok $t
 fi
 cat "$ref/meta.json" | tr -d '\n' | cut -c1-1500; echo
+# suite v2: the hidden reference. Natural-text prompts (prose, code, word problems) drawn with a seed that is not in the
+# repository (MK_HIDDEN_SEED), positions to MK_HIDDEN_LONG; kept in the store only, never in a run's workspace.
+hidden="$MK_ROOT/ref/$name-hidden" hkey="$MK_S3/ref/$name-hidden-${MK_HIDDEN_VERSION:-v1}"
+if [ "${MK_HIDDEN:-1}" != 0 ]; then
+  t=$(date +%s)
+  if [ -z "${MK_REF_REMAKE:-}" ] && store has "$hkey" > /dev/null 2>&1; then
+    store get "$hkey" "$hidden" > "$MK_ROOT/logs/ref-hidden-get.log" 2>&1 && stage "hidden reference from store" ok $t
+  else
+    MK_NATURAL_SEED="${MK_HIDDEN_SEED:?MK_HIDDEN_SEED must be set to make a hidden reference}" "$py" eval/natural_prompts.py "$model" "$MK_ROOT/run/hidden-prompts.json" 64 24 2>&1 | grep MK_ENV
+    "$py" eval/make_reference.py --model-dir "$model" --out "$hidden" --dtype "${MK_REF_DTYPE:-auto}" --cards "${MK_REF_CARDS:-1}" \
+      --natural "$MK_ROOT/run/hidden-prompts.json" --sequences 8 --prompt-tokens 64 --check-tokens 192 \
+      --long-tokens "${MK_HIDDEN_LONG:-2000}" --long-every 16 2>&1 | grep -E "MK_REF|Error|error|Traceback" | cut -c1-600
+    rm -f "$MK_ROOT/run/hidden-prompts.json"
+    if [ -f "$hidden/meta.json" ]; then store put "$hidden" "$hkey" "$MK_S3" 2>&1 | tail -n 1 | cut -c1-200; stage "hidden reference made" ok $t
+    else stage "hidden reference" failed $t; fi
+  fi
+  [ -f "$hidden/meta.json" ] && export MK_REF_HIDDEN="$hidden" && python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print('MK_HIDDEN ' + json.dumps({k: m.get(k) for k in ('sequences','prompt_tokens','check_tokens','long_tokens','reference_dtype','hf_bf16_rel_l2','hf_bf16_kl','hf_bf16_top1_agreement','hf_bf16_rel_l2_long','hf_bf16_kl_long')}))" "$hidden/meta.json"
+fi
 if [ -n "${MK_GATE_STUDY:-}" ]; then   # where the BF16 path's distance from the reference comes from (eval/gate_study.py)
   t=$(date +%s)
   "$py" eval/gate_study.py --model-dir "$model" --ref "$ref" 2>&1 | grep -E "MK_GATE|Error|error|Traceback|File " | cut -c1-4000

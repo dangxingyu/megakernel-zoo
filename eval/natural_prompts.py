@@ -20,7 +20,7 @@ model_dir, out = sys.argv[1], sys.argv[2]
 n_tok = int(sys.argv[3]) if len(sys.argv) > 3 else 64
 count = int(sys.argv[4]) if len(sys.argv) > 4 else 48
 tok = Tokenizer.from_file(str(Path(model_dir) / "tokenizer.json"))
-rng = random.Random(20261115)
+rng = random.Random(int(__import__("os").environ.get("MK_NATURAL_SEED") or 20261115))  # suite v2: the hidden set uses its own seed
 
 
 def fetch(url):

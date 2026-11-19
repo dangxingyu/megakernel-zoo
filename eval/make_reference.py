@@ -67,6 +67,22 @@ def rel_l2(a: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
     return (a - ref).norm(dim=-1) / ref.norm(dim=-1)
 
 
+def kl(a: torch.Tensor, ref: torch.Tensor, chunk: int = 64) -> torch.Tensor:
+    """Per position: KL(softmax(ref) || softmax(a)) in nats, in float64 (the reference is the true distribution)."""
+    a2, r2 = a.reshape(-1, a.shape[-1]), ref.reshape(-1, ref.shape[-1])
+    out = torch.empty(a2.shape[0], dtype=torch.float64)
+    for i in range(0, a2.shape[0], chunk):
+        lr = torch.log_softmax(r2[i:i + chunk].double(), -1)
+        la = torch.log_softmax(a2[i:i + chunk].double(), -1)
+        out[i:i + chunk] = (lr.exp() * (lr - la)).sum(-1)
+    return out.reshape(a.shape[:-1])
+
+
+def spread(x: torch.Tensor) -> dict:
+    flat = x.flatten().sort().values
+    return {"median": flat[len(flat) // 2].item(), "p99": flat[int(0.99 * len(flat))].item(), "max": flat[-1].item()}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-dir", required=True)
@@ -79,6 +95,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=7_000_000)
     parser.add_argument("--ids", default=None, help="int64 [R, T_long] .npy: use these token sequences instead of generating them. The continuation of a prompt "
                         "differs between machines at near-ties, and with it the reference; fixed sequences make the evaluation the same everywhere")
+    parser.add_argument("--natural", default=None, help="JSON list of prompt token-id lists (eval/natural_prompts.py): start the sequences "
+                        "from these prompts (prose, code, word problems) instead of eval/prompts.py's word lists; --prompt-tokens is their length")
     parser.add_argument("--dtype", choices=["auto", "float64", "float32"], default="auto")
     parser.add_argument("--cards", type=int, default=1, help="spread the reference model over this many cards (layer after layer) when "
                         "it fits no single card; the BF16 path always runs on card 0 alone")
@@ -92,7 +110,12 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     tok = prompts.load(args.model_dir)
     R, P, T, TL = args.sequences, args.prompt_tokens, args.check_tokens, args.long_tokens
-    start = torch.tensor([prompts.make(tok, P, args.seed + i)["ids"] for i in range(R)], dtype=torch.long, device="cuda")
+    if args.natural:
+        pool = json.loads(Path(args.natural).read_text())
+        start = torch.tensor([list(p)[:P] for p in pool[:R]], dtype=torch.long, device="cuda")
+        R = start.shape[0]
+    else:
+        start = torch.tensor([prompts.make(tok, P, args.seed + i)["ids"] for i in range(R)], dtype=torch.long, device="cuda")
 
     t0 = time.time()
     model = hf_text.load(args.model_dir, torch.bfloat16)
@@ -155,6 +178,7 @@ def main() -> int:
     np.save(out / "long_logits64.npy", long64.numpy())
     np.save(out / "hf_bf16_err.npy", err.numpy().astype(np.float32))                         # [R, T]: the BF16 path's error at each position,
     np.save(out / "hf_bf16_long_err.npy", rel_l2(bf16_long, long64).numpy().astype(np.float32))  # [R, long positions]: for reading a failed gate
+    kl_check, kl_long = kl(bf16_logits, logits64), kl(bf16_long, long64)                    # suite v2: the BF16 path's KL from the reference
     long_flat = rel_l2(bf16_long, long64).flatten().sort().values
     long_agree = (bf16_long.argmax(-1) == long64.argmax(-1)).float().mean().item()
     flat = err.flatten().sort().values
@@ -168,6 +192,7 @@ def main() -> int:
             "hf_bf16_rel_l2_long": {"median": long_flat[len(long_flat) // 2].item(), "p99": long_flat[int(0.99 * len(long_flat))].item(),
                                     "max": long_flat[-1].item()},
             "hf_bf16_top1_agreement_long": long_agree,
+            "hf_bf16_kl": spread(kl_check), "hf_bf16_kl_long": spread(kl_long), "prompt_source": "natural" if args.natural else "word lists",
             "torch": torch.__version__, "transformers": transformers.__version__, "gpu": torch.cuda.get_device_name(0),
             "made_unix": time.time()}
     (out / "meta.json").write_text(json.dumps(meta, indent=1) + "\n")

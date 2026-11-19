@@ -268,15 +268,18 @@ For a model that is not in Hugging Face `transformers`, a reference implementati
 ## Repository layout
 
 ```
-engines/        one directory per engine: CUDA source, build script, Python binding (engine/api.py)
-mkserve/        OpenAI-compatible server and the engine registry
-eval/           evaluator, reference builder, benchmark client, extended checks
-scripts/        environment setup, same-card comparison, server tests
+engines/        one directory per engine: CUDA source, build script, Python binding (engine/api.py)   engines/README.md
+mkserve/        OpenAI-compatible server and the engine registry (registry.json)
+eval/           evaluator, reference builder, benchmark client, extended checks                     eval/README.md
+scripts/        environment setup, same-GPU comparison, server tests, check_engine.py
 baselines/      how the general engines were installed and launched
 autoresearch/   the local optimization loop: tools, skills, prompts
 starter/        the reference model behind the engine contract (where a run starts)
-runs/           the record of every agent run
+runs/           the record of every agent run                                                       runs/README.md
 ```
+
+To contribute an engine, a model or a fix, see [CONTRIBUTING.md](CONTRIBUTING.md); `python scripts/check_engine.py --all`
+runs the static checks every engine in `engines/` passes.
 
 ## Limitations
 

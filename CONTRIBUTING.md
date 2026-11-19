@@ -1,61 +1,129 @@
 # Contributing
 
-Contributions of new engines, new models and cards, and improvements to the evaluator are welcome. The bar for an
-engine is the same one ours had to meet: it is correct against the float64 reference, and its speed is measured by the
-evaluator of this repository.
+Contributions are welcome in four forms, from most to least common:
 
-## Adding or improving an engine
+| You want to | Start at |
+|---|---|
+| add a faster engine for a model and GPU that are already supported | [Add or improve an engine](#add-or-improve-an-engine) |
+| support a new model or a new GPU | [A new model or GPU](#a-new-model-or-gpu) |
+| improve the evaluator, `mkserve` or the autoresearch kit | [Evaluator, server and kit](#evaluator-server-and-kit) |
+| report a wrong answer, a crash or a slow engine | [Reporting a problem](#reporting-a-problem) |
 
-1. **Set up the evaluator** for the model on your card (weights, a float64 reference, the environment):
+The bar for an engine is the one ours had to meet: its logits match the FP64 reference within the tolerances of the
+evaluator in this repository, and its speed is measured by the same evaluator on the GPU it was written for.
 
-   ```bash
-   bash scripts/eval_selftest.sh <hf-org>/<model>
-   ```
+## Add or improve an engine
 
-2. **Produce the engine.** Start a run with the autoresearch kit, or write the engine by hand against the contract in
-   [`starter/engine/api.py`](starter/engine/api.py):
+**1. Set up the evaluator** for the model on your GPU. This downloads the weights, builds the FP64 reference and the
+environment, and checks that the starter engine passes:
 
-   ```bash
-   python autoresearch/start.py my-run --model <hf-org>/<model> --card <h100|b200> --hours 12
-   # or start from an engine of this repository: --engine engines/<model>_<card>/offline-a
-   ```
+```bash
+bash scripts/eval_selftest.sh <hf-org>/<model>
+```
 
-3. **Evaluate it** and keep the result file:
+**2. Write the engine.** Either let an agent do it with the autoresearch kit, or write it yourself against the contract
+in [`starter/engine/api.py`](starter/engine/api.py). An engine of this repository is a good starting point:
 
-   ```bash
-   python eval/kernel_eval.py --workspace <engine directory> --out result.json     # status must be "valid"
-   python eval/release_check.py --help                                             # the extended checks
-   ```
+```bash
+python autoresearch/start.py my-run --model <hf-org>/<model> --card <h100|b200> --hours 12
+python autoresearch/start.py my-run --model <hf-org>/<model> --card <h100|b200> --engine engines/<model>_<gpu>/offline-a
+```
 
-4. **Open a pull request** with
-   - the engine directory under `engines/<model>_<card>/<name>/` (source only: `engine/api.py`, `engine/build.sh`, the
-     CUDA source, `engine/TRACK`);
-   - an entry in [`mkserve/registry.json`](mkserve/registry.json) (track, kind, limits, where it came from);
-   - `result.json` from step 3, the card it was measured on, and the versions of the general engines you compared with
-     (`scripts/compare.sh` runs that comparison);
-   - for a track-B engine, a statement of what differs from track A and whether the logits are bit-identical to the
-     track-A build of the same source.
+[`engines/README.md`](engines/README.md) describes the layout of an engine directory and the two contracts (offline:
+`reset`/`step`; online: `submit`/`poll`).
+
+**3. Evaluate it.** The result must say `"status": "valid"`. The hidden set of natural text, code and word problems is
+not in this repository; without it the evaluator skips that gate with a warning, and we run it on every pull request.
+
+```bash
+python eval/kernel_eval.py --workspace <engine directory> --out result.json
+
+# the release checks and the same-GPU comparison take the engine as an archive in rescore_inbox/
+mkdir -p rescore_inbox && tar czf rescore_inbox/my-engine.tgz -C <engine directory> .
+export MK_MODEL=<hf-org>/<model> MK_HW=<h100|b200>
+RELCHECK_SOURCES=my-engine bash scripts/release_check.sh             # every batch size, slot order, neighbors,
+                                                                    # repetition, full context, restart
+COMPARE_SYSTEMS="ours:my-engine sglang vllm" bash scripts/compare.sh  # vLLM and SGLang over HTTP, same client
+```
+
+**4. Add it to the repository:**
+
+- the source under `engines/<model>_<gpu>/<name>/` (naming rules in [`engines/README.md`](engines/README.md));
+- an entry in [`mkserve/registry.json`](mkserve/registry.json) (fields below);
+- then run the static checks, which must all pass:
+
+```bash
+python scripts/check_engine.py engines/<model>_<gpu>/<name>
+```
+
+**5. Open a pull request.** The template asks for `result.json`, the GPU (`nvidia-smi -L`), the versions of the general
+engines you compared with, and, for a track-B engine, what differs from track A and whether the logits are
+bit-identical to the track-A build of the same source.
+
+### Registry entry
+
+```jsonc
+"offline-b": {
+  "track": "B",                                  // A or B, as in engine/TRACK
+  "kind": "offline",                             // offline (reset/step) or online (submit/poll)
+  "source": "../engines/qwen3-8b_h100/offline-b",
+  "sha256": "b76d9f48be969976",                  // first 16 hex digits; scripts/check_engine.py prints the value
+  "from": "your name or run, and what it is based on",
+  "max_batch": 8,
+  "max_context": 2048,
+  "what": "one sentence: formats that differ from the checkpoint, bit-identity with track A, limits",
+  "verified": "date: what was checked, on which GPU"
+}
+```
+
+The model's `"default"` engine changes only when the new engine passes every check and is faster at batch size 1 and 8.
 
 ## Rules an engine has to follow
 
 - **The model's function.** For every input the engine returns what the checkpoint defines: no quantization, pruning,
   distillation or approximation of weights or activations, and no part of the model skipped.
-- **Track A** keeps the checkpoint's weights, number formats and data flow; every operator runs for every token and one
-  token is produced per pass. **Track B** may change storage and load-time precomputation if the function is unchanged
-  in exact arithmetic. The two are reported separately.
-- **Self-contained.** No general inference engine or library model code in the timed path; everything is rebuilt from
-  the submitted source by `engine/build.sh`.
-- **No knowledge of the evaluator.** An engine must not recognise the evaluator's inputs, cache outputs, or read the
+- **Track A** keeps the checkpoint's weights, number formats and data flow; every operator runs for every token and
+  one token is produced per pass. **Track B** may change how the model is stored and what is computed at load time, if
+  the function is unchanged in exact arithmetic. The two are reported separately.
+- **Self-contained.** No general inference engine or library model code (vLLM, SGLang, transformers, ...) in the timed
+  path; everything is rebuilt from the submitted source by `engine/build.sh`, and nothing large is committed (weights
+  and tables are made at load time).
+- **No knowledge of the evaluator.** An engine must not recognize the evaluator's inputs, cache outputs, or read the
   reference.
 
-## A new model
+## A new model or GPU
 
-A model that Hugging Face `transformers` can run needs nothing beyond step 1. For any other model, add a reference
-implementation that `eval/make_reference.py` can run in float64 (or float32 when float64 does not fit the card);
-[`eval/inkling2_ref.py`](eval/inkling2_ref.py) is an example.
+**A model that Hugging Face `transformers` can run** needs only step 1 above ([`eval/modelinfo.py`](eval/modelinfo.py)
+reads the architecture from the checkpoint's `config.json`), plus one small file:
+`eval/baselines_<model>_<gpu>.json`, the time per token of vLLM and SGLang on that GPU as measured by
+`scripts/compare.sh`, so that runs and their board know what to beat. The existing files show the format.
+
+**Any other model** needs a reference implementation that [`eval/make_reference.py`](eval/make_reference.py) can run
+in FP64 (FP32 when FP64 does not fit); [`eval/inkling2_ref.py`](eval/inkling2_ref.py) is an example.
+
+**A new GPU** needs an entry in the `CARDS` table of [`eval/modelinfo.py`](eval/modelinfo.py) (memory, bandwidth,
+architecture) and, for `mkserve`, the name `nvidia-smi` reports, mapped in `detect_card` in
+[`mkserve/__main__.py`](mkserve/__main__.py).
+
+[`eval/README.md`](eval/README.md) maps the evaluator's files.
+
+## Evaluator, server and kit
+
+- **Evaluator** ([`eval/`](eval)): a change that makes a check stricter must say which engines of this repository
+  still pass it (`python scripts/check_engine.py --all` for the static part, `scripts/release_check.sh` on a GPU for
+  the rest). A check that can fail on a correct engine needs a test that shows it does not.
+- **Server** ([`mkserve/`](mkserve)): `bash scripts/mkserve_test.sh` runs its tests; a change to the API must keep
+  `scripts/mkserve_check.py` passing against every registered engine you can run.
+- **Kit** ([`autoresearch/`](autoresearch)): prompts and skills name the rules and the tools, not optimization
+  techniques; measured findings go into [`autoresearch/skills/megakernel/playbook.md`](autoresearch/skills/megakernel/playbook.md)
+  with the run and submission they come from.
 
 ## Reporting a problem
 
-Open an issue with the model, the card (`nvidia-smi`), the CUDA toolkit and PyTorch versions, the command, and the
-output. For a wrong answer from a served engine, include the request and the output of
-`python scripts/mkserve_check.py --port <port> --engine <name> --model <model>`.
+Open an issue (there are templates for a wrong answer or crash, and for proposing an engine). Include the model, the GPU
+(`nvidia-smi -L`), the CUDA toolkit and PyTorch versions, the command and its output. For a wrong answer from a served
+engine, also include the request and the output of:
+
+```bash
+python scripts/mkserve_check.py --port <port> --engine <name> --model <model>
+```

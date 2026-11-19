@@ -80,6 +80,29 @@ def rel_l2(a: np.ndarray, ref: np.ndarray) -> np.ndarray:
     return np.linalg.norm(a - ref, axis=-1) / np.linalg.norm(ref, axis=-1)
 
 
+def kl(a: np.ndarray, ref: np.ndarray, chunk: int = 64) -> np.ndarray:
+    """Per position: KL(softmax(ref) || softmax(a)) in nats, float64 (suite v2)."""
+    a2, r2 = a.reshape(-1, a.shape[-1]), ref.reshape(-1, ref.shape[-1])
+    out = np.empty(a2.shape[0])
+    for i in range(0, a2.shape[0], chunk):
+        lr = r2[i:i + chunk].astype(np.float64); lr = lr - lr.max(-1, keepdims=True); lr = lr - np.log(np.exp(lr).sum(-1, keepdims=True))
+        la = a2[i:i + chunk].astype(np.float64); la = la - la.max(-1, keepdims=True); la = la - np.log(np.exp(la).sum(-1, keepdims=True))
+        out[i:i + chunk] = (np.exp(lr) * (lr - la)).sum(-1)
+    return out.reshape(a.shape[:-1])
+
+
+KL_FACTOR = TOLERANCE ** 2  # KL grows with the square of a small logit error: 2x the error is about 4x the KL
+KL_FLOOR = 1e-6             # nats: below this a ratio to the BF16 path's KL means nothing
+
+
+def kl_gate(engine: np.ndarray, ref: np.ndarray, hf: dict | None) -> dict:
+    got = stats(kl(engine, ref))
+    if not hf:
+        return {"pass": True, "informative_only": True, "kl": got, "note": "the reference has no BF16 KL (made before suite v2)"}
+    limit = {k: max(KL_FACTOR * hf[k], KL_FLOOR) for k in ("median", "p99")}
+    return {"pass": all(got[k] <= limit[k] for k in ("median", "p99")), "kl": got, "limit": limit, "hf_bf16": hf}
+
+
 def stats(x: np.ndarray) -> dict:
     flat = np.sort(x.reshape(-1))
     return {"median": float(flat[len(flat) // 2]), "p99": float(flat[int(0.99 * len(flat))]), "max": float(flat[-1])}
@@ -161,6 +184,8 @@ def main() -> int:
     parser.add_argument("--tools-python", default=os.environ.get("MK_TOOLS_PY") or _SETUP.get("tools_python"))
     parser.add_argument("--model-dir", default=os.environ.get("MK_MODEL_DIR"))
     parser.add_argument("--ref", default=os.environ.get("MK_REF_DIR") or _SETUP.get("ref"))
+    parser.add_argument("--ref-hidden", default=os.environ.get("MK_REF_HIDDEN") or _SETUP.get("ref_hidden"),
+                        help="suite v2: a second reference (natural-text prompts, longer positions) the run never sees; only aggregates are reported")
     parser.add_argument("--baselines", default=os.environ.get("MK_BASELINES") or _SETUP.get("baselines"))
     parser.add_argument("--python", default=os.environ.get("MK_EVAL_PY") or _SETUP.get("python") or sys.executable)
     parser.add_argument("--scratch", default=os.environ.get("MK_EVAL_SCRATCH", "/dev/shm"))
@@ -189,10 +214,11 @@ def main() -> int:
         print("MK_EVAL " + json.dumps({k: result.get(k) for k in ("status", "headline", "milestones_passed", "seconds", "message")}))
         return 0
 
-    def child(mode: str, extra: list[str], timeout: float, prefix: list[str] | None = None) -> tuple[dict, dict | None]:
-        out = scratch / f"{mode}.json"
+    def child(mode: str, extra: list[str], timeout: float, prefix: list[str] | None = None, ref_dir: str | None = None,
+              name: str | None = None) -> tuple[dict, dict | None]:
+        out = scratch / f"{name or mode}.json"
         cmd = (prefix or []) + [args.python, str(HERE / "_engine_runner.py"), "--workspace", workspace, "--model-dir", args.model_dir,
-                                "--ref", args.ref, "--mode", mode, "--out", str(out)] + extra
+                                "--ref", ref_dir or args.ref, "--mode", mode, "--out", str(out)] + extra
         done = run(cmd, timeout * on["timeout_scale"], cwd=workspace)
         return done, (json.loads(out.read_text()) if done["rc"] == 0 and out.exists() else None)
 
@@ -225,19 +251,21 @@ def main() -> int:
     batched = np.load(scratch / "check.batched.npy")
     free = np.load(scratch / "check.free.npy")
     finite = bool(np.isfinite(single).all() and np.isfinite(batched).all())
-    limit = {k: TOLERANCE * meta["hf_bf16_rel_l2"][k] for k in ("median", "max")}
+    limit = {k: TOLERANCE * meta["hf_bf16_rel_l2"][k] for k in ("median", "p99")}  # suite v2: p99, not the max (a heavy tail)
     gates = result["gates"]
     gates["finite"] = {"pass": finite}
     if finite:
         err_single, err_batched = stats(rel_l2(single, ref[:n_check])), stats(rel_l2(batched, ref))
-        gates["numeric"] = {"pass": all(e[k] <= limit[k] for e in (err_single, err_batched) for k in ("median", "max")),
-                            "rel_l2_single": err_single, "rel_l2_batched": err_batched, "limit": limit}
+        gates["numeric"] = {"pass": all(e[k] <= limit[k] for e in (err_single, err_batched) for k in ("median", "p99")),
+                            "rel_l2_single": err_single, "rel_l2_batched": err_batched, "limit": limit,
+                            "max_over_5x_bf16": max(err_single["max"], err_batched["max"]) > 5 * meta["hf_bf16_rel_l2"]["max"]}
+        gates["kl"] = kl_gate(batched, ref, meta.get("hf_bf16_kl"))
         ref_top1 = ref.argmax(-1)
         agree = float(((single.argmax(-1) == ref_top1[:n_check]).mean() + (batched.argmax(-1) == ref_top1).mean()) / 2)
         gates["tokens"] = {"pass": agree >= meta["hf_bf16_top1_agreement"] - 0.01, "top1_agreement_with_float64": agree,
                            "hf_bf16": meta["hf_bf16_top1_agreement"]}
         diff = np.abs(single - batched[:n_check])
-        gates["batch"] = {"pass": bool(stats(rel_l2(single, batched[:n_check]))["max"] <= limit["max"]),
+        gates["batch"] = {"pass": bool(stats(rel_l2(single, batched[:n_check]))["p99"] <= limit["p99"]),
                           "bitwise_equal": bool((diff == 0).all()), "max_abs_logit_diff": float(diff.max()),
                           "note": "same sequence alone and inside a batch of %d" % ref.shape[0]}
         http_prompts, http_expect = ids[:, :P].tolist(), free.tolist()
@@ -260,13 +288,20 @@ def main() -> int:
     if not finite:
         http_prompts = http_expect = None
     has_generate = bool(report.get("has_generate"))
-    correct = finite and all(gates[g]["pass"] for g in ("numeric", "tokens", "batch"))
+    if finite and (scratch / "check.permuted.npy").exists():
+        permuted = np.load(scratch / "check.permuted.npy")
+        same = permuted == batched[::-1]
+        gates["invariance"] = {"pass": bool(same.all()), "positions_differing": int((~same.all(-1)).sum()), "of": int(same.shape[0] * same.shape[1]),
+                               "max_abs_logit_diff": float(np.abs(permuted - batched[::-1]).max()),
+                               "note": "the batch run again with the slot order reversed: logits bit for bit equal (repeatability and slot-order invariance)"}
+        del permuted
+    correct = finite and all(gates[g]["pass"] for g in ("numeric", "tokens", "batch", "kl", "invariance") if g in gates)
     long_positions = long_ref = None
     if (Path(args.ref) / "long_positions.npy").exists() and (scratch / "check.long.npy").exists():
         long_positions = np.load(Path(args.ref) / "long_positions.npy")
         long_ref = np.load(Path(args.ref) / "long_logits64.npy")
         long = np.load(scratch / "check.long.npy")
-        long_limit = {k: TOLERANCE * meta["hf_bf16_rel_l2_long"][k] for k in ("median", "max")}
+        long_limit = {k: TOLERANCE * meta["hf_bf16_rel_l2_long"][k] for k in ("median", "p99")}
         if np.isfinite(long).all():
             err_long = stats(rel_l2(long, long_ref))
             agree_long = float((long.argmax(-1) == long_ref.argmax(-1)).mean())
@@ -277,20 +312,55 @@ def main() -> int:
             worst = [{"sequence": int(i // per.shape[1]), "position": int(long_positions[i % per.shape[1]]), "rel_l2": float(per.reshape(-1)[i]),
                       "hf_bf16": None if hf_per is None else float(hf_per.reshape(-1)[i]),
                       "top1_same": bool(long.reshape(-1, long.shape[-1])[i].argmax() == long_ref.reshape(-1, long_ref.shape[-1])[i].argmax())} for i in order]
-            gates["numeric_long"] = {"pass": all(err_long[k] <= long_limit[k] for k in ("median", "max"))
+            gates["kl_long"] = kl_gate(long, long_ref, meta.get("hf_bf16_kl_long"))
+            gates["numeric_long"] = {"pass": all(err_long[k] <= long_limit[k] for k in ("median", "p99"))
                                      and agree_long >= meta["hf_bf16_top1_agreement_long"] - 0.01,
                                      "rel_l2": err_long, "limit": long_limit, "top1_agreement_with_float64": agree_long,
                                      "hf_bf16_top1": meta["hf_bf16_top1_agreement_long"],
-                                     "positions": int(per.size), "over_max_limit": int((per > long_limit["max"]).sum()), "worst": worst,
+                                     "positions": int(per.size), "over_5x_bf16_max": int((per > 5 * meta["hf_bf16_rel_l2_long"]["max"]).sum()), "worst": worst,
                                      "hf_bf16_p99": None if hf_per is None else float(np.sort(hf_per.reshape(-1))[int(0.99 * hf_per.size)]),
                                      "note": "batch of %d, positions %d to %d (every %d-th)" % (long.shape[0], long_positions[0], long_positions[-1], meta["long_every"])}
         else:
             gates["numeric_long"] = {"pass": False, "note": "non-finite logits at a long position"}
-        correct = correct and gates["numeric_long"]["pass"]
+        correct = correct and gates["numeric_long"]["pass"] and gates.get("kl_long", {"pass": True})["pass"]
         del long
+    del single, batched
+    # ---- hidden reference (suite v2): natural-text prompts and positions further out, never shown to the run.
+    if correct and args.ref_hidden and (Path(args.ref_hidden) / "meta.json").exists() and not args.quick:
+        hmeta = json.loads((Path(args.ref_hidden) / "meta.json").read_text())
+        hctx = int(hmeta["long_tokens"]) + 8
+        done, hreport = child("check", ["--check-sequences", "1", "--max-context", str(max(2048, hctx))], 3600, ref_dir=args.ref_hidden, name="hcheck")
+        hidden: dict = {"pass": False}
+        if hreport is None:
+            hidden["note"] = f"the engine failed on the hidden set (rc {done['rc']})"
+        else:
+            href = np.load(Path(args.ref_hidden) / "logits64.npy")
+            hb = np.load(scratch / "hcheck.batched.npy")
+            hlim = {k: TOLERANCE * hmeta["hf_bf16_rel_l2"][k] for k in ("median", "p99")}
+            ok = bool(np.isfinite(hb).all())
+            herr = stats(rel_l2(hb, href)) if ok else None
+            hagree = float((hb.argmax(-1) == href.argmax(-1)).mean()) if ok else 0.0
+            hkl = kl_gate(hb, href, hmeta.get("hf_bf16_kl")) if ok else {"pass": False}
+            hidden.update(numeric=ok and all(herr[k] <= hlim[k] for k in ("median", "p99")),
+                          tokens=hagree >= hmeta["hf_bf16_top1_agreement"] - 0.01, kl=hkl["pass"])
+            if (scratch / "hcheck.long.npy").exists() and (Path(args.ref_hidden) / "long_logits64.npy").exists():
+                hl, hlref = np.load(scratch / "hcheck.long.npy"), np.load(Path(args.ref_hidden) / "long_logits64.npy")
+                hll = {k: TOLERANCE * hmeta["hf_bf16_rel_l2_long"][k] for k in ("median", "p99")}
+                okl = bool(np.isfinite(hl).all())
+                hel = stats(rel_l2(hl, hlref)) if okl else None
+                hidden.update(numeric_long=okl and all(hel[k] <= hll[k] for k in ("median", "p99")),
+                              tokens_long=okl and float((hl.argmax(-1) == hlref.argmax(-1)).mean()) >= hmeta["hf_bf16_top1_agreement_long"] - 0.01,
+                              kl_long=okl and kl_gate(hl, hlref, hmeta.get("hf_bf16_kl_long"))["pass"])
+                del hl, hlref
+            parts = [v for k, v in hidden.items() if k != "pass" and isinstance(v, bool)]
+            hidden["pass"] = bool(parts) and all(parts)
+            hidden["note"] = ("%d sequences of natural text (prose, code, word problems), positions to %d; only pass/fail is reported"
+                              % (hb.shape[0], int(hmeta["long_tokens"])))
+            del hb, href
+        gates["hidden"] = hidden
+        correct = correct and hidden["pass"]
     if correct:
         result["milestones_passed"].append("correct")
-    del single, batched
 
     # ---- time
     segments = 1 if args.quick else 3
@@ -316,7 +386,7 @@ def main() -> int:
                 probe = np.load(scratch / f"time.probe.b{B}.s{segment}.t{t}.npy")
                 target = ref[:B, t] if t < T else long_ref[:B, long_index[t]]
                 probe_err.append(float(rel_l2(probe, target).max()) if np.isfinite(probe).all() else float("inf"))
-        probe_limit = max(limit["max"], TOLERANCE * meta.get("hf_bf16_rel_l2_long", {}).get("max", 0.0))
+        probe_limit = TOLERANCE * max(meta["hf_bf16_rel_l2"]["max"], meta.get("hf_bf16_rel_l2_long", {}).get("max", 0.0))
         ok = timing["last_logits_finite"] and bool(probe_err) and max(probe_err) <= probe_limit
         verified = verified and ok
         result["perf"][f"b{B}"] = {"step_us": step_s * 1e6, "step_us_min": walls[0] / timing["steps"] * 1e6,

@@ -115,6 +115,15 @@ def main() -> int:
             batched = torch.empty(R, T, meta["vocab"], dtype=torch.float32)
             for t in range(T):
                 batched[:, t] = engine.step(ids[:, t]).float().cpu()
+            # (b'') all R together again with the slot order reversed: each sequence's logits must be bit for bit
+            # those of (b). This tests repeatability and slot-order invariance in one pass (suite v2).
+            permuted = None
+            if os.environ.get("MK_EVAL_INVARIANTS", "1") != "0" and R > 1:
+                perm = torch.arange(R - 1, -1, -1, device=ids.device)
+                engine.reset()
+                permuted = torch.empty(R, T, meta["vocab"], dtype=torch.float32)
+                for t in range(T):
+                    permuted[:, t] = engine.step(ids[perm, t]).float().cpu()
             # (c) free-running greedy from the prompt, all R together: what a user would get.
             engine.reset()
             P = meta["prompt_tokens"]
@@ -137,6 +146,8 @@ def main() -> int:
                 np.save(out.with_suffix(".long.npy"), long.numpy())
             np.save(out.with_suffix(".single.npy"), single.numpy())
             np.save(out.with_suffix(".batched.npy"), batched.numpy())
+            if permuted is not None:
+                np.save(out.with_suffix(".permuted.npy"), permuted.numpy())
             np.save(out.with_suffix(".free.npy"), torch.stack(free, dim=1).numpy())
             if hasattr(engine, "generate"):
                 # (d) the same continuation produced inside the engine: must be what (c) produced step by step.

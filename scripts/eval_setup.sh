@@ -22,9 +22,12 @@ uv pip install -q --python "$MK_TOOLS_PY" nvidia-ml-py
 "$py" -c 'import torch, transformers; assert torch.cuda.is_available(); print(f"MK_ENV eval torch={torch.__version__} cuda={torch.version.cuda} transformers={transformers.__version__}")'
 name="$(echo "$MK_MODEL" | tr '/A-Z' '-a-z')"
 ref="$MK_ROOT/ref/$name"
-ref_version="${MK_REF_VERSION:-v2}"   # v2: float64 logits along 1152 positions (v1 stopped at 128)
+ref_version="${MK_REF_VERSION:-v3}"   # v3: v2 (float64 logits along 1152 positions) plus the BF16 path's KL; v1 stopped at 128
 [ -f "$ref/meta.json" ] || store get "$MK_S3/ref/$name-$ref_version" "$ref" > "$MK_ROOT/logs/ref-get.log" 2>&1
 [ -f "$ref/meta.json" ] || { echo "no reference for $MK_MODEL in the store: run scripts/eval_selftest.sh once"; exit 3; }
+hidden="$MK_ROOT/ref/$name-hidden"   # suite v2: kept out of the run's workspace; only kernel_eval.py reads it
+[ -f "$hidden/meta.json" ] || store get "$MK_S3/ref/$name-hidden-${MK_HIDDEN_VERSION:-v1}" "$hidden" > "$MK_ROOT/logs/ref-hidden-get.log" 2>&1
+[ -f "$hidden/meta.json" ] || { echo "MK_WARN no hidden reference for $MK_MODEL: the hidden gate is skipped"; hidden=""; }
 short="$(echo "${MK_MODEL##*/}" | tr 'A-Z' 'a-z')"
 hw="$(mk_hw)"
 baselines="$MK_REPO/eval/baselines_${short}_${hw}.json"
@@ -35,7 +38,7 @@ trace="$MK_ROOT/ref/toolagent_trace.jsonl"
 [ "$(sha256sum "$trace" | cut -c1-16)" = 48a2db1a13d3bc05 ] || { echo "trace checksum mismatch"; exit 4; }
 cat > "$MK_ROOT/eval_env.json" <<JSON
 {"env": {"MK_PY": "$py", "PATH_PREPEND": "$MK_ROOT/venvs/eval/bin", "MK_TRACE": "$trace", "MK_HW": "$hw", "MK_MODEL": "$MK_MODEL"},
- "private": {"python": "$py", "tools_python": "$MK_TOOLS_PY", "ref": "$ref", "baselines": "$baselines", "trace": "$trace", "hw": "$hw",
+ "private": {"python": "$py", "tools_python": "$MK_TOOLS_PY", "ref": "$ref", "ref_hidden": "$hidden", "baselines": "$baselines", "trace": "$trace", "hw": "$hw",
              "online_baselines": "$MK_REPO/eval/baselines_online_${short}_${hw}.json"}}
 JSON
 echo "MK_ENV eval_env $(tr -d '\n' < "$MK_ROOT/eval_env.json")"
