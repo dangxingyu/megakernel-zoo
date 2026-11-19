@@ -32,8 +32,11 @@ python autoresearch/start.py my-run --model <hf-org>/<model> --card <h100|b200> 
 [`engines/README.md`](engines/README.md) describes the layout of an engine directory and the two contracts (offline:
 `reset`/`step`; online: `submit`/`poll`).
 
-**3. Evaluate it.** The result must say `"status": "valid"`. The hidden set of natural text, code and word problems is
-not in this repository; without it the evaluator skips that gate with a warning, and we run it on every pull request.
+**3. Evaluate it.** The result must say `"status": "valid"`. The hidden set we used (natural text, code and word
+problems, with a secret seed) is not in this repository: a public test set is one an agent can overfit. Without a
+hidden set the evaluator skips that gate with a warning. We strongly encourage you to build your own, with a seed only
+you know, and to evaluate against it before trusting a result ([Your own hidden set](#your-own-hidden-set)); we also
+run ours on every pull request.
 
 ```bash
 python eval/kernel_eval.py --workspace <engine directory> --out result.json
@@ -59,6 +62,21 @@ python scripts/check_engine.py engines/<model>_<gpu>/<name>
 **5. Open a pull request.** The template asks for `result.json`, the GPU (`nvidia-smi -L`), the versions of the general
 engines you compared with, and, for a track-B engine, what differs from track A and whether the logits are
 bit-identical to the track-A build of the same source.
+
+### Your own hidden set
+
+An engine written by an agent should be judged on inputs the agent never saw. Build a private reference once per model,
+from natural-text prompts and a seed you keep to yourself, and keep it outside the engine's workspace:
+
+```bash
+MK_NATURAL_SEED=<your secret number> python eval/natural_prompts.py <model dir> hidden_prompts.json 64 8
+python eval/make_reference.py --model-dir <model dir> --out ~/hidden-ref/<model> --natural hidden_prompts.json \
+    --seed <another secret number> --sequences 8 --prompt-tokens 64 --check-tokens 192 --long-tokens 2000 --long-every 16
+python eval/kernel_eval.py --workspace <engine directory> --out result.json --ref-hidden ~/hidden-ref/<model>
+```
+
+`result.json` then reports a `hidden` gate (pass or fail only, so the numbers cannot leak back into a run). An engine
+that passes the public set and fails your hidden one has learned the public inputs, not the model.
 
 ### Registry entry
 

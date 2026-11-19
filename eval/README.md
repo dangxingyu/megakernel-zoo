@@ -30,7 +30,9 @@ Named `<model>_<gpu>` like the engine directories.
 |---|---|
 | `baselines_<model>_<gpu>.json` | Time per token of the general engines (vLLM, SGLang, Cohere's megakernel for North Mini Code) on that GPU, with versions and the job they come from. |
 | `refs_<model>_<gpu>.json` | The reference lines a run sees on its board: the HBM-bandwidth bound, the target, the general engines. |
-| `refs/<hf-org>-<model>/ids.npy` | The token ids of the public reference sequences. The logits are rebuilt by `make_reference.py`; the hidden sequences are not in this repository. |
+| `refs/<hf-org>-<model>/ids.npy` | The token ids of the public reference sequences. The logits are rebuilt by `make_reference.py`. |
+
+The hidden set (natural text, code and word problems from a secret seed, positions to 2,000) is not in this repository. Build your own with a seed only you know and pass it with `kernel_eval.py --ref-hidden`; [CONTRIBUTING.md](../CONTRIBUTING.md#your-own-hidden-set) has the commands.
 
 ## Tolerances
 

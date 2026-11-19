@@ -32,9 +32,9 @@ Every engine in this repository was written by a coding agent (Claude) in an aut
 evaluator, and audited afterwards. The repository contains the engines, an OpenAI-compatible server for them, the
 evaluator and benchmark suite, and the tooling to run the same kind of optimization on another model or GPU.
 
-- With the checkpoint's own number formats (track A), steady decoding is 1.13–1.43× as fast as the fastest general
-  engine on the same card (vLLM, SGLang, or Cohere's megakernel for North Mini Code) with one sequence, on five models
-  from 8 B to 594 B parameters. With lossless model-specific weight storage (track B) it reaches 1.68×.
+- With the checkpoint's own number formats (track A), steady decoding is 1.13–1.77× as fast as the fastest general
+  engine on the same GPU (vLLM, SGLang, or Cohere's megakernel for North Mini Code) with one sequence, on eight models
+  from 8 B to 594 B parameters. With lossless model-specific weight storage (track B) it reaches 2.05×.
 - On a production request trace at 8 requests per second, the Inkling-2-Small serving engine keeps 99.2% of requests
   within the service levels (SGLang 81.7%). Its longest stall is 0.15 s (SGLang 4.4 s).
 - `mkserve` serves any engine through the OpenAI completions and chat-completions API, with streaming and sampling.
@@ -146,8 +146,8 @@ type; any other pair is refused. See [`mkserve/README.md`](mkserve/README.md) fo
 |---|---|---|---|---|---|---|---|
 | Qwen/Qwen3-8B | h100 | `online-b` (default) | B | online | 64 | 34,816 | run s3-q8b-online-a1, submission s0039 |
 | Qwen/Qwen3-8B | h100 | `online-a` | A | online | 64 | 34,816 | run s3-q8b-online-a1, submission s0038 |
-| Qwen/Qwen3-8B | h100 | `offline-b` | B | offline | 8 | 2,048 | run s10-q8b-h100-f1, submission s0002 |
-| Qwen/Qwen3-8B | h100 | `offline-a` | A | offline | 8 | 2,048 | run s10-q8b-h100-f1, submission s0003 |
+| Qwen/Qwen3-8B | h100 | `offline-b` | B | offline | 8 | 2,048 | run s11-q8b-h100-b1, submission s0020 |
+| Qwen/Qwen3-8B | h100 | `offline-a` | A | offline | 8 | 2,048 | run s11-q8b-h100-b1, submission s0016 |
 | RecursiveSI/flint | b200 | `offline-a` (default) | A | offline | 8 | 2,048 | run s11-flint-b200-b1, submission s0026 |
 | RecursiveSI/flint | b200 | `offline-b` | B | offline | 8 | 2,048 | run s11-flint-b200-b1, submission s0027 |
 | Qwen/Qwen3.8-27B | b200 | `offline-a` (default) | A | offline | 8 | 2,048 | run s9-qwen38-27b-b200-f1, submission s0022 |
@@ -157,6 +157,12 @@ type; any other pair is refused. See [`mkserve/README.md`](mkserve/README.md) fo
 | thinkingmachines/Inkling-2-Small | b200x4 | `offline-a` (default) | A | offline | 8 | 2,048 | run s7-inkling2s-b200x4-fb1, submission s0034 |
 | thinkingmachines/Inkling-2-Small | b200x4 | `offline-b` | B | offline | 8 | 2,048 | run s7-inkling2s-b200x4-fb1, submission s0036 |
 | thinkingmachines/Inkling-2-Small | b200x4 | `online-a` | A | online | 64 | 34,816 | run s8-inkling2s-b200x4-on1, submission s0043 |
+| openai/gpt-oss-20b | h100 | `offline-a` (default) | A | offline | 8 | 2,048 | run s12-oss20-h100-a1, submission s0047 |
+| openai/gpt-oss-20b | h100 | `offline-b` | B | offline | 8 | 2,048 | run s12-oss20-h100-a1, submission s0050 |
+| Qwen/Qwen3-32B | b200 | `offline-a` (default) | A | offline | 8 | 2,048 | run s12-q32-b200-a1, submission s0033 |
+| Qwen/Qwen3-32B | b200 | `offline-b` | B | offline | 8 | 2,048 | run s12-q32-b200-a1, submission s0036 |
+| openai/gpt-oss-120b | b200 | `offline-a` (default) | A | offline | 8 | 2,048 | run s12-oss120-b200-a1, submission s0049 |
+| openai/gpt-oss-120b | b200 | `offline-b` | B | offline | 8 | 2,048 | run s12-oss120-b200-a1, submission s0051 |
 
 </details>
 
@@ -169,10 +175,13 @@ divided by ours, with one sequence and with eight.
 
 | Model | Card | Fastest general engine, ms | Track A, ms | Track A | Track B, ms | Track B |
 |---|---|---|---|---|---|---|
-| Qwen3-8B | H100 | SGLang 6.13 / 6.84 | 5.38 / 5.64 | **1.14×** / **1.21×** | 4.16 / 4.47 | **1.47×** / **1.53×** |
+| Qwen3-8B | H100 | SGLang 6.09 / 6.85 | 5.13 / 5.48 | **1.19×** / **1.25×** | 3.83 / 4.25 | **1.59×** / **1.61×** |
 | North Mini Code | H100 | Cohere's own megakernel 3.62 / 7.07 | 2.54 / 6.90 | **1.43×** / 1.02× | 2.15 / 6.05 | **1.68×** / **1.17×** |
+| gpt-oss-20b | H100 | vLLM 3.31 / 4.93 | 1.87 / 3.39 | **1.77×** / **1.45×** | 1.62 / 3.39 | **2.05×** / **1.46×** |
 | flint | B200 | vLLM 1.99 / 3.79 | 1.39 / 3.35 | **1.43×** / **1.13×** | 1.36 / 3.35 | **1.47×** / **1.13×** |
 | Qwen3.8-27B | B200 | SGLang 9.53 / 10.30 | 8.45 / 8.89 | **1.13×** / **1.16×** | 7.26 / 7.72 | **1.31×** / **1.33×** |
+| Qwen3-32B | B200 | SGLang 11.43 / 11.68 | 10.11 / 10.43 | **1.13×** / **1.12×** | 8.99 / 9.44 | **1.27×** / **1.24×** |
+| gpt-oss-120b | B200 | SGLang 2.22 / 3.33 | 1.78 / 3.07 | **1.25×** / 1.08× | 1.69 / 3.03 | **1.31×** / **1.10×** |
 | Inkling-2-Small | 4 × B200 | SGLang 4.74 / 6.55 | 3.30 / 5.39 | **1.43×** / **1.22×** | 3.29 / 5.38 | **1.44×** / **1.22×** |
 
 How the comparison is made:

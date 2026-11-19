@@ -59,8 +59,11 @@ engine's own (full contract in [`eval/_online_runner.py`](../eval/_online_runner
 |---|---|---|
 | Qwen3-8B | H100 | `offline-a`, `offline-b`, `online-a`, `online-b` |
 | North Mini Code 1.0 | H100 | `offline-a`, `offline-b` |
+| gpt-oss-20b | H100 | `offline-a`, `offline-b` |
 | flint | B200 | `offline-a`, `offline-b` |
 | Qwen3.8-27B | B200 | `offline-a`, `offline-b` |
+| Qwen3-32B | B200 | `offline-a`, `offline-b` |
+| gpt-oss-120b | B200 | `offline-a`, `offline-b` |
 | Inkling-2-Small | 4 × B200 | `offline-a`, `offline-b`, `online-a` |
 
 Where each one came from (run and submission), its limits and what it was checked with are in

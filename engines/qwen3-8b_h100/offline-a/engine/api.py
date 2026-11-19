@@ -13,11 +13,15 @@ import json
 import os
 import struct
 import subprocess
+import time
+
+import numpy as np
 
 import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 H, NL, VOCAB, INNER = 4096, 36, 151936, 12288
+QKV_ROWS = 6144
 MODE = int(os.environ.get("MK_MODE", "1"))  # 0: one launch per operator, 1: one launch per step
 
 
@@ -29,15 +33,29 @@ def _load_lib():
     lib.mk_create.restype = ctypes.c_void_p
     lib.mk_create.argtypes = [ctypes.c_int, ctypes.c_int] + [ctypes.c_void_p] * 8
     lib.mk_step.restype = None
-    lib.mk_step.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    lib.mk_step.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     lib.mk_generate.restype = None
     lib.mk_generate.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    lib.mk_generate_tag.restype = None
+    lib.mk_generate_tag.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    lib.mk_host_alloc.restype = ctypes.c_int
+    lib.mk_host_alloc.argtypes = [ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
+    lib.mk_host_free.restype = None
+    lib.mk_host_free.argtypes = [ctypes.c_void_p]
+    lib.mk_sketch.restype = ctypes.c_int
+    lib.mk_sketch.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+    lib.mk_sketch_count.restype = ctypes.c_longlong
+    lib.mk_sketch_count.argtypes = [ctypes.c_void_p]
     lib.mk_stat.restype = ctypes.c_longlong
     lib.mk_stat.argtypes = [ctypes.c_void_p, ctypes.c_int]
     lib.mk_destroy.restype = None
     lib.mk_destroy.argtypes = [ctypes.c_void_p]
     lib.mk_check.restype = ctypes.c_int
     lib.mk_track.restype = ctypes.c_int
+    lib.mk_l0_rows.restype = None
+    lib.mk_l0_rows.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+    lib.mk_set_l0tab.restype = None
+    lib.mk_set_l0tab.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     return lib
 
 
@@ -209,12 +227,58 @@ def build_tables(n_tiles, shifts, exc_tile, exc_row, exc_col, exc_bits):
 FORMATS = {
     "B": "weights: lossless 12-bit code of the BF16 values (sign, 4-bit exponent code, 7-bit mantissa) with exact "
     "power-of-two row/column scales folded into norm weights, out-of-window elements patched exactly; residual stream "
-    "and accumulators float32; K/V cache BF16",
+    "and accumulators float32; K/V cache BF16; layer 0's q/k/v output read from a per-token table (151936 x 6144 float32, "
+    "built at load by this kernel's own q/k/v phase)",
     "A": "none: weights BF16 as stored (permuted into the kernel's read order only); activations and K/V cache BF16 "
     "wherever the Hugging Face BF16 model has a BF16 tensor (float32 inside RMSNorm, matvec accumulators and the "
     "attention operator from the q.k accumulator through the softmax, as in the fused attention kernels: scores "
     "float32, probabilities BF16); RMSNorm applied before the matvec",
 }
+
+
+SKETCH = int(os.environ.get("MK_SKETCH", "1"))   # track B, greedy paths: 0 exact head, 1 certified int8 sketch, 2 sketch + every tile rescored (test)
+
+
+def build_sketch(w: torch.Tensor, cs: torch.Tensor, chunk: int = 4096):
+    """Certified int8 sketch of lm_head for the greedy paths (k_gensk in mk.cu). w: bf16 [VOCAB, H] as in the
+    checkpoint, cs: its column shifts (the exact head multiplies row i by x' with x'_k = bf16 input fragments, i.e.
+    effectively by the weights Weff_ik = w_ik 2^cs_k). Per row, float64:
+      s_i = float32(max |Weff_i| / 127), q_i = round(Weff_i / s_i) in [-127, 127] (int8), e_i = Weff_i - s_i q_i (exact),
+      c1_i >= (||e_i|| + 2^-10 ||Weff_i||) (1 + 2^-20), c2_i >= s_i ||q_i|| (1 + 2^-20), both rounded up to float32.
+    The kernel's bound |z_i - zh_i| <= c1_i ||x'|| + c2_i ||x' - x^|| covers the int8 approximation (Cauchy-Schwarz,
+    exact real arithmetic) and the float32 accumulation of the exact head (2^-10 ||Weff_i|| ||x'||: ~20 float32
+    roundings of partial sums bounded by sum |w x| <= ||w|| ||x||, i.e. ~2^-18; 2^-10 is a margin of ~250).
+    Returns the int8 weights in m16n8k32 A-fragment order ([tile][128 k-chunks][32 lanes][16 B] as int32 words),
+    float32 [VOCAB][4] {s, c1, c2, 0}, and statistics."""
+    m, k = w.shape
+    assert m % 16 == 0 and k == 4096
+    w8 = torch.empty(m * k // 4, dtype=torch.int32, device="cuda")
+    rc = torch.zeros((m, 4), dtype=torch.float32, device="cuda")
+    colscale = torch.ldexp(torch.ones(k, dtype=torch.float64, device="cuda"), cs.to(torch.float64).cuda())
+    inf = torch.tensor(float("inf"), dtype=torch.float32, device="cuda")
+
+    def up(v64):   # float64 -> float32 rounded up
+        f = v64.to(torch.float32)
+        return torch.where(f.to(torch.float64) < v64, torch.nextafter(f, inf), f)
+
+    for r0 in range(0, m, chunk):
+        wd = w[r0 : r0 + chunk].to(torch.float64) * colscale[None, :]
+        mx = wd.abs().amax(dim=1)
+        s32 = (mx / 127).to(torch.float32)
+        s = s32.to(torch.float64)
+        q = torch.where(s[:, None] > 0, torch.round(wd / torch.where(s > 0, s, torch.ones_like(s))[:, None]), torch.zeros_like(wd)).clamp_(-127, 127)
+        e = wd - s[:, None] * q
+        c1 = (e.norm(dim=1) + 2.0 ** -10 * wd.norm(dim=1)) * (1 + 2.0 ** -20)
+        c2 = s * q.norm(dim=1) * (1 + 2.0 ** -20)
+        rc[r0 : r0 + chunk, 0] = s32
+        rc[r0 : r0 + chunk, 1] = up(c1)
+        rc[r0 : r0 + chunk, 2] = up(c2)
+        n = wd.shape[0]
+        qi = q.to(torch.int8).view(n // 16, 2, 8, 128, 2, 4, 4).permute(0, 3, 2, 5, 4, 1, 6).contiguous()   # (T, c, g, t, kh, rh, e)
+        w8[r0 * k // 4 : (r0 + n) * k // 4] = qi.view(-1).view(torch.int32)
+        del wd, q, e, qi
+    stats = {"bytes": w8.numel() * 4 + rc.numel() * 4, "rows_zero_scale": int((rc[:, 0] == 0).sum())}
+    return w8, rc, stats
 
 
 class _Weights:
@@ -268,9 +332,48 @@ class Engine:
         )
         if not self.h:
             raise RuntimeError("mk_create failed")
+        self.l0tab = None
+        if self.track == "B" and os.environ.get("MK_L0TAB", "1") == "1":
+            self._build_l0()
+        self.sketch_mode = 0
+        if getattr(self, "sk_w8", None) is not None:
+            self.set_sketch(SKETCH)
         self.pos = 0
         self.mode = MODE
         self._keep = None
+        # online contract (submit / poll): tokens of the running cohort, written by k_generate into page-locked host
+        # memory mapped for the device, [B][n] int64 = tag << 32 | token id (see poll)
+        hp, dp = ctypes.c_void_p(), ctypes.c_void_p()
+        n = max_batch * max_context
+        if self.lib.mk_host_alloc(n * 8, ctypes.byref(hp), ctypes.byref(dp)) != 0:
+            raise RuntimeError("mk_host_alloc failed")
+        self._hmap_host, self._hmap_dev = hp.value, dp.value
+        eh, ed = ctypes.c_void_p(), ctypes.c_void_p()
+        if self.lib.mk_host_alloc(64, ctypes.byref(eh), ctypes.byref(ed)) != 0:
+            raise RuntimeError("mk_host_alloc failed")
+        self._err_host, self._err_dev = eh.value, ed.value
+        self._err = np.ctypeslib.as_array((ctypes.c_int64 * 1).from_address(eh.value))
+        self._err[0] = 0
+        self.hmap = np.ctypeslib.as_array((ctypes.c_int64 * n).from_address(hp.value))
+        self.hmap[:] = -1
+        self.hmap_tag = 0
+        self.waiting, self.cohort, self.first_wait, self._ready = [], None, None, []
+        self.gather_s = float(os.environ.get("MK_GATHER_S", "0.05"))
+        self.serve = {"cohorts": 0, "requests": 0, "tokens": 0, "polls": 0}
+
+    def _build_l0(self):
+        """Track B: layer 0's q/k/v output (float32, before the q/k norms and RoPE) for every token id, computed by
+        this kernel's own embedding + q/k/v phase, 8 ids per launch (the phase is batch invariant: a row does not
+        depend on the other rows of its launch). The step then copies the row instead of running that phase."""
+        self.l0tab = torch.empty((VOCAB, QKV_ROWS), dtype=torch.float32, device="cuda")
+        ids = torch.arange(VOCAB, dtype=torch.int64, device="cuda")
+        for i in range(0, VOCAB, 8):
+            n = min(8, VOCAB - i)
+            self.lib.mk_l0_rows(self.h, ids[i:i + n].data_ptr(), self.l0tab[i].data_ptr(), n)
+        torch.cuda.synchronize()
+        if self.lib.mk_check() != 0:
+            raise RuntimeError("layer-0 table build failed")
+        self.lib.mk_set_l0tab(self.h, self.l0tab.data_ptr())
 
     def _load_track_a(self, wts):
         """Track A: the checkpoint's BF16 weights, permuted into the kernel's read order; norm weights as stored."""
@@ -378,14 +481,38 @@ class Engine:
             del dn
             self.qk_norm_w[l, 0] = wts.get(pre + "self_attn.q_norm.weight").float()
             self.qk_norm_w[l, 1] = wts.get(pre + "self_attn.k_norm.weight").float()
-        cs = put(wts.get("lm_head.weight"), columns=bool(COLMASK & 8))
+        lm = wts.get("lm_head.weight")
+        cs = put(lm, columns=bool(COLMASK & 8))
+        if SKETCH:
+            self.sk_w8, self.sk_rc, self.sk_stats = build_sketch(lm, cs)
+        del lm
         assert off == total
         self.ttab, self.exc, self.n_exceptions = build_tables(tile0, shifts, exc_tile, exc_row, exc_col, exc_bits)
         self.wfrag = torch.zeros(16, dtype=torch.int16, device="cuda")   # unused in this track
         del shifts, exc_tile, exc_row, exc_col, exc_bits
         self.norm_w[2 * NL] = scaled(wts.get("model.norm.weight"), cs)
 
+    def set_sketch(self, mode: int) -> None:
+        """Greedy head of generate() / the online path: 0 exact, 1 certified int8 sketch, 2 sketch with every tile
+        rescored exactly (test). step() always uses the exact head."""
+        torch.cuda.synchronize()
+        if mode in (1, 2) and getattr(self, "sk_w8", None) is None:
+            raise ValueError("no sketch (track A or MK_SKETCH=0 at load)")
+        w8 = self.sk_w8.data_ptr() if mode in (1, 2) else None
+        rc = self.sk_rc.data_ptr() if mode in (1, 2) else None
+        if self.lib.mk_sketch(self.h, w8, rc, int(mode)) != 0:
+            raise RuntimeError("mk_sketch failed")
+        self.sketch_mode = int(mode)
+
+    def _check_err(self):
+        """step() does not wait for the device: a token id outside the vocabulary (the kernel then uses id 0, no read
+        past the tables) is reported by the kernel in host-mapped memory and raised here, at the next call."""
+        if getattr(self, "_err", None) is not None and self._err[0]:
+            self._err[0] = 0
+            raise ValueError("a step() call received a token id outside [0, %d)" % VOCAB)
+
     def reset(self) -> None:
+        self._check_err()
         self.pos = 0
 
     def step(self, tokens: torch.Tensor) -> torch.Tensor:
@@ -395,7 +522,8 @@ class Engine:
         if self.pos >= self.max_context or b > self.max_batch:
             raise ValueError("step() beyond max_context or max_batch")
         logits = torch.empty((b, VOCAB), dtype=torch.float32, device="cuda")
-        self.lib.mk_step(self.h, tokens.data_ptr(), logits.data_ptr(), b, self.pos, self.mode)
+        self._check_err()
+        self.lib.mk_step(self.h, tokens.data_ptr(), logits.data_ptr(), b, self.pos, self.mode, ctypes.c_void_p(self._err_dev))
         self.pos += 1
         self._keep = tokens  # the kernel reads it asynchronously
         return logits
@@ -408,17 +536,106 @@ class Engine:
         b = tokens.shape[0]
         if self.pos + n_steps > self.max_context or b > self.max_batch:
             raise ValueError("generate() would exceed max_context or max_batch")
+        if b and bool(((tokens < 0) | (tokens >= VOCAB)).any()):
+            raise ValueError("token id outside [0, %d)" % VOCAB)
         out = torch.empty((b, n_steps), dtype=torch.int64, device="cuda")
         self.lib.mk_generate(self.h, tokens.data_ptr(), out.data_ptr(), b, self.pos, n_steps)
         self.pos += n_steps
         self._keep = tokens
         return out
 
+    # ------------------------------------------------------------------ the online contract (HTTP server)
+    # Requests are grouped into cohorts of equal prompt length (up to max_batch; poll() waits up to gather_s for a
+    # full one). A cohort: reset(), its prompt through step() (all positions but the last; logits unused), then ONE
+    # launch of k_generate for all new tokens. The kernel stores token i of sequence b as tag << 32 | id into the
+    # host-mapped slot hmap[b * n + i] (8-byte store + system fence) while it keeps running; poll() reads those slots
+    # and never synchronizes the device. A slot counts only if it carries the cohort's tag: stale slots of earlier
+    # cohorts are never taken for new tokens.
+    def submit(self, rid, prompt, n) -> None:
+        prompt = [int(t) for t in prompt]
+        n = int(n)
+        if not prompt:
+            raise ValueError("empty prompt")
+        if min(prompt) < 0 or max(prompt) >= VOCAB:
+            raise ValueError("prompt token ids must be in [0, %d)" % VOCAB)
+        if n < 0:
+            raise ValueError("n must be >= 0")
+        if len(prompt) + n > self.max_context:
+            raise ValueError("prompt + new tokens (%d) exceed max_context (%d)" % (len(prompt) + n, self.max_context))
+        self.serve["requests"] += 1
+        if n == 0:
+            self._ready.append((rid, [], True))
+            return
+        self.waiting.append((rid, prompt, n))
+        if self.first_wait is None:
+            self.first_wait = time.perf_counter()
+
+    def _start_cohort(self):
+        L = len(self.waiting[0][1])
+        reqs = [r for r in self.waiting if len(r[1]) == L][: self.max_batch]
+        self.waiting = [r for r in self.waiting if all(r is not c for c in reqs)]
+        self.first_wait = time.perf_counter() if self.waiting else None
+        B = len(reqs)
+        nmax = max(r[2] for r in reqs)
+        co = {"reqs": reqs, "B": B, "n": nmax, "done": 0}
+        hids = torch.tensor([r[1] for r in reqs], dtype=torch.int64).t().contiguous().pin_memory()   # [L, B]
+        ids = hids.to("cuda", non_blocking=True)      # no host synchronization
+        co["hids"] = hids
+        self.reset()
+        for t in range(L - 1):                       # prefill: the step() path, logits unused
+            self.step(ids[t])
+        self.hmap_tag = self.hmap_tag % 0x7FFFFFFF + 1   # never 0 (0 = generate(): plain token ids)
+        co["tag"] = self.hmap_tag
+        co["ids"] = ids                               # the kernels read it asynchronously
+        self.lib.mk_generate_tag(self.h, ids[L - 1].data_ptr(), ctypes.c_void_p(self._hmap_dev), B, self.pos, nmax, co["tag"])
+        self.pos += nmax
+        self.serve["cohorts"] += 1
+        self.cohort = co
+
+    def poll(self):
+        self.serve["polls"] += 1
+        events, self._ready = self._ready, []
+        while True:
+            if self.cohort is None:
+                if not self.waiting:
+                    return events
+                L = len(self.waiting[0][1])
+                full = sum(1 for r in self.waiting if len(r[1]) == L) >= self.max_batch
+                if not full and time.perf_counter() - self.first_wait < self.gather_s:
+                    return events
+                self._start_cohort()
+            co = self.cohort
+            B, n, d = co["B"], co["n"], co["done"]
+            v = self.hmap[: B * n].reshape(B, n)[:, d : min(n, d + 256)].copy()   # one read of the slots
+            ok = ((v >> 32) == co["tag"]).all(axis=0)         # steps whose tokens every sequence has published
+            k = ok.size if ok.all() else int(ok.argmin())
+            if k == 0:
+                return events
+            toks = (v[:, :k] & 0xFFFFFFFF).tolist()
+            for j, (rid, _, nr) in enumerate(co["reqs"]):
+                if d < nr:
+                    e = min(d + k, nr)
+                    events.append((rid, toks[j][: e - d], e == nr))
+                    self.serve["tokens"] += e - d
+            co["done"] = d + k
+            if co["done"] < co["n"]:
+                return events
+            self.cohort = None                                # finished: start the next cohort in the same call
+
     def close(self) -> None:
         if getattr(self, "h", None):
             self.lib.mk_destroy(self.h)
             self.h = None
-        self.W = self.embed = self.norm_w = self.qk_norm_w = self.rope = self.ttab = self.exc = self.wfrag = None
+        if getattr(self, "_hmap_host", None):
+            self.hmap = None
+            self.lib.mk_host_free(ctypes.c_void_p(self._hmap_host))
+            self._hmap_host = None
+        if getattr(self, "_err_host", None):
+            self._err = None
+            self.lib.mk_host_free(ctypes.c_void_p(self._err_host))
+            self._err_host = None
+        self.W = self.embed = self.norm_w = self.qk_norm_w = self.rope = self.ttab = self.exc = self.wfrag = self.l0tab = None
+        self.sk_w8 = self.sk_rc = None
 
     def stats(self) -> dict:
         return {
@@ -440,4 +657,12 @@ class Engine:
             "weight_bytes_read_per_step": int(self.W.numel()) * (4 if self.track == "B" else 2),
             "max_batch": self.max_batch,
             "max_context": self.max_context,
+            "serving": "online (submit/poll): per cohort of equal-length prompts, prompt through step(), then one "
+            "k_generate launch for all new tokens; the kernel publishes each step's tokens to host-mapped memory "
+            "(tagged per cohort) and poll() reads them without synchronizing the device",
+            "online": dict(self.serve),
+            "greedy_head": ["exact (12-bit lm_head)", "certified int8 sketch of lm_head + exact rescoring of every tile that "
+                            "can hold the argmax (the token is the exact head's argmax)", "sketch, every tile rescored (test)",
+                            "exact head inside the sketch kernel (diagnosis)"][self.sketch_mode],
+            "sketch": getattr(self, "sk_stats", None),
         }

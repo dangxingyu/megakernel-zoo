@@ -85,7 +85,11 @@
 #define ADAPT true       // stop stashing when the grid barrier is complete
 #endif
 #ifndef SG
+#ifdef TRACK_A
+#define SG 4            // (track A, staged engine: B=1 -7, B=8 -22 vs 2, e0130; track B: 4 is +20 at B=1)
+#else
 #define SG 2            // end-of-phase stash: loads per warp in flight at a time
+#endif
 #endif
 #ifndef FENCE_BAR
 #define FENCE_BAR 1    // loaders start their end-of-phase stash only after the coordinator's last epilogue is fenced
@@ -109,6 +113,9 @@
 #define SMU_ _Pragma("unroll 4")
 #else
 #define SMU_
+#endif
+#ifndef VSB
+#define VSB 0         // one-block attention below LONG_NT tiles: V loads in flight per warp (0 / 1: one at a time, as inherited)
 #endif
 #ifndef VBATCH
 #define VBATCH 6      // one-block attention, long contexts (3+ sequences): V loads in flight per warp (4 -> 6: -70 us per step at 8192 positions, 8 sequences)
@@ -182,13 +189,17 @@
 #define EARLY_COUNT 1      // the grid barrier's increment right behind the fence, before the block's own barrier and control code
 #endif
 #ifndef ATT_WAIT
-#define ATT_WAIT 16         // idle blocks: polls (at most) for the attention blocks' score pass before stashing; 0 = stash at once
+#ifdef TRACK_A
+#define ATT_WAIT 16    // (track A: as before)
+#else
+#define ATT_WAIT 8         // idle blocks: polls (at most) for the attention blocks' score pass before stashing; 0 = stash at once  (track B re-tune on the staged engine: 8 / 7, e0205, e0208)
+#endif
 #endif
 #ifndef ATT_WAIT_MAX_B
 #define ATT_WAIT_MAX_B 2    // ... with up to this many sequences (measured: B=1 -17 us per step, B=8 +14)
 #endif
 #ifndef O2PF
-#define O2PF 6
+#define O2PF 0   // first tile from the stash: L2 prefetch of the rest of the second tile (6 before the L2 staging; with staging 0 is -26 us at B=1, 4 rounds, B=8 +-0)
 #endif
 #ifndef O_ATT2
 #define O_ATT2 0           // o tile table: the attention blocks take two (cold) tiles whenever the other blocks would be left with more than O_ATT2 / 10 tiles each; measured us/step B=1..5: threshold 2.5: 4100 4206 4283 4287 4304, always: 4088 4155 4246 4248 4265
@@ -197,7 +208,11 @@
 #define TOUCH_KL 0          // attention at long context: K position tiles (x sequences) the idle blocks pull into L2 at the start. Measured with 8 sequences, us per token: prompt 8192 + 256 tokens 8010 -> 7954 with 128, but + 1024 tokens 8177 -> 8202: off
 #endif
 #ifndef ATT_POLITE
-#define ATT_POLITE 5        // attention, 1-2 sequences: the idle blocks request their first loads of the o stash one at a time (less in flight while the attention blocks read K and V: measured -55 us per step; 2..6 alike, 9 worse)
+#ifdef TRACK_A
+#define ATT_POLITE 5    // (track A: as before)
+#else
+#define ATT_POLITE 7        // attention, 1-2 sequences: the idle blocks request their first loads of the o stash one at a time (less in flight while the attention blocks read K and V: measured -55 us per step; 2..6 alike, 9 worse)  (track B re-tune on the staged engine: 8 / 7, e0205, e0208)
+#endif
 #endif
 #ifndef ATT_STASH_CAP
 #define ATT_STASH_CAP 1000
@@ -213,6 +228,25 @@
 #endif
 #ifndef LONG_NT
 #define LONG_NT 72      // position tiles (16 positions) from which attention sums V in 24 sub-segments (and may be split over blocks)
+#endif
+// Idle blocks' K/V touch at the start of attention. 0: unit by unit, K then V of each (a late unit's K is asked for
+// after the V of the early ones). 1: K of all units first, units interleaved, TOUCH_FL chunks in flight per warp.
+// Reads only: the logits cannot change. Measured on track A, tests/time_ctx.py 64..1088 positions, us per step:
+// B=1 three rounds 5337.2 / 5337.1 / 5338.9 -> 5329.1 / 5326.2 / 5330.1 with FL 1 (FL 2: 5329.6, FL 3: 5332.9, one
+// round); B=8 5578.1 -> 5581.8 / 5574.6 / 5575.4 (FL 1 / 2 / 3, inside the spread): on for 1-2 sequences, track A
+// (not measured on track B: its build keeps the inherited order).
+#ifndef TOUCH_ORD
+#ifdef TRACK_A
+#define TOUCH_ORD 1
+#else
+#define TOUCH_ORD 0
+#endif
+#endif
+#ifndef TOUCH_ORD_MAX_B
+#define TOUCH_ORD_MAX_B 2 // ... with up to this many sequences
+#endif
+#ifndef TOUCH_FL
+#define TOUCH_FL 1
 #endif
 #ifndef TOUCH_TILES
 #define TOUCH_TILES 256   // attention: position tiles (8 KB of K and V each) the idle blocks pull into L2, for all sequences together / 8
@@ -327,12 +361,14 @@ struct Params {
   float* bm_val;              // generate(): [MAXB][blocks] best logit seen by each block
   int* bm_idx;                // generate(): [MAXB][blocks] its row
   int n_steps;
-  unsigned* clk;              // TRACE: software clock
+  int l0build;                // 1: the launch computes layer 0's q/k/v only (building l0tab)
+  const float* l0tab;         // track B: [VOCAB][QKV_ROWS] layer 0's q/k/v output per token id (nullptr: computed)
   unsigned* trace;            // TRACE: [blocks][8 phases][8 points]
   int nwork;                  // number of working blocks (TRACE: one less than the grid)
   int stop_layer;             // debug: run only the first stop_layer layers (NL in production)
   int calib;                  // calibration: record barrier waits
-  unsigned trace_stop;        // TRACE: value of *sync at which the clock stops
+  unsigned gen_tag;           // online path: 0 = generate(); else the cohort tag, stored in the upper half of every token
+                              // written to gen_out (host-mapped memory), followed by a system-scope fence
   size_t kv_stride;           // uint4 per (layer, seq, kv head)
   unsigned sync_base;
   int sx_bytes;               // size of the sx area of this launch
@@ -350,7 +386,7 @@ enum { T_QKV = 0, T_DN = 1, T_GU = 2, T_LM = 3, T_O = 6 };   // index into the b
 #endif
 #define TR_PARAM , int tr
 #define TR_ARG(x) , (x)
-#define TP(i) do { if (tr >= 0 && TIDX == CW * 32) P.trace[(blockIdx.x * 8 + tr) * 8 + (i)] = *(volatile unsigned*)P.clk; } while (0)
+#define TP(i) do { if (tr >= 0 && TIDX == CW * 32) P.trace[(blockIdx.x * 8 + tr) * 8 + (i)] = *(volatile unsigned*)(P.trace + 64 * 256); } while (0)
 #define NWORK (P.nwork)
 #define TRACE_EXTRA 1
 #else
@@ -433,6 +469,9 @@ __device__ __forceinline__ int fresh_nblocks() {   // the grid size, likewise
 #ifndef SCORE_RB
 #define SCORE_RB 0
 #endif
+#ifndef SCORE_SCALE
+#define SCORE_SCALE 0.08838834764831845f   // 1 / sqrt(128). (Tests only: a value 1-2 float32 ulp away gives an independent draw of every BF16 rounding downstream, tests/long_err.py)
+#endif
 #if SCORE_RB == 2
 #define SCORE_(c) RB(RB(c) * scale)
 #elif SCORE_RB == 1
@@ -458,9 +497,12 @@ __device__ __forceinline__ float bf2f(unsigned v);
 // (t = lane & 3), g = lane >> 2, sx16 = shared-memory fragments of the matrix + 16 * g.
 // record word 1: row | (t*4 + slot) << 4 | kstep << 8. x[col] of sequence n: narrow from shared memory (sx16 = the
 // sequence's fragments, 64 bf16 per kstep), wide from global memory (fg = the matrix's input fragments).
-__device__ __forceinline__ unsigned exc_x(unsigned v, const unsigned short* sx16, const unsigned short* fg, int n, bool wide, bool live) {
+__device__ __forceinline__ unsigned exc_x(unsigned v, const unsigned short* sx16, const unsigned short* fg, int n, bool wide, bool live, unsigned sxs = 0u) {
   const unsigned ks = v >> 8, off = (v >> 4) & 15u;
 #if XSLICE
+  // from the second tile of a phase on, every loader warp has stored its slice in shared memory (layout
+  // [kstep][sequence][16]: sxs = slice base + 16 * sequence): no L2 round trip before the tile's block barrier
+  if (!wide && sxs) { unsigned short r = 0; if (live) asm volatile("ld.shared.u16 %0, [%1];" : "=h"(r) : "r"(sxs + (((ks << 6) + off) << 1))); return r; }
   // 1-2 sequences: the input fragments are in shared memory only slice by slice (each loader warp stores its
   // own, behind its first loads), so read the compact global copy ([n][kstep][16 bf16]); sx16 = fg + n * ksteps * 16
   if (!wide) { unsigned r = 0; if (live) r = __ldcg(sx16 + ((size_t)ks << 4) + off); return r; }
@@ -471,8 +513,8 @@ __device__ __forceinline__ unsigned exc_x(unsigned v, const unsigned short* sx16
   if (live) r = __ldcg(fg + ((((size_t)(ks >> 2) * 2 + ((ks & 3u) >> 1)) * 32 + 4 * n + (off >> 2)) << 3) + (ks & 1u) * 4 + (off & 3u));
   return r;
 }
-__device__ __forceinline__ void exc_mma(float* cex, const uint4 rr, const unsigned short* sx16, const unsigned short* fg, unsigned g, bool wide, bool live) {
-  const unsigned b = exc_x(rr.y, sx16, fg, g, wide, live) | (exc_x(rr.w, sx16, fg, g, wide, live) << 16);
+__device__ __forceinline__ void exc_mma(float* cex, const uint4 rr, const unsigned short* sx16, const unsigned short* fg, unsigned g, bool wide, bool live, unsigned sxs = 0u) {
+  const unsigned b = exc_x(rr.y, sx16, fg, g, wide, live, sxs) | (exc_x(rr.w, sx16, fg, g, wide, live, sxs) << 16);
   const unsigned ro0 = rr.y & 15u, ro1 = rr.w & 15u;
   const unsigned a0 = (ro0 == g ? (rr.x & 0xffffu) : 0u) | (ro1 == g ? (rr.z << 16) : 0u);
   const unsigned a1 = (ro0 == g + 8 ? (rr.x & 0xffffu) : 0u) | (ro1 == g + 8 ? (rr.z << 16) : 0u);
@@ -595,6 +637,12 @@ __device__ __forceinline__ void op_embed(unsigned char* smem, int gs, int embed)
     long long tok;
     if (gs <= 0) {
       tok = P.tokens[b];
+      // a token id outside the vocabulary would read past the embedding (and the layer-0 table): use id 0 instead
+      // and, for step(), raise the host-mapped error word (P.gen_out, see mk_step) that api.step() checks
+      if (tok < 0 || tok >= VOCAB) {
+        if (gs < 0 && P.gen_out && tid == 0) { *(volatile long long*)P.gen_out = 1; __threadfence_system(); }
+        tok = 0;
+      }
     } else {
       int* stok = (int*)(smem + SCR_OFF);
       if (tid < 32) {
@@ -609,12 +657,30 @@ __device__ __forceinline__ void op_embed(unsigned char* smem, int gs, int embed)
           float v = __shfl_xor_sync(0xffffffffu, bv, o); int ix = __shfl_xor_sync(0xffffffffu, bidx, o);
           if (v > bv || (v == bv && ix < bidx)) { bv = v; bidx = ix; }
         }
-        if (lane == 0) { stok[0] = bidx; P.gen_out[(size_t)b * P.n_steps + gs - 1] = bidx; __threadfence(); }
+        if (lane == 0) {
+          stok[0] = bidx;
+          const unsigned tg = P.gen_tag;
+          P.gen_out[(size_t)b * P.n_steps + gs - 1] = (long long)(((unsigned long long)tg << 32) | (unsigned)bidx);
+          if (tg) __threadfence_system(); else __threadfence();
+        }
       }
       __syncthreads();
       tok = stok[0];
     }
-    if (embed) {
+    if (embed && P.l0tab && !P.l0build) {
+      // track B, layer-0 table: layer 0's input is the embedding row, so its q/k/v output (before the q/k norms and
+      // RoPE) depends on the token alone; the row was computed by this kernel's own q/k/v phase at load time
+      // (Engine._build_l0), bit for bit what the phase would compute now. The residual stream gets the embedding.
+      const float4* src = (const float4*)(P.l0tab + (size_t)tok * QKV_ROWS);
+      float4* dst = (float4*)(P.qkv + (size_t)b * QKV_ROWS);
+      for (int i = tid; i < QKV_ROWS / 4; i += NTHREAD) dst[i] = __ldcs(src + i);
+      const uint2* e = (const uint2*)(P.embed + (size_t)tok * H);
+      for (int i = tid; i < H / 4; i += NTHREAD) {
+        const uint2 v = e[i];
+        ((float4*)(P.xres + (size_t)b * H))[i] = make_float4(bf2f(v.x & 0xffffu), bf2f(v.x >> 16), bf2f(v.y & 0xffffu), bf2f(v.y >> 16));
+      }
+      __threadfence();
+    } else if (embed) {
       const uint2* e = (const uint2*)(P.embed + (size_t)tok * H);
       for (int i = tid; i < H / 4; i += NTHREAD) {      // 4 elements per (virtual) thread i; 4 consecutive i = one 16-row tile
         uint2 v = e[i];
@@ -651,12 +717,117 @@ __device__ __forceinline__ void op_embed(unsigned char* smem, int gs, int embed)
 // ---------------------------------------------------------------------------------------------------------
 enum { EP_QKV = 0, EP_ADD = 1, EP_GU = 2, EP_LM = 3, EP_LMARG = 4 };
 // phase ids (0..4 are also the trace slots)
-enum { PH_QKV = 0, PH_ATT = 1, PH_O = 2, PH_GU = 3, PH_DN = 4, PH_LM = 5, PH_LMARG = 6, PH_EMBED = 7, PH_DONE = 8, PH_NORM = 9 };
+enum { PH_QKV = 0, PH_ATT = 1, PH_O = 2, PH_GU = 3, PH_DN = 4, PH_LM = 5, PH_LMARG = 6, PH_EMBED = 7, PH_DONE = 8, PH_NORM = 9, PH_SK2 = 10 };
 
 // The current phase as a descriptor in shared memory ("instruction"): the coordinator thread of the block writes
 // it before the grid barrier that precedes the phase; every thread then reads the few fields it needs. Deriving
 // these values in every thread costs ~100 instructions x 1024 threads per phase, which is real time at 181
 // phases per step.
+// L2 staging in the attention window (1-2 sequences): HBM idles while the attention blocks work and the idle blocks
+// wait at the barrier (stash done). Whole later gate+up tiles of the block are asked into L2 with one bulk prefetch
+// per 16 KB piece; when the gate+up phase reaches them they are L2 hits, served next to the HBM stream of the other
+// blocks (microbenchmark tests/vl/l2stage2.cu: 151 MB stream with 25 MB staged 55.0 -> 48.3 us). Reads only.
+#ifndef STG_GU
+#ifdef TRACK_A
+#define STG_GU 2          // gate+up tiles per idle block staged into L2 during attention (0: off). Measured (B=1,
+                          // 64..1088, 3 rounds): track A 5330 -> 5284 us/step with 1 tile (128 KB); 12 pieces (1.5 tiles) a further -22 (e0131)
+#else
+#define STG_GU 2          // track B: 4120 -> 4033 with 9 pieces of 16 KB (1.5 tiles of 98 KB); 1 tile 4051, 2: 4039
+#endif
+#endif
+#ifndef STG_O
+#define STG_O 0           // 1: also the rest of the block's second o tile
+#endif
+#ifndef STG_POL
+#define STG_POL 0         // 1: L2::evict_last hint on the staging (measured ~25 us slower than none), 0: none
+#endif
+#ifndef STG_MAX_B
+#define STG_MAX_B 2       // with up to this many sequences
+#endif
+#ifndef STG_TAIL
+// end of o / gate+up / down phases (1-2 sequences): 16 KB pieces of the next phase's middle tile staged into L2 by
+// one thread per piece, behind the loaders' stash, while the grid barrier runs. Measured (B=1, 64..1088, 3 rounds):
+// track A 5287 -> 5163 us with 4 (2: 5215, 6: 5162); track B 4027 -> 3950 with 3 (4: 3965); B=8 not used
+#ifdef TRACK_A
+#define STG_TAIL 4
+#else
+#define STG_TAIL 3
+#endif
+#endif
+#ifndef STG_TAIL_MAX_B
+#define STG_TAIL_MAX_B 8  // tail staging with up to this many sequences
+#endif
+#ifndef STG_TAIL_W
+#define STG_TAIL_W 3      // ... pieces with 3+ sequences (B=8, 64..1088, 2 rounds: track B 4419 -> 4320 with 3, 4: 4350; track A 5578 -> 5481)
+#endif
+#ifndef STG_GU_A
+#define STG_GU_A 0        // > 0: attention-window staging targets gate+up tiles STG_GU_A + j * STG_GU_S (0: spread over the block's tiles)
+#endif
+#ifndef STG_GU_S
+#define STG_GU_S 1
+#endif
+#ifndef STG_TAIL_D
+#define STG_TAIL_D STG_TAIL   // pieces at the end of down (next: q/k/v of the next layer, or the head), 1-2 sequences
+#endif
+#ifndef STG_TAIL_GU_TI
+#ifdef TRACK_A
+#define STG_TAIL_GU_TI 0  // (track A: 2 is +8.5 at B=1, 1 is +2.5 / B=8 -34; e0196)
+#else
+#define STG_TAIL_GU_TI 2  // > 0: the tail staging after o targets gate+up tile STG_TAIL_GU_TI of the block (0: the middle one). 2: B=1 -20 (6 rounds), B=8 -8 (e0193)
+#endif
+#endif
+#ifndef STG_TAIL_FIRST
+#define STG_TAIL_FIRST 0  // bit per transition (as STG_TAIL_MASK): stage the next phase's FIRST tile (from piece STG_TAIL_FOFF) instead of its middle one
+#endif
+#ifndef STG_TAIL_FOFF
+#define STG_TAIL_FOFF 0
+#endif
+#ifndef STG_TAIL_MASK
+#define STG_TAIL_MASK 7   // bit 0: after o (gate+up), 1: after gate+up (down), 2: after down (next q/k/v)
+#endif
+#ifndef EXC_SMEM
+#define EXC_SMEM 1        // 1-2 sequences: exception x values from the loaders' shared-memory slices from the 2nd tile on (B=1 -40, B=2 -58 us, 4 rounds, e0151; bit-identical)
+#endif
+#ifndef LM_NEXT_O
+#define LM_NEXT_O 0       // 1: with the layer-0 table, the end-of-head prefetch targets layer 0's o tiles (not q/k/v)
+#endif
+#ifndef STG_EARLY
+#define STG_EARLY 0       // 1: attention-window staging requested before the o stash instead of after it
+#endif
+#ifndef GU_SHIFT
+#define GU_SHIFT 0       // gate+up tiles moved from each attention block (0..7) to blocks NB_MAT.. (1-2 sequences)
+#endif
+#ifndef STG_DN
+#define STG_DN 0
+#endif
+#ifndef STG_DN_TI
+#define STG_DN_TI 0
+#endif
+#ifndef STG_DN_OFF
+#define STG_DN_OFF 0
+#endif
+#ifndef STG_GUA
+#define STG_GUA 0         // 1: idle block 8B + j also stages the gate+up pieces of attention block j
+#endif
+#ifndef STG_OA
+#define STG_OA 0          // 1: idle blocks stage the attention blocks' o tiles into L2 at the start of attention
+#endif
+#ifndef STG_NP
+#ifdef TRACK_A
+#define STG_NP 12         // > 0: only the first STG_NP 16 KB pieces of the STG_GU tiles
+#else
+#define STG_NP 9
+#endif
+#endif
+__device__ __forceinline__ void l2_stage(const uint4* p, unsigned bytes) {
+#if STG_POL
+  unsigned long long pol;
+  asm volatile("createpolicy.fractional.L2::evict_last.b64 %0, 1.0;" : "=l"(pol));
+  asm volatile("cp.async.bulk.prefetch.L2.global.L2::cache_hint [%0], %1, %2;" :: "l"(p), "r"(bytes), "l"(pol) : "memory");
+#else
+  asm volatile("cp.async.bulk.prefetch.L2.global [%0], %1;" :: "l"(p), "r"(bytes) : "memory");
+#endif
+}
 struct Desc {
   const uint4* W;               // weights of the matrix
   const unsigned short* frag;   // input fragments (global memory)
@@ -674,6 +845,7 @@ struct Desc {
   int kafter;                   // track A: phase that follows the PH_NORM phase
   int pre;                      // this phase: 1 = the block's first tile is in the stash, 2 = the first group of every warp
   int nst;                      // next phase: what the loaders stash at the end of this one (0: only a prefetch, 1, 2 as above)
+  const uint4* stgW;            // STG_TAIL: tile of the next phase staged into L2 at the end of this one (nullptr: none)
 };
 #define DESC_OFF (MISC_OFF + 912)
 static_assert(DESC_OFF + sizeof(Desc) <= CTL_OFF && sizeof(Params) <= 296 && TBO_OFF + 8 <= RN_OFF && CTL_OFF + sizeof(Ctl) <= SCL_OFF && SCL_OFF + 256 <= ARG_OFF && ARG_OFF + 512 <= GO_OFF && CNT_OFF + 4 * NWARP <= MISC_OFF + MISC_BYTES && SX_OFF + SX_NARROW < 199680 && CAP_D <= LPG && DSTASH_BYTES >= KS_H * 16 * 8 + 128 && SX_OFF + ATT_BYTES(MAX_CTX_SMEM) <= 232448 && ATT_BYTES(8000) <= SX_NARROW, "shared-memory layout");
@@ -701,8 +873,25 @@ __device__ __forceinline__ void set_desc(unsigned char* smem, int k, int l) {
     if (l + 1 < P.stop_layer) { d.nextW = WL + LAYER_U4 + OFF_QKV + (size_t)tb[2 * T_QKV] * TU4(KS_H); d.nextT = TL + (size_t)(LAYER_T + tb[2 * T_QKV]) * TT; }
     else { d.nextW = P.W + (size_t)NL * LAYER_U4 + (size_t)tb[2 * T_LM] * TU4(KS_H); d.nextT = P.ttab + ((size_t)NL * LAYER_T + tb[2 * T_LM]) * TT; }
     nextks = KS_H;
-  } else if (k == PH_LMARG || (k == PH_LM && LM_NEXT)) { d.nextW = P.W + OFF_QKV + (size_t)tb[2 * T_QKV] * TU4(KS_H); d.nextT = P.ttab + (size_t)tb[2 * T_QKV] * TT; nextks = KS_H; }
+  } else if (k == PH_LMARG || (k == PH_LM && LM_NEXT)) {
+    if (LM_NEXT_O && P.l0tab && !P.l0build) {   // layer-0 table: the next step's first weights are layer 0's o tiles
+      const int to0 = ((const int*)(smem + TBO_OFF))[0];
+      d.nextW = P.W + OFF_O + (size_t)to0 * TU4(KS_H); d.nextT = P.ttab + (size_t)(QKV_T + to0) * TT;
+    } else { d.nextW = P.W + OFF_QKV + (size_t)tb[2 * T_QKV] * TU4(KS_H); d.nextT = P.ttab + (size_t)tb[2 * T_QKV] * TT; }
+    nextks = KS_H;
+  }
   d.nb = (nextks / 4) / NLOAD; d.ne = (nextks / 4) % NLOAD;
+  d.stgW = nullptr;
+#if STG_TAIL > 0
+  if (d.nextW && P.B <= STG_TAIL_MAX_B) {
+    const int tsn = k == PH_O ? T_GU : k == PH_GU ? T_DN : k == PH_DN ? (l + 1 < P.stop_layer ? T_QKV : T_LM) : -1;
+    if (tsn >= 0 && (STG_TAIL_MASK >> (k == PH_O ? 0 : k == PH_GU ? 1 : 2) & 1)) {
+      const int kb = k == PH_O ? 0 : k == PH_GU ? 1 : 2;
+      const int ng = tb[2 * tsn + 1] - tb[2 * tsn], ti = (STG_TAIL_FIRST >> kb & 1) ? 0 : (kb == 0 && STG_TAIL_GU_TI > 0 ? (STG_TAIL_GU_TI < ng ? STG_TAIL_GU_TI : ng - 1) : ng / 2);
+      if ((ti > 0 || (STG_TAIL_FIRST >> kb & 1)) && ti < ng) d.stgW = d.nextW + (size_t)ti * TU4(nextks) + ((STG_TAIL_FIRST >> kb & 1) ? (size_t)STG_TAIL_FOFF * 1024 : 0);
+    }
+  }
+#endif
   // Stash: the first tile of a K=4096 phase (the first group per warp of a K=12288 tile) is
   // streamed into shared memory by the loaders at the end of the phase before it (o: during attention; layer 0:
   // during the embedding), so HBM does not idle while the last epilogue and the grid barrier run.
@@ -722,6 +911,27 @@ __device__ __forceinline__ void set_desc(unsigned char* smem, int k, int l) {
 #endif
   *(Desc*)(smem + DESC_OFF) = d;
 }
+#ifndef TRACK_A
+// k_gensk, the last layer's down phase: what its tail fetches for the next phase (set_desc: the 12-bit head's
+// first tile into the stash, its middle tile into L2, the coordinator's wait-time prefetch) is never read by the
+// sketch. Instead: no stash, no prefetch, and the tail staging asks L2 for the start of the block's first int8
+// sketch tile (STG_TAIL pieces of 16 KB of its 64 KB), which pass 1 reads first.
+#ifndef SK_DN_FIX
+#define SK_DN_FIX 1   // k_gensk: the last down phase's tail fetches the sketch's first tile instead of the 12-bit head's (sk_dn_desc)
+#endif
+struct SkArgs;
+__device__ __forceinline__ const uint4* sk_w8_of(const Params& P);
+__device__ __forceinline__ void sk_dn_desc(unsigned char* smem) {
+  const Params& P = *(const Params*)(smem + MISC_OFF);
+  const int* tb = (const int*)(smem + TB_OFF);
+  Desc& d = *(Desc*)(smem + DESC_OFF);
+  d.nst = 0; d.nb = 0; d.ne = 0; d.nextW = nullptr; d.nextP = nullptr; d.nextT = nullptr;
+  d.stgW = nullptr;
+#if STG_TAIL > 0
+  if (P.B <= STG_TAIL_MAX_B && tb[2 * T_LM] < tb[2 * T_LM + 1]) d.stgW = sk_w8_of(P) + (size_t)tb[2 * T_LM] * 128 * 32;
+#endif
+}
+#endif
 #ifdef TRACE
 #define TR_OF(D) int tr = ((D).l == TRACE_LAYER && (D).k < PH_LM) ? (D).k : -100
 #else
@@ -961,6 +1171,9 @@ __device__ __forceinline__ void entry_copy(unsigned char* smem) {
 // Weight loads carry the cache operator "last use" (ld.global.lu): a weight line is read exactly once per step,
 // and with the default operator the stream evicts what the phases share through L2 (input fragments, residual,
 // K/V). Measured, generate us/step B=1 / B=8: default (ca) 5649 / 6184, cg 5618 / 6128, cs 5637 / 6100, lu 5602 / 6047.
+#ifdef SKEL   // diagnosis only (wrong results): no weight stream, the skeleton of the step
+#define WLOAD(ptr) make_uint4(0u, 0u, 0u, 0u)
+#endif
 #ifndef WLOAD
 #define WLOAD(ptr) __ldlu(ptr)
 #endif
@@ -999,7 +1212,7 @@ __device__ __forceinline__ void entry_copy(unsigned char* smem) {
 #ifndef GB
 #define GB (LPG == 3 ? 3 : 2)     // groups (3 loads each) requested back to back before the first MMA of a batch
 #endif
-template <int KS, int S>   // S: lanes per kstep of the fragments in shared memory (16 narrow, 32 wide)
+template <int KS, int S, int LITE = 0>   // LITE (k_gensk only): register-lighter variant of the first tile, same arithmetic; S: lanes per kstep of the fragments in shared memory (16 narrow, 32 wide)
 __device__ __forceinline__ void tile_loop(unsigned char* smem, const uint4* W, int t, int t1, bool pre, bool pre1) {
   enum { KG = KS / 4, BASE = KG / NLOAD, EXTRA = KG % NLOAD, NGW = BASE + 1, TU = KG * GU4 };
   const int lane = TIDX & 31, w = TIDX >> 5;
@@ -1074,22 +1287,35 @@ __device__ __forceinline__ void tile_loop(unsigned char* smem, const uint4* W, i
     for (int u = 0; u < BASE * LPG; u++) { if (u < cnt) a[u] = q[u * 32]; else a[u] = WLOAD(p + u * 32); }
     if (extra) {
 #pragma unroll
-      for (int u = BASE * LPG; u < NGW * LPG; u++) { if (u < cnt) a[u] = q[u * 32]; else a[u] = WLOAD(p + u * 32); }
+      for (int u = BASE * LPG; u < NGW * LPG; u++) {
+        if (LITE & 2) { if (u >= cnt) PREFETCH(p + u * 32); }   // (LITE 2: loaded behind the base groups' MMAs)
+        else { if (u < cnt) a[u] = q[u * 32]; else a[u] = WLOAD(p + u * 32); }
+      }
     }
-    if (t + 1 < t1) {
+    if (t + 1 < t1 && !(LITE & 4)) {
 #pragma unroll
       for (int u = 0; u < LPG; u++) nx[u] = WLOAD(p + TU + u * 32);
 #if O2PF > 0
       // ... and L2 is asked for the rest of the second tile: it arrives while the stashed tile is multiplied
 #pragma unroll
-      for (int u = LPG; u < LPG + O2PF; u++) if (u < BASE * LPG || extra) PREFETCH(p + TU + u * 32);
+      for (int u = LPG; u < LPG + O2PF; u++) if (!(LITE & 1) && (u < BASE * LPG || extra)) PREFETCH(p + TU + u * 32);
 #endif
     }
     XS_STORE_();
     float c[4] = {0.f, 0.f, 0.f, 0.f};
 #pragma unroll
     for (int g = 0; g < BASE; g++) group_mma(c, &a[g * LPG], xb + g * (4 * S), S);
-    if (extra) group_mma(c, &a[BASE * LPG], xb + BASE * (4 * S), S);
+    if ((LITE & 4) && t + 1 < t1) {   // (LITE 4: the next tile's first group requested behind the MMAs)
+#pragma unroll
+      for (int u = 0; u < LPG; u++) nx[u] = WLOAD(p + TU + u * 32);
+    }
+    if (extra) {
+      if (LITE & 2) {
+#pragma unroll
+        for (int u = BASE * LPG; u < NGW * LPG; u++) { if (u < cnt) a[u] = q[u * 32]; else a[u] = WLOAD(p + u * 32); }
+      }
+      group_mma(c, &a[BASE * LPG], xb + BASE * (4 * S), S);
+    }
 #endif
     redw[(t & 1) * RED_HALF] = make_float4(c[0], c[1], c[2], c[3]);
     t++; p += TU;
@@ -1276,6 +1502,10 @@ __device__ __forceinline__ void loader_tail(unsigned char* smem) {
   const volatile Desc& D = *(const volatile Desc*)(smem + DESC_OFF);
   const uint4* const nextW = D.nextW;
   const int nst = D.nst, nb = D.nb, ne = D.ne;
+#if STG_TAIL > 0
+  const uint4* const stgW = D.stgW;
+  const int stgk = D.k;
+#endif
 #if FENCE_BAR
   __syncthreads();
 #endif
@@ -1289,9 +1519,13 @@ __device__ __forceinline__ void loader_tail(unsigned char* smem) {
       for (int u = 0; u < NPF; u++) PREFETCH(p + u * 32);
     }
   }
+#if STG_TAIL > 0
+  if (stgW) { const int tid = fresh_tid(); if (tid < (((const Params*)(smem + MISC_OFF))->B <= 2 ? (stgk == PH_DN ? STG_TAIL_D : STG_TAIL) : STG_TAIL_W)) l2_stage(stgW + tid * 1024, 16384); }
+#endif
   __syncthreads();
 }
 // a loader warp's phase: input copy, tile loop, then wait for the coordinator (last epilogue + grid barrier)
+template <int LITE = 0>
 __device__ __forceinline__ void loader_phase(unsigned char* smem) {
   entry_copy(smem);
   const Desc& D = *(const Desc*)(smem + DESC_OFF);
@@ -1305,8 +1539,8 @@ __device__ __forceinline__ void loader_phase(unsigned char* smem) {
 #endif
     else tile_loop_g<KS_I>(smem, D.W, (const uint4*)D.frag, D.t0, D.t1, D.pre == 2);
   } else {
-    if (D.ks == KS_H) tile_loop<KS_H, 16>(smem, D.W, D.t0, D.t1, pre, false);
-    else tile_loop<KS_I, 16>(smem, D.W, D.t0, D.t1, false, D.pre == 2);
+    if (D.ks == KS_H) tile_loop<KS_H, 16, LITE>(smem, D.W, D.t0, D.t1, pre, false);
+    else tile_loop<KS_I, 16, LITE>(smem, D.W, D.t0, D.t1, false, D.pre == 2);
   }
   loader_tail(smem);
 }
@@ -1314,6 +1548,7 @@ __device__ __forceinline__ void loader_phase(unsigned char* smem) {
 // The coordinator warp's phase: input copy; per tile: request the epilogue inputs (they arrive while the
 // loaders stream), meet the loaders at the block barrier, sum the 31 partials in a fixed order (tree), run the
 // epilogue; then advance the control state, write the next phase's descriptor and run the grid barrier.
+template <bool SK = false>
 __device__ __forceinline__ void coord_phase(unsigned char* smem) {
   TS_DECL;
   TS();                                   // 0: phase start (block barrier of the previous phase released)
@@ -1432,6 +1667,13 @@ __device__ __forceinline__ void coord_phase(unsigned char* smem) {
       const bool wide = P.B >= WIDE_MIN_B, live = (lane >> 2) < P.B;
       const unsigned short* fg = D.frag;
       const unsigned g = lane >> 2;
+#if XSLICE && EXC_SMEM
+      // (a 32-bit shared-memory address: a 64-bit pointer here made k_step / k_generate spill)
+      // only in k_gensk (the greedy/online kernel): in k_step / k_generate this path made the coordinator spill (+69 us)
+      const unsigned sxs = (SK || EXC_SMEM > 1) && t > D.t0 ? (unsigned)__cvta_generic_to_shared(smem + (D.ks == KS_I ? SX_OFF : HF_OFF)) + 32u * g : 0u;
+#else
+      const unsigned sxs = 0u;
+#endif
 #ifdef NOEXC
       const int n = 0;
 #elif defined(NOEXC_LM)
@@ -1442,14 +1684,14 @@ __device__ __forceinline__ void coord_phase(unsigned char* smem) {
       const int n = (int)te0.y;
 #endif
 #pragma unroll
-      for (int c = 0; c < INLINE_CHUNKS; c++) if (c < n) exc_mma(cex, ri[c], sx16, fg, g, wide, live);
+      for (int c = 0; c < INLINE_CHUNKS; c++) if (c < n) exc_mma(cex, ri[c], sx16, fg, g, wide, live, sxs);
       if (n > INLINE_CHUNKS) {
         const uint4* ex = P.exc + (size_t)te0.x * 4 + (lane & 3);
         PREFETCH(P.exc + (size_t)(te0.x + n - INLINE_CHUNKS) * 4 + (lane >> 3) * 8);   // the next tile's overflow chunks follow
         for (int i = 0; i < n - INLINE_CHUNKS; i += 2) {
           const uint4 ra = __ldcg(ex + i * 4), rb = __ldcg(ex + i * 4 + 4);
-          exc_mma(cex, ra, sx16, fg, g, wide, live);
-          if (i + 1 < n - INLINE_CHUNKS) exc_mma(cex, rb, sx16, fg, g, wide, live);
+          exc_mma(cex, ra, sx16, fg, g, wide, live, sxs);
+          if (i + 1 < n - INLINE_CHUNKS) exc_mma(cex, rb, sx16, fg, g, wide, live, sxs);
         }
       }
     }
@@ -1550,9 +1792,14 @@ __device__ __forceinline__ void coord_phase(unsigned char* smem) {
   if (lane == 0) {
     Ctl& C = *(Ctl*)(smem + CTL_OFF);
     const int k = kk, l = ((const volatile Desc*)(smem + DESC_OFF))->l;
-    if (k == PH_QKV) set_desc(smem, PH_O, l);
+    if (k == PH_QKV) { if (P.l0build) ((Desc*)(smem + DESC_OFF))->k = PH_DONE; else set_desc(smem, PH_O, l); }   // (l0build: layer 0's q/k/v only)
     else if (k == PH_O) set_desc(smem, PH_GU, l);
-    else if (k == PH_GU) set_desc(smem, PH_DN, l);
+    else if (k == PH_GU) {
+      set_desc(smem, PH_DN, l);
+#ifndef TRACK_A
+      if (SK && SK_DN_FIX && l + 1 == P.stop_layer && P.logits) sk_dn_desc(smem);   // k_gensk: the head is read through the sketch
+#endif
+    }
     else if (k == PH_DN) { const bool more = l + 1 < P.stop_layer; set_desc(smem, more ? PH_QKV : C.lm, more ? l + 1 : 0); }
     else if (k == PH_LMARG) { C.s = C.s + 1; P.pos = P.pos + 1; ((Desc*)(smem + DESC_OFF))->k = PH_EMBED; }   // generate(): next step
     else ((Desc*)(smem + DESC_OFF))->k = PH_DONE;                                                           // step(): logits are out
@@ -1606,6 +1853,569 @@ __device__ __forceinline__ void coord_phase(unsigned char* smem) {
   __syncthreads();
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Certified int8 sketch of lm_head (greedy paths only: generate() and the online path; k_gensk). step() keeps
+// the exact head. The chosen token is the exact head's argmax (proof: notes in api.py, build_sketch / poll docs):
+//  pass 1 (sk1_phase): every row i of the block's lm tiles: zh_i = s_i 2^-kx (128 A1 + A0), A1/A0 = int8 weights
+//    q_i . the two int8 digits of x quantized to x^ = q 2^-kx (exact int32 MMAs), and the bound
+//    |z_i - zh_i| <= c1_i ||x|| + c2_i ||x - x^|| (+ slack), z_i = the exact head's float32 value of the row
+//    before the 1/rms factor. Per tile and sequence: the largest upper bound (tmax, shared memory); per block and
+//    sequence: the largest lower bound (global). One grid barrier.
+//  pass 2 (sk2_phase): L = max lower bound per sequence, thr = L (1 - 2^-20) (L > 0; otherwise every tile).
+//    Tiles whose tmax is not below thr for some sequence are recomputed with the exact head's own code
+//    (tile_loop / tile_loop_g and a copy of the coordinator's LMARG epilogue): same operands, same order of
+//    operations, so the same float32 logits; argmax over them, lowest row on ties, published as the exact phase.
+//    A row of a tile not recomputed has z < thr <= z_j (1 - 2^-20) for the row j with lower bound L, so its
+//    logit fl(z r) is strictly below row j's: it can be neither the maximum nor tie with it.
+// ---------------------------------------------------------------------------------------------------------
+#ifndef SK_RT
+#define SK_RT 0     // measurement build: the variants below chosen at run time (SkArgs::pad, mk_sketch_flags) in ONE engine instance
+#endif
+#ifndef SK_PF
+#define SK_PF 0     // pass 1's end: at most this many likely candidate tiles per block asked into L2 (0: off)
+#endif
+#ifndef SK_PREP
+#define SK_PREP 2   // sketch x preparation: 0 two passes of 4-byte loads, 1 max pass with 16-byte loads, 2 both passes with 16-byte loads
+#endif
+#ifndef SK_LITE
+#define SK_LITE 2   // k_gensk: the first tile's extra group loaded behind the base groups' MMAs (prefetched to L2 first): without it the hot loop spilled (+70..150 us at B=1)
+#endif
+struct SkArgs { const uint4* w8; const float4* rc; float* bl; int force; int pad; unsigned* stat; int* lrun; };   // lrun [2 step parities][8]: running max lower bound (SK_PF)   // via Params.logits (unused by generate)
+#ifndef TRACK_A
+__device__ __forceinline__ const uint4* sk_w8_of(const Params& P) { return ((const SkArgs*)P.logits)->w8; }
+#endif
+#ifndef TRACK_A
+#define SK_XF_OFF SX_OFF                    // int8 B fragments of x: [hi | lo][128 chunks][32 lanes][8 B] (64 KB)
+#define SK_RED_OFF (SX_OFF + 65536)         // pass-1 partials: [2 parity][NLOAD][32 lanes][2 uint4] (47 KB)
+#define SK_TMX_OFF (SX_OFF + 131072)        // float [SK_TMAX tiles][8]: largest upper bound per tile and sequence
+#define SK_TMAX 80
+#define SK_CST_OFF (SX_OFF + 112640)        // pass-1 coordinator staging (SK_COORD_LOOP): [32 lanes][12 floats]
+#ifndef SK_LD
+#define SK_LD(ptr) WLOAD(ptr)
+#endif
+#ifndef SK_LOADMODE
+#define SK_LOADMODE 1   // pass-1 loader: 0 next tile's loads into registers behind the MMAs (spills the hot loops), 1 loads at the tile's start + L2 prefetch of the next
+#endif
+#ifndef SK_COORD_LOOP
+#define SK_COORD_LOOP 0
+#endif
+#define SK_CH 128                           // k-chunks of 32 per tile
+#define SK_CB (SK_CH / NLOAD)               // chunks per loader warp (+1 for the first SK_CE warps)
+#define SK_CE (SK_CH % NLOAD)
+#define SK_CW (SK_CB + 1)
+static_assert(SK_RED_OFF + 2 * NLOAD * 32 * 32 <= SK_TMX_OFF && SK_TMX_OFF + SK_TMAX * 8 * 4 <= SX_OFF + SX_NARROW && SK_RED_OFF >= SX_OFF + 65536, "sketch smem");
+// per-sequence statistics of pass 1 (SCR area): [0,32) max |x| bits, [32,64) kx, [64,128) sum x^2, [128,192) sum r^2
+#define SK_ST_MAX(n) (((unsigned*)(smem + SCR_OFF))[n])
+#define SK_ST_KX(n) (((int*)(smem + SCR_OFF + 32))[n])
+#define SK_ST_XX(n) (((double*)(smem + SCR_OFF + 64))[n])
+#define SK_ST_RR(n) (((double*)(smem + SCR_OFF + 128))[n])
+#define MMA8(c, a, b0, b1) asm volatile( \
+  "mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};" \
+  : "+r"(c[0]), "+r"(c[1]), "+r"(c[2]), "+r"(c[3]) \
+  : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w), "r"(b0), "r"(b1))
+
+#ifdef SK_NOINLINE
+#define SK_FN __device__ __noinline__   // (measured: much slower, +200..350 us per step)
+#else
+#define SK_FN __device__ __forceinline__
+#endif
+#ifndef SKDBG
+#define SKDBG 0   // compile experiments: 1 no pass-2 tile loops, 2 no pass-1 loader prefetch, 4 no pass-1 coordinator math, 8 no prep
+#endif
+SK_FN void sk1_phase(unsigned char* smem) {
+  Params& P = *(Params*)(smem + MISC_OFF);
+  const SkArgs* SA = (const SkArgs*)P.logits;
+  const int tid = TIDX, lane = tid & 31, w = tid >> 5;
+  const int* tb = (const int*)(smem + TB_OFF);
+  const int t0 = tb[2 * T_LM], t1 = tb[2 * T_LM + 1];
+  const int cb = w * SK_CB + min(w, (int)SK_CE), cn = SK_CB + (w < SK_CE ? 1 : 0);
+  const uint4* w8 = SA->w8;
+  // loaders: the first tile's loads go out before the preparation of x
+  uint4 nx[SK_CW];
+#pragma unroll
+  for (int u = 0; u < SK_CW; u++) nx[u] = make_uint4(0, 0, 0, 0);
+  if (w < NLOAD && t0 < t1) {
+    const uint4* p = w8 + ((size_t)t0 * SK_CH + cb) * 32 + lane;
+#pragma unroll
+    for (int u = 0; u < SK_CW; u++) if (u < cn) nx[u] = SK_LD(p + u * 32);
+  }
+  // x (the head's bf16 input fragments) per sequence: max |x| -> kx; digits; sums of squares
+  const int B = P.B, tot = 1024 * B;
+  if (tid < 8) { SK_ST_MAX(tid) = 0u; SK_ST_XX(tid) = 0.0; SK_ST_RR(tid) = 0.0; }
+  __syncthreads();
+  const unsigned* xw = (const unsigned*)P.xfrag;
+#if SK_RT
+  if (SA->pad & 1) {
+#endif
+#if SK_PREP >= 1 || SK_RT
+  // max |x|: the fragment buffer read as it lies, 8 values per 16-byte load; sequence of load i: compact layout
+  // [n][kstep][16] -> i >> 9; wide [kstep pair][lane 4n + t][8] -> (i >> 2) & 7 (slots of n >= B are stale: skipped)
+  {
+    const uint4* xq = (const uint4*)P.xfrag;
+    const bool wide = B >= WIDE_MIN_B;
+    const int totq = (SKDBG & 8) ? 0 : (wide ? 4096 : 512 * B);
+    for (int i = tid; i < totq; i += NTHREAD) {
+      const uint4 v = __ldcg(xq + i);
+      const int n = wide ? (i >> 2) & 7 : i >> 9;
+      unsigned m = max(max(max(v.x & 0x7fffu, (v.x >> 16) & 0x7fffu), max(v.y & 0x7fffu, (v.y >> 16) & 0x7fffu)),
+                       max(max(v.z & 0x7fffu, (v.z >> 16) & 0x7fffu), max(v.w & 0x7fffu, (v.w >> 16) & 0x7fffu)));
+      if (n >= B) m = 0u;
+      m = max(m, __shfl_xor_sync(0xffffffffu, m, 1));
+      m = max(m, __shfl_xor_sync(0xffffffffu, m, 2));    // lanes 4j..4j+3: one sequence in both layouts
+      if ((lane & 3) == 0 && n < B) atomicMax(&SK_ST_MAX(n), m);
+    }
+  }
+#endif
+#if SK_RT
+  } else {
+#endif
+#if SK_PREP < 1 || SK_RT
+  for (int i = tid; i < ((SKDBG & 8) ? 0 : tot); i += NTHREAD) {      // a warp's 32 items belong to one sequence
+    const int n = i >> 10, k0 = (i & 1023) * 4;
+    const unsigned v0 = __ldcg(xw + (gfrag_index(k0, n, KS_H, B) >> 1)), v1 = __ldcg(xw + (gfrag_index(k0 + 2, n, KS_H, B) >> 1));
+    unsigned m = max(max(v0 & 0x7fffu, (v0 >> 16) & 0x7fffu), max(v1 & 0x7fffu, (v1 >> 16) & 0x7fffu));   // |bf16| bits order like the values
+    m = __reduce_max_sync(0xffffffffu, m);
+    if (lane == 0) atomicMax(&SK_ST_MAX(n), m);
+  }
+#endif
+#if SK_RT
+  }
+#endif
+  __syncthreads();
+  if (tid < 8) {
+    const float M = __uint_as_float(SK_ST_MAX(tid) << 16);
+    int E = 0;
+    frexpf(M, &E);                                 // M < 2^E
+    SK_ST_KX(tid) = M > 0.f && M <= 3.0e38f && E >= -87 ? 13 - E : 0;   // |x| 2^kx < 2^13: digits in [-64, 64]; kx <= 100
+                                                                         // (2^-kx a normal float; else kx = 0: x^ = 0, the residual bound carries x)
+  }
+  __syncthreads();
+#if SK_RT
+  if (SA->pad & 1) {
+#endif
+#if SK_PREP >= 2 || SK_RT
+  // digits: 16-byte loads as above, float arithmetic (all exact: x 2^kx, rint, the split, the residual, see below).
+  // Element j of load i: compact: t = 2h + (j >> 2), slot j & 3 (h = i & 1) -> natural k within the kstep
+  // 2t + (s & 1) + 8 (s >> 1); a load fills digit words t8 = h (j = 0,1,4,5) and t8 = h + 2 (j = 2,3,6,7).
+  // wide: j < 4 kstep 2p, j >= 4 kstep 2p + 1, t = i & 3: the thread holds bytes 0,1 (t even) or 2,3 (t odd) of words
+  // t8 = t >> 1 (slots 0,1) and (t >> 1) + 2 (slots 2,3); the pair (t, t ^ 1) completes them by a shuffle.
+  {
+    unsigned* xf = (unsigned*)(smem + SK_XF_OFF);
+    const uint4* xq = (const uint4*)P.xfrag;
+    const bool wide = B >= WIDE_MIN_B;
+    const int totq = (SKDBG & 8) ? 0 : (wide ? 4096 : 512 * B);
+    for (int i = tid; i < totq; i += NTHREAD) {
+      const uint4 v = __ldcg(xq + i);
+      const int n = wide ? (i >> 2) & 7 : i >> 9;
+      const int kx = SK_ST_KX(n < B ? n : 0);
+      const float sc = __uint_as_float((unsigned)(127 + kx) << 23), isc = __uint_as_float((unsigned)(127 - kx) << 23);
+      const unsigned vv[4] = {v.x, v.y, v.z, v.w};
+      unsigned hb[8], lb[8];
+      double sxx = 0.0, srr = 0.0;
+#pragma unroll
+      for (int j = 0; j < 8; j++) {
+        const float x = bf2f((j & 1) ? vv[j >> 1] >> 16 : vv[j >> 1] & 0xffffu);
+        const float q = fminf(fmaxf(rintf(x * sc), -8256.f), 8256.f);   // |x| 2^kx < 2^13 (non-finite x: bounds NaN anyway)
+        const float d1 = rintf(q * 0.0078125f), d0 = q - 128.f * d1;    // exact: |d1|, |d0| <= 64
+        const float r = x - q * isc;                                     // exact (r = x when q = 0, else |r| <= 2^-kx / 2)
+        sxx += (double)x * x; srr += (double)r * r;
+        hb[j] = (unsigned)(int)d1 & 0xffu; lb[j] = (unsigned)(int)d0 & 0xffu;
+      }
+      if (!wide) {
+        const int ks = (i >> 1) & 255, h = i & 1, c = ks >> 1, kh = ks & 1;
+        const int w0 = (c * 32 + n * 4 + h) * 2 + kh, w2 = w0 + 4;     // t8 = h, h + 2
+        xf[w0] = hb[0] | hb[1] << 8 | hb[4] << 16 | hb[5] << 24; xf[SK_CH * 64 + w0] = lb[0] | lb[1] << 8 | lb[4] << 16 | lb[5] << 24;
+        xf[w2] = hb[2] | hb[3] << 8 | hb[6] << 16 | hb[7] << 24; xf[SK_CH * 64 + w2] = lb[2] | lb[3] << 8 | lb[6] << 16 | lb[7] << 24;
+      } else {
+        const int t = i & 3, p = i >> 5;
+        // my halves: [kstep q][slot pair g2] -> 16 bits
+        unsigned H0 = (hb[0] | hb[1] << 8) | (hb[2] | hb[3] << 8) << 16, H1 = (hb[4] | hb[5] << 8) | (hb[6] | hb[7] << 8) << 16;
+        unsigned L0 = (lb[0] | lb[1] << 8) | (lb[2] | lb[3] << 8) << 16, L1 = (lb[4] | lb[5] << 8) | (lb[6] | lb[7] << 8) << 16;
+        const unsigned pH0 = __shfl_xor_sync(0xffffffffu, H0, 1), pH1 = __shfl_xor_sync(0xffffffffu, H1, 1);
+        const unsigned pL0 = __shfl_xor_sync(0xffffffffu, L0, 1), pL1 = __shfl_xor_sync(0xffffffffu, L1, 1);
+        const bool ev = (t & 1) == 0;
+        // the even thread writes kstep 2p (q = 0), the odd one kstep 2p + 1 (q = 1); word = even's half | odd's half << 16
+        const unsigned mh = ev ? H0 : H1, ph = ev ? pH0 : pH1, ml = ev ? L0 : L1, pl = ev ? pL0 : pL1;   // (q of the writer)
+        // even writer, q = 0: even's halves are mine (H0), odd's are the partner's q = 0 halves (pH0)
+        // odd writer, q = 1: even's halves are the partner's q = 1 halves (pH1), odd's are mine (H1)
+        const unsigned eh = ev ? mh : ph, oh = ev ? ph : mh, el = ev ? ml : pl, ol = ev ? pl : ml;
+        const int q = ev ? 0 : 1, t8 = t >> 1;
+        if (n < B) {
+          const int wa = (p * 32 + n * 4 + t8) * 2 + q, wb = wa + 4;
+          xf[wa] = (eh & 0xffffu) | (oh << 16); xf[SK_CH * 64 + wa] = (el & 0xffffu) | (ol << 16);
+          xf[wb] = (eh >> 16) | (oh & 0xffff0000u); xf[SK_CH * 64 + wb] = (el >> 16) | (ol & 0xffff0000u);
+        }
+      }
+      if (n >= B) { sxx = 0.0; srr = 0.0; }
+      sxx += __shfl_xor_sync(0xffffffffu, sxx, 1); srr += __shfl_xor_sync(0xffffffffu, srr, 1);
+      sxx += __shfl_xor_sync(0xffffffffu, sxx, 2); srr += __shfl_xor_sync(0xffffffffu, srr, 2);
+      if ((lane & 3) == 0 && n < B) { atomicAdd(&SK_ST_XX(n), sxx); atomicAdd(&SK_ST_RR(n), srr); }
+    }
+  }
+#endif
+#if SK_RT
+  } else {
+#endif
+#if SK_PREP < 2 || SK_RT
+  unsigned* xf = (unsigned*)(smem + SK_XF_OFF);
+  for (int i = tid; i < ((SKDBG & 8) ? 0 : tot); i += NTHREAD) {
+    const int n = i >> 10, jj = i & 1023, k0 = jj * 4;
+    const unsigned v0 = __ldcg(xw + (gfrag_index(k0, n, KS_H, B) >> 1)), v1 = __ldcg(xw + (gfrag_index(k0 + 2, n, KS_H, B) >> 1));
+    const float xv[4] = {bf2f(v0 & 0xffffu), bf2f(v0 >> 16), bf2f(v1 & 0xffffu), bf2f(v1 >> 16)};
+    const int kx = SK_ST_KX(n);
+    const double sc = ldexp(1.0, kx), isc = ldexp(1.0, -kx);
+    unsigned hi = 0, lo = 0;
+    double sxx = 0.0, srr = 0.0;
+#pragma unroll
+    for (int e = 0; e < 4; e++) {
+      const double x = (double)xv[e];
+      double q = rint(x * sc);
+      q = fmin(fmax(q, -8256.0), 8256.0);          // (only a non-finite x gets here out of range: its bounds are NaN)
+      const double d1 = rint(q * (1.0 / 128.0)), d0 = q - 128.0 * d1;
+      const double r = x - q * isc;
+      sxx += x * x; srr += r * r;
+      hi |= ((unsigned)(int)d1 & 0xffu) << (8 * e);
+      lo |= ((unsigned)(int)d0 & 0xffu) << (8 * e);
+    }
+    const int c = jj >> 3, kh = (jj >> 2) & 1, t8 = jj & 3;
+    const int wi = (c * 32 + n * 4 + t8) * 2 + kh;
+    xf[wi] = hi; xf[SK_CH * 32 * 2 + wi] = lo;
+#pragma unroll
+    for (int o = 16; o > 0; o >>= 1) { sxx += __shfl_xor_sync(0xffffffffu, sxx, o); srr += __shfl_xor_sync(0xffffffffu, srr, o); }
+    if (lane == 0) { atomicAdd(&SK_ST_XX(n), sxx); atomicAdd(&SK_ST_RR(n), srr); }
+  }
+#endif
+#if SK_RT
+  }
+#endif
+  __syncthreads();
+  if (w < NLOAD) {
+    // pass 1, loader warp: chunks [cb, cb + cn) of every tile, int8 MMAs (hi and lo digits), partials to shared
+    // memory. One register buffer: the next tile's loads go out right behind this tile's MMAs (3 KB per warp in
+    // flight is enough for the SM's share of HBM; a second buffer pushed the hot loops' registers to local memory)
+    const uint2* xh = (const uint2*)(smem + SK_XF_OFF) + lane;
+    const uint2* xl = xh + SK_CH * 32;
+    uint4* red = (uint4*)(smem + SK_RED_OFF) + (w * 32 + lane) * 2;
+    int par = 0;
+    for (int t = t0; t < t1; t++, par ^= 1) {
+#if SK_LOADMODE == 1
+      // this tile's loads now (the first tile's went out before the preparation); the next tile is asked from L2
+      // with prefetches, which hold no registers (a register buffer for it spilled the hot loops)
+      if (t > t0) {
+        const uint4* p = w8 + ((size_t)t * SK_CH + cb) * 32 + lane;
+#pragma unroll
+        for (int u = 0; u < SK_CW; u++) if (u < cn) nx[u] = SK_LD(p + u * 32);
+      }
+      if (t + 1 < t1) {
+        const uint4* p = w8 + ((size_t)(t + 1) * SK_CH + cb) * 32 + lane;
+#pragma unroll
+        for (int u = 0; u < SK_CW; u++) if (u < cn) PREFETCH(p + u * 32);
+      }
+#endif
+      int ch[4] = {0, 0, 0, 0}, cl[4] = {0, 0, 0, 0};
+#pragma unroll
+      for (int u = 0; u < SK_CW; u++) {
+        if (u < cn) {
+          const uint2 bh = xh[(cb + u) * 32], bl = xl[(cb + u) * 32];
+          MMA8(ch, nx[u], bh.x, bh.y);
+          MMA8(cl, nx[u], bl.x, bl.y);
+        }
+      }
+      if (SK_LOADMODE == 0 && t + 1 < t1 && !(SKDBG & 2)) {
+        const uint4* p = w8 + ((size_t)(t + 1) * SK_CH + cb) * 32 + lane;
+#pragma unroll
+        for (int u = 0; u < SK_CW; u++) if (u < cn) nx[u] = SK_LD(p + u * 32);
+      }
+      red[par * (NLOAD * 64)] = make_uint4(ch[0], ch[1], ch[2], ch[3]);
+      red[par * (NLOAD * 64) + 1] = make_uint4(cl[0], cl[1], cl[2], cl[3]);
+      __syncthreads();
+    }
+  } else {
+    // pass 1, coordinator warp: bounds per (row, sequence), float32 with directed rounding:
+    //   A = 128 A1 + A0 (int64, exact), zh = fl(fl(A) s_i) 2^-kx: two roundings, |zh - A s_i 2^-kx| <= 2^-22.9 |zh|
+    //   (+ subnormal loss < 2^-126), covered by the 2^-20 |zh| + 2^-120 slack;
+    //   bd = c1 nx + c2 nr + 2^-20 |zh| + 2^-120 rounded up (nx >= ||x||, nr >= ||x - x^|| rounded up);
+    //   zu = zh + bd rounded up, zl = zh - bd rounded down.
+    const int g = lane >> 2, n0 = 2 * (lane & 3), n1 = n0 + 1;
+    float kx0 = 0.f, kx1 = 0.f, nx0 = 0.f, nx1 = 0.f, nr0 = 0.f, nr1 = 0.f;
+    if (n0 < B) { kx0 = __uint_as_float((unsigned)(127 - SK_ST_KX(n0)) << 23); nx0 = __double2float_ru(sqrt(SK_ST_XX(n0)) * (1.0 + 0x1p-30)); nr0 = __double2float_ru(sqrt(SK_ST_RR(n0)) * (1.0 + 0x1p-30)); }
+    if (n1 < B) { kx1 = __uint_as_float((unsigned)(127 - SK_ST_KX(n1)) << 23); nx1 = __double2float_ru(sqrt(SK_ST_XX(n1)) * (1.0 + 0x1p-30)); nr1 = __double2float_ru(sqrt(SK_ST_RR(n1)) * (1.0 + 0x1p-30)); }
+    float lb0 = -INFINITY, lb1 = -INFINITY;
+    float* tmx = (float*)(smem + SK_TMX_OFF);
+    const float4* rc = SA->rc;
+    int par = 0;
+    for (int t = t0; t < t1; t++, par ^= 1) {
+      const float4 q0 = __ldcg(rc + t * 16 + g), q1 = __ldcg(rc + t * 16 + g + 8);   // {s, c1, c2, -} of rows g, g + 8
+      __syncthreads();
+      const uint4* red = (const uint4*)(smem + SK_RED_OFF) + par * (NLOAD * 64) + lane * 2;
+      int h0 = 0, h1 = 0, h2 = 0, h3 = 0, l0 = 0, l1 = 0, l2 = 0, l3 = 0;
+#pragma unroll 4
+      for (int j = 0; j < NLOAD; j++) {
+        const uint4 hh = red[j * 64], ll = red[j * 64 + 1];
+        h0 += (int)hh.x; h1 += (int)hh.y; h2 += (int)hh.z; h3 += (int)hh.w;
+        l0 += (int)ll.x; l1 += (int)ll.y; l2 += (int)ll.z; l3 += (int)ll.w;
+      }
+      if (SKDBG & 4) { if (g == 0) tmx[(t - t0) * 8 + n0] = h0 + l0 + h1 + l1 + h2 + l2 + h3 + l3; continue; }
+      float m0, m1;
+#if SK_COORD_LOOP
+      // (variant: one entry at a time from shared memory, fewer live registers)
+      {
+        float* st = (float*)(smem + SK_CST_OFF) + lane * 12;
+        ((float4*)st)[0] = q0; ((float4*)st)[1] = q1;
+        st[8] = __ll2float_rn(128ll * h0 + l0); st[9] = __ll2float_rn(128ll * h1 + l1); st[10] = __ll2float_rn(128ll * h2 + l2); st[11] = __ll2float_rn(128ll * h3 + l3);
+        m0 = -INFINITY; m1 = -INFINITY;
+#pragma unroll 1
+        for (int e = 0; e < 4; e++) {
+          const volatile float* sv = st;
+          const int qo = (e >> 1) * 4, c1st = (e & 1) == 0;
+          const float zh = __fmul_rn(__fmul_rn(sv[8 + e], sv[qo]), c1st ? kx0 : kx1);
+          const float bd = __fmaf_ru(fabsf(zh), 0x1p-20f, __fadd_ru(__fadd_ru(__fmul_ru(sv[qo + 1], c1st ? nx0 : nx1), __fmul_ru(sv[qo + 2], c1st ? nr0 : nr1)), 0x1p-120f));
+          float zu = __fadd_ru(zh, bd), zl = __fsub_rd(zh, bd);
+          if (!(zu == zu)) zu = INFINITY;
+          if (!(zl == zl)) zl = -INFINITY;
+          if (c1st) { m0 = fmaxf(m0, zu); lb0 = fmaxf(lb0, zl); } else { m1 = fmaxf(m1, zu); lb1 = fmaxf(lb1, zl); }
+        }
+      }
+#else
+#define SK_ENT(hh, ll, q, kx, nxv, nrv, zu, zl) { \
+        const float zh = __fmul_rn(__fmul_rn(__ll2float_rn(128ll * (hh) + (ll)), (q).x), kx); \
+        const float bd = __fmaf_ru(fabsf(zh), 0x1p-20f, __fadd_ru(__fadd_ru(__fmul_ru((q).y, nxv), __fmul_ru((q).z, nrv)), 0x1p-120f)); \
+        zu = __fadd_ru(zh, bd); zl = __fsub_rd(zh, bd); \
+        if (!(zu == zu)) zu = INFINITY; if (!(zl == zl)) zl = -INFINITY; }
+      {
+        float u0, d0, u1, d1, u2, d2, u3, d3;
+        SK_ENT(h0, l0, q0, kx0, nx0, nr0, u0, d0)   // (row g, n0)
+        SK_ENT(h1, l1, q0, kx1, nx1, nr1, u1, d1)   // (row g, n1)
+        SK_ENT(h2, l2, q1, kx0, nx0, nr0, u2, d2)   // (row g + 8, n0)
+        SK_ENT(h3, l3, q1, kx1, nx1, nr1, u3, d3)   // (row g + 8, n1)
+        m0 = fmaxf(u0, u2); m1 = fmaxf(u1, u3);
+        lb0 = fmaxf(lb0, fmaxf(d0, d2)); lb1 = fmaxf(lb1, fmaxf(d1, d3));
+      }
+#undef SK_ENT
+#endif
+#pragma unroll
+      for (int o = 4; o < 32; o <<= 1) { m0 = fmaxf(m0, __shfl_xor_sync(0xffffffffu, m0, o)); m1 = fmaxf(m1, __shfl_xor_sync(0xffffffffu, m1, o)); }
+      const int tl = t - t0;
+      if (g == 0 && tl < SK_TMAX) { tmx[tl * 8 + n0] = m0; tmx[tl * 8 + n1] = m1; }
+    }
+#pragma unroll
+    for (int o = 4; o < 32; o <<= 1) { lb0 = fmaxf(lb0, __shfl_xor_sync(0xffffffffu, lb0, o)); lb1 = fmaxf(lb1, __shfl_xor_sync(0xffffffffu, lb1, o)); }
+    if (g == 0) {
+      const int nb = NWORK, b = BIDX;
+      if (n0 < B) SA->bl[n0 * nb + b] = lb0;
+      if (n1 < B) SA->bl[n1 * nb + b] = lb1;
+    }
+#if SK_PF > 0 || SK_RT
+    if (SK_RT ? (SA->pad >> 4) > 0 : true) {
+      const int pfmax = SK_RT ? (SA->pad >> 4) & 15 : SK_PF;
+      // Likely candidates of pass 2 asked into L2 now (their 12-bit tiles; HBM is nearly idle from here to the end of
+      // pass 2): tiles whose largest upper bound reaches the running maximum of the lower bounds published so far
+      // by all blocks (a lower bound of the final L, so the true candidates of this block are among them). Reads only.
+      int* lr = SA->lrun + (((const Ctl*)(smem + CTL_OFF))->s & 1) * 8;
+      float L0 = -INFINITY, L1 = -INFINITY;
+      if (g == 0) {
+        if (n0 < B && lb0 > 0.f) L0 = __int_as_float(max(atomicMax(lr + n0, __float_as_int(lb0)), __float_as_int(lb0)));
+        if (n1 < B && lb1 > 0.f) L1 = __int_as_float(max(atomicMax(lr + n1, __float_as_int(lb1)), __float_as_int(lb1)));
+      }
+      float thr[8];
+#pragma unroll
+      for (int n = 0; n < 8; n++) {
+        const float v = __shfl_sync(0xffffffffu, (n & 1) ? L1 : L0, n >> 1);
+        thr[n] = v > 0.f ? __fmul_rd(v, 1.0f - 0x1p-20f) : INFINITY;   // (no positive bound yet: nothing staged)
+      }
+      const float* tmx = (const float*)(smem + SK_TMX_OFF);
+      const int nt = min(t1 - t0, (int)SK_TMAX);
+      int done = 0;
+      for (int j0 = 0; j0 < nt && done < pfmax; j0 += 32) {
+        const int tl = j0 + lane;
+        bool c = false;
+        if (tl < nt) {
+#pragma unroll
+          for (int n = 0; n < 8; n++) if (n < B && !(tmx[tl * 8 + n] < thr[n])) c = true;
+        }
+        unsigned bal = __ballot_sync(0xffffffffu, c);
+        while (bal && done < pfmax) {
+          const int j = __ffs(bal) - 1;
+          bal &= bal - 1;
+          enum { PIECES = (int)(TU4(KS_H) / 1024) };
+          if (lane < PIECES) l2_stage(P.W + (size_t)NL * LAYER_U4 + (size_t)(t0 + j0 + j) * TU4(KS_H) + lane * 1024, 16384);
+          done++;
+        }
+      }
+    }
+#endif
+    __threadfence();
+    __syncwarp();
+    if (lane == 0) {
+      set_desc(smem, PH_LMARG, 0);
+      ((Desc*)(smem + DESC_OFF))->k = PH_SK2;
+      grid_barrier(smem, PH_LMARG TR_ARG(-100));
+    }
+  }
+  __syncthreads();
+}
+
+SK_FN void sk2_phase(unsigned char* smem) {
+  Params& P = *(Params*)(smem + MISC_OFF);
+  const SkArgs* SA = (const SkArgs*)P.logits;
+  const Desc& D = *(const Desc*)(smem + DESC_OFF);
+  const int tid = TIDX, lane = tid & 31, w = tid >> 5;
+  const int B = P.B;
+  int* cand = (int*)(smem + SCR_OFF);              // [0] count, [1..] candidate tiles in ascending order
+  if (w < B) {                                     // 1/rms per sequence, as entry_copy computes it
+    const float r = rms_inv(P, w, lane);
+    if (lane == 0) ((float*)(smem + RN_OFF))[w] = r;
+  }
+  if (w == CW) {
+    float thr[8];
+    const int nb = NWORK;
+#pragma unroll
+    for (int n = 0; n < 8; n++) {
+      float L = -INFINITY;
+      if (n < B) {
+        for (int i = lane; i < nb; i += 32) L = fmaxf(L, __ldcg(SA->bl + n * nb + i));
+        L = warp_max(L);
+      }
+      thr[n] = (L > 1e-30f && L < 3.0e38f && !SA->force) ? __fmul_rd(L, 1.0f - 0x1p-20f) : -INFINITY;   // (1 - 2^-20 is exact in float32)
+    }
+    const float* tmx = (const float*)(smem + SK_TMX_OFF);
+    const int nt = D.t1 - D.t0;
+    int cnt = 0;
+    for (int j0 = 0; j0 < nt; j0 += 32) {
+      const int tl = j0 + lane;
+      bool c = false;
+      if (tl < nt) {
+        if (tl >= SK_TMAX) c = true;
+#pragma unroll
+        for (int n = 0; n < 8; n++) if (n < B && tl < SK_TMAX && !(tmx[tl * 8 + n] < thr[n])) c = true;
+      }
+      const unsigned bal = __ballot_sync(0xffffffffu, c);
+      if (c) cand[1 + cnt + __popc(bal & ((1u << lane) - 1u))] = D.t0 + tl;
+      cnt += __popc(bal);
+    }
+    if (lane == 0) { cand[0] = cnt; if (SA->stat) atomicAdd(SA->stat, (unsigned)cnt); }
+    ((float4*)(smem + ARG_OFF))[lane] = make_float4(-__int_as_float(0x7f800000), -__int_as_float(0x7f800000), __int_as_float((SKDBG & 16) ? 0 : 0x7fffffff), __int_as_float((SKDBG & 16) ? 0 : 0x7fffffff));
+  }
+  __syncthreads();
+  const int ncand = (SKDBG & 16) ? 0 : (SK_RT && (SA->pad & 0x400)) ? min(cand[0], 1) : cand[0];
+  for (int ci = 0; ci < ncand; ci++) {
+    const int t = ((const volatile int*)cand)[1 + ci];
+    if (w < NLOAD) {
+      if (!(SKDBG & 1) && !(SK_RT && (SA->pad & 0x200))) {
+      if (B >= WIDE_MIN_B) tile_loop_g<KS_H>(smem, D.W, (const uint4*)D.frag, t, t + 1, false);
+      else tile_loop<KS_H, 16>(smem, D.W, t, t + 1, false, false);
+      } else __syncthreads();
+    } else {
+      // the coordinator's EP_LMARG tile, as in coord_phase
+      const float4* red = (const float4*)(smem + RED_OFF) + lane;
+      float4* const am = (float4*)(smem + ARG_OFF) + lane;
+      const uint4* te = D.tt + (size_t)t * TT;
+      const uint4 te0 = __ldcg(te), te1 = __ldcg(te + 1);
+      uint4 ri[INLINE_CHUNKS];
+#pragma unroll
+      for (int c = 0; c < INLINE_CHUNKS; c++) ri[c] = __ldcg(te + 2 + c * 4 + (lane & 3));
+      {
+        const unsigned sw0 = (lane >> 4) ? te1.y : te1.x, sw1 = (lane >> 4) ? te1.w : te1.z;
+        const int sbit = ((lane >> 2) & 3) * 8;
+        ((float2*)(smem + SCL_OFF))[lane] = make_float2(__uint_as_float((unsigned)(127 - (int)(signed char)(sw0 >> sbit)) << 23),
+                                                        __uint_as_float((unsigned)(127 - (int)(signed char)(sw1 >> sbit)) << 23));
+      }
+      float cex[4] = {0.f, 0.f, 0.f, 0.f};
+      {
+#if XSLICE
+        const unsigned short* sx16 = D.frag + (size_t)(lane >> 2) * D.ks * 16;
+#else
+        const unsigned short* sx16 = (const unsigned short*)(smem + (D.ks == KS_I ? SX_OFF : HF_OFF)) + 16 * (lane >> 2);
+#endif
+        const bool wide = B >= WIDE_MIN_B, live = (lane >> 2) < B;
+        const unsigned short* fg = D.frag;
+        const unsigned g = lane >> 2;
+        const int n = (SK_RT && (SA->pad & 0x100)) ? 0 : (int)te0.y;
+#pragma unroll
+        for (int c = 0; c < INLINE_CHUNKS; c++) if (c < n) exc_mma(cex, ri[c], sx16, fg, g, wide, live);
+        if (n > INLINE_CHUNKS) {
+          const uint4* ex = P.exc + (size_t)te0.x * 4 + (lane & 3);
+          for (int i = 0; i < n - INLINE_CHUNKS; i += 2) {
+            const uint4 ra = __ldcg(ex + i * 4), rb = __ldcg(ex + i * 4 + 4);
+            exc_mma(cex, ra, sx16, fg, g, wide, live);
+            if (i + 1 < n - INLINE_CHUNKS) exc_mma(cex, rb, sx16, fg, g, wide, live);
+          }
+        }
+      }
+      ((float4*)(smem + RED_OFF) + (t & 1) * RED_HALF + NLOAD * 32 + lane)[0] = make_float4(cex[0], cex[1], cex[2], cex[3]);
+      __syncthreads();
+      const float4* r = red + (t & 1) * RED_HALF;
+#define R_(i) r[(i) * 32]
+#define S8_(o) add4(add4(add4(R_(o), R_(o + 1)), add4(R_(o + 2), R_(o + 3))), add4(add4(R_(o + 4), R_(o + 5)), add4(R_(o + 6), R_(o + 7))))
+#if NLOAD == 31
+      float4 q0 = S8_(0), q1 = S8_(8), q2 = S8_(16);
+      float4 q3 = add4(add4(add4(R_(24), R_(25)), add4(R_(26), R_(27))), add4(add4(R_(28), R_(29)), R_(30)));
+      float4 c = add4(add4(q0, q1), add4(q2, q3));
+#elif NLOAD == 15
+      float4 q0 = S8_(0);
+      float4 q1 = add4(add4(add4(R_(8), R_(9)), add4(R_(10), R_(11))), add4(add4(R_(12), R_(13)), R_(14)));
+      float4 c = add4(q0, q1);
+#elif NLOAD == 23
+      float4 q0 = S8_(0), q1 = S8_(8);
+      float4 q2 = add4(add4(add4(R_(16), R_(17)), add4(R_(18), R_(19))), add4(add4(R_(20), R_(21)), R_(22)));
+      float4 c = add4(add4(q0, q1), q2);
+#else
+#error "reduction tree for this NLOAD"
+#endif
+      {
+        const float4 cx = R_(NLOAD);
+        const float2 sc = ((const float2*)(smem + SCL_OFF))[lane];
+        c.x = (c.x + cx.x) * sc.x; c.y = (c.y + cx.y) * sc.x; c.z = (c.z + cx.z) * sc.y; c.w = (c.w + cx.w) * sc.y;
+      }
+#undef S8_
+#undef R_
+      const float* rn = (const float*)(smem + RN_OFF);
+      const float r0 = rn[2 * (lane & 3)], r1 = rn[2 * (lane & 3) + 1];
+      const int row = t * 16 + (lane >> 2);
+      const float4 a4 = *am;
+      float bv0 = a4.x, bv1 = a4.y;
+      int bi0 = __float_as_int(a4.z), bi1 = __float_as_int(a4.w);
+      float v;
+      v = RB(c.x * r0); if (v > bv0) { bv0 = v; bi0 = row; }
+      v = RB(c.z * r0); if (v > bv0) { bv0 = v; bi0 = row + 8; }
+      v = RB(c.y * r1); if (v > bv1) { bv1 = v; bi1 = row; }
+      v = RB(c.w * r1); if (v > bv1) { bv1 = v; bi1 = row + 8; }
+      *am = make_float4(bv0, bv1, __int_as_float(bi0), __int_as_float(bi1));
+    }
+    __syncthreads();                               // the next candidate may have the same parity
+  }
+  if (w == CW) {
+    const float4 a4 = ((const float4*)(smem + ARG_OFF))[lane];
+    float bv0 = a4.x, bv1 = a4.y;
+    int bi0 = __float_as_int(a4.z), bi1 = __float_as_int(a4.w);
+#pragma unroll
+    for (int o = 16; o >= 4; o >>= 1) {
+      float u = __shfl_xor_sync(0xffffffffu, bv0, o); int ix = __shfl_xor_sync(0xffffffffu, bi0, o);
+      if (u > bv0 || (u == bv0 && ix < bi0)) { bv0 = u; bi0 = ix; }
+      u = __shfl_xor_sync(0xffffffffu, bv1, o); ix = __shfl_xor_sync(0xffffffffu, bi1, o);
+      if (u > bv1 || (u == bv1 && ix < bi1)) { bv1 = u; bi1 = ix; }
+    }
+    if (lane < 4) {
+      const int n0 = 2 * lane, n1 = 2 * lane + 1, nb = NWORK, b = BIDX;
+      if (n0 < B) { P.bm_val[n0 * nb + b] = bv0; P.bm_idx[n0 * nb + b] = bi0; }
+      if (n1 < B) { P.bm_val[n1 * nb + b] = bv1; P.bm_idx[n1 * nb + b] = bi1; }
+    }
+    __threadfence();
+    __syncwarp();
+    if (lane == 0) {
+      Ctl& C = *(Ctl*)(smem + CTL_OFF);
+#if SK_PF > 0 || SK_RT
+      if (BIDX == 0) { int* lr = SA->lrun + ((C.s + 1) & 1) * 8; for (int n = 0; n < 8; n++) lr[n] = 0; __threadfence(); }   // the next step's slot
+#endif
+      C.s = C.s + 1; P.pos = P.pos + 1; ((Desc*)(smem + DESC_OFF))->k = PH_EMBED;   // next step
+      grid_barrier(smem, PH_LMARG TR_ARG(-100));
+    }
+  }
+  __syncthreads();
+}
+
+#endif  // !TRACK_A (sketch)
+
 // MMA B operand of one kstep for the V sum from the exponentials of the softmax: positions 16s + 2t, +1 (q[0]) and
 // 16s + 8 + 2t, +1 (q[4]) of the lane's head, p = bf16(e * (1 / Z)). One definition for every code path.
 __device__ __forceinline__ uint2 pfrag_e(const float2* q, float rz) {
@@ -1628,7 +2438,11 @@ __device__ __forceinline__ void attention_body(unsigned char* smem, int layer TR
   const int b = BIDX, B = P.B;
   const int n = b >> 3, g = b & 7;
   const int tid = TIDX, lane = tid & 31, w = tid >> 5;
+#ifdef WHATIF_T   // diagnosis only (wrong results): attention over at most WHATIF_T positions
+  const int pos = P.pos, T = min(pos + 1, WHATIF_T), nt = (T + 15) >> 4, NTP = nt * 16;
+#else
   const int pos = P.pos, T = pos + 1, nt = (T + 15) >> 4, NTP = nt * 16;
+#endif
   float* y = (float*)(smem + ATT_OFF_BYTES);                 // 3072 B: byte flags of step 4 (1024 B used)
   unsigned short* qfrag16 = (unsigned short*)(y + 768);      // [8][32][4]
   const uint2* qfrag = (const uint2*)qfrag16;
@@ -1727,7 +2541,7 @@ __device__ __forceinline__ void attention_body(unsigned char* smem, int layer TR
 #endif
     int t = lane & 3, j = tile * 16 + (lane >> 2);
     if (t < 2) {
-      const float scale = 0.08838834764831845f;
+      const float scale = SCORE_SCALE;
       const float ninf = -__int_as_float(0x7f800000);
       const float s0 = j < T ? SCORE_(c[0]) : ninf, s1 = j < T ? SCORE_(c[1]) : ninf;
       const float s2 = j + 8 < T ? SCORE_(c[2]) : ninf, s3 = j + 8 < T ? SCORE_(c[3]) : ninf;
@@ -1834,6 +2648,20 @@ SMU_
     if (nt < LONG_NT) {
       // up to 1136 positions: a third is one chain (no sub-segments), one load at a time: every instruction counts
       const uint2* pfrag = (const uint2*)(sc + 4 * NTP);
+#if VSB > 1
+      // VSB V loads in flight per warp when the third is long enough (same MMA chain, same order: same bits)
+      for (; s + VSB <= send; s += VSB) {
+        uint4 a[VSB];
+#pragma unroll
+        for (int u = 0; u < VSB; u++) a[u] = __ldcg(Vc + (size_t)(s + u) * KVT + dt * 32 + lane);
+#pragma unroll
+        for (int u = 0; u < VSB; u++) {
+          uint2 bp = make_uint2(0, 0);
+          if (lane < 16) bp = pfrag[(s + u) * 32 + lane];
+          MMA(c, a[u], bp);
+        }
+      }
+#endif
       for (; s < send; s++) {
         const uint4 a = __ldcg(Vc + (size_t)s * KVT + dt * 32 + lane);
         uint2 bp = make_uint2(0, 0);
@@ -1967,7 +2795,7 @@ __device__ __forceinline__ void att_k_chunk(unsigned char* smem, int layer) {
     }
     const int t = lane & 3, j = tile * 16 + (lane >> 2);
     if (t < 2) {
-      const float scale = 0.08838834764831845f;
+      const float scale = SCORE_SCALE;
       const float ninf = -__int_as_float(0x7f800000);
       S[(2 * t) * ctx_pad + j] = j < T ? SCORE_(c[0]) : ninf;
       S[(2 * t + 1) * ctx_pad + j] = j < T ? SCORE_(c[1]) : ninf;
@@ -2141,7 +2969,7 @@ __device__ __forceinline__ void norm_phase(unsigned char* smem) {
   __syncthreads();
   if (tid == CW * 32) {
     ((Desc*)(smem + DESC_OFF))->k = D.kafter;
-    grid_barrier(smem, PH_EMBED);
+    grid_barrier(smem, PH_EMBED TR_ARG(-1));
   }
   __syncthreads();
 }
@@ -2198,6 +3026,21 @@ __device__ __forceinline__ void barrier(unsigned char* smem TR_PARAM) {
 // their share of the block's first o tile into shared memory (the 131 KB behind the K=4096 input fragments,
 // free outside the down projection); those bytes cross HBM during attention and the o matvec takes its first
 // tile from there. Attention blocks own a single o tile (tile table), the others share the rest.
+#define STG_GU_BLOCK_() do { \
+      if (w == 0 && P.B <= STG_MAX_B) { \
+        enum { PIECES = (int)(TU4(KS_H) / 1024) }; \
+        const int* tb = (const int*)(smem + TB_OFF); \
+        const int ng = tb[2 * T_GU + 1] - tb[2 * T_GU]; \
+        if (STG_O && D.t0 + 1 < D.t1 && lane < PIECES) l2_stage(D.W + (size_t)(D.t0 + 1) * TU4(KS_H) + lane * 1024, 16384); \
+        if (STG_GU > 0 && ng > 1) { \
+          for (int i = lane; i < (STG_NP > 0 ? STG_NP : STG_GU * PIECES); i += 32) { \
+            const int j = i / PIECES, pc = i - j * PIECES; \
+            const int ti = STG_GU_A > 0 ? STG_GU_A + j * STG_GU_S : (j + 1) * ng / (STG_GU + 1); \
+            if (ti > 0 && ti < ng) l2_stage(D.nextW + (size_t)ti * TU4(KS_H) + pc * 1024, 16384); \
+          } \
+        } \
+      } \
+  } while (0)
 __device__ __forceinline__ void att_phase(unsigned char* smem) {
   const Params& P = *(const Params*)(smem + MISC_OFF);
   const Desc& D = *(const Desc*)(smem + DESC_OFF);   // the o projection of this layer
@@ -2217,23 +3060,35 @@ __device__ __forceinline__ void att_phase(unsigned char* smem) {
   if (BIDX < natt) {
     if (split) att_v_tile(smem, D.l);
     else attention_body(smem, D.l TR_ARG(tr));
-#if NPF_ATT > 0
-    {   // this block's o tile is cold: ask L2 for its first ksteps now
+    {   // this block's o tile is cold: nothing stashed (this reset was inside the NPF_ATT block before: with
+        // NPF_ATT 0 the o tile loop read a stale count and stale stash entries - found by bitcheck, e0139)
       const int lane = TIDX & 31, w = TIDX >> 5;
       if (w < NLOAD) {
+#if NPF_ATT > 0
+        // ... and ask L2 for its first ksteps now
         const uint4* p = D.W + (size_t)D.t0 * TU4(KS_H) + G0(w, KS_H / 4) * GU4 + lane;
 #pragma unroll
         for (int u = 0; u < NPF_ATT; u++) if (u < (KS_H / 4 / NLOAD) * LPG || w < (KS_H / 4) % NLOAD) PREFETCH(p + u * 32);
-        if (lane == 0) ((int*)(smem + CNT_OFF))[w] = 0;   // nothing stashed
+#endif
+        if (lane == 0) ((int*)(smem + CNT_OFF))[w] = 0;
       }
     }
-#endif
   } else {
     const int lane = TIDX & 31, w = TIDX >> 5;
     enum { KG = KS_H / 4, BASE = KG / NLOAD, EXTRA = KG % NLOAD };
     if (w < NLOAD) {
       // First pull this layer's K/V history into L2 for the attention blocks: their loads would otherwise
       // be HBM misses queued behind the weight flood below. 512-byte chunks, spread over all idle loader warps.
+#if STG_OA
+      // the attention blocks end with a cold o tile, the last work of the phase: idle block 8B + j asks L2 for the o
+      // tile(s) of attention block j right away (warp 1, one 16 KB piece per lane)
+      if (!split && w == 1 && P.B <= STG_MAX_B && BIDX < 16 * P.B) {
+        const int j = BIDX - 8 * P.B, row = P.B - 1;
+        const int a0 = P.tiles_o[(row * P.nwork + j) * 2], a1 = P.tiles_o[(row * P.nwork + j) * 2 + 1];
+        enum { PIECES = (int)(TU4(KS_H) / 1024) };
+        if (lane < (a1 - a0) * PIECES) l2_stage(D.W + (size_t)a0 * TU4(KS_H) + (size_t)lane * 1024, 16384);
+      }
+#endif
       if (!split && !KV_PF && TOUCH) {
         // (only while all of it fits in L2, TOUCH_TILES position tiles x 8 sequences: beyond that it would be read twice;
         // measured with 8 sequences at 9000 positions: 8456 us per step with a partial touch, 8298 without)
@@ -2244,6 +3099,29 @@ __device__ __forceinline__ void att_phase(unsigned char* smem) {
         const int per_unit = 8 * (kt + vt), total = 8 * P.B * per_unit;
         const int nidle = (NWORK - 8 * P.B) * NLOAD;
         unsigned acc = 0;
+#if TOUCH_ORD
+        if (P.B <= TOUCH_ORD_MAX_B) {
+          // K of every unit first (the score pass reads it first; unit by unit, a late unit's K came after the
+          // V of the early ones), the units interleaved, and TOUCH_FL chunks in flight per warp instead of one.
+          const int nu = 8 * P.B, nk = nu * 8 * kt;
+          for (int c = (BIDX - 8 * P.B) * NLOAD + w; c < total; c += TOUCH_FL * nidle) {
+            unsigned v[TOUCH_FL];
+#pragma unroll
+            for (int f = 0; f < TOUCH_FL; f++) {
+              const int cc = c + f * nidle;
+              v[f] = 0;
+              if (cc < total) {
+                const bool isk = cc < nk;
+                const int j = isk ? cc : cc - nk;
+                const int u = j % nu, ci = j / nu;
+                v[f] = __ldcg((isk ? P.kc : P.vc) + KVU(P, D.l, u) + (size_t)(ci >> 3) * KVT + (ci & 7) * 32 + lane).x;
+              }
+            }
+#pragma unroll
+            for (int f = 0; f < TOUCH_FL; f++) acc ^= v[f];
+          }
+        } else
+#endif
         for (int c = (BIDX - 8 * P.B) * NLOAD + w; c < total; c += nidle) {
           const int u = c / per_unit, i = c - u * per_unit;
           const uint4* base = (i < 8 * kt ? P.kc : P.vc) + KVU(P, D.l, u);
@@ -2269,6 +3147,9 @@ __device__ __forceinline__ void att_phase(unsigned char* smem) {
         }
       }
 #endif
+#if STG_GU > 0 || STG_O
+      if (STG_EARLY) STG_GU_BLOCK_();   // (variant: staging requested before the o stash)
+#endif
       stash_loads(smem, D.W + (size_t)D.t0 * TU4(KS_H), KS_H / 4, STASH_OFF, false, ATT_STASH_CAP, false, P.B <= ATT_WAIT_MAX_B ? ATT_POLITE : 0);
 #if TOUCH_VS > 0 && TOUCH_VS_AFTER
       if (split) touch_v_split(smem, D.l, natt);
@@ -2289,6 +3170,38 @@ __device__ __forceinline__ void att_phase(unsigned char* smem) {
 #pragma unroll
         for (int u = 0; u < NPF_GU; u++) PREFETCH(pg + u * 32);
       }
+#endif
+#if STG_GU > 0 || STG_O
+      if (!STG_EARLY) STG_GU_BLOCK_();
+#if STG_DN > 0
+      // variant: stage pieces of the block's down tile STG_DN_TI instead of (or besides) gate+up
+      if (w == 3 && P.B <= STG_MAX_B) {
+        const int* tb = (const int*)(smem + TB_OFF);
+        if (tb[2 * T_DN + 1] - tb[2 * T_DN] > STG_DN_TI) {
+          const uint4* bd = D.W - OFF_O + OFF_DN + ((size_t)tb[2 * T_DN] + STG_DN_TI) * TU4(KS_I);
+          for (int i = lane; i < STG_DN; i += 32) l2_stage(bd + (size_t)(STG_DN_OFF + i) * 1024, 16384);
+        }
+      }
+#endif
+#if STG_GUA
+      // ... and the same pieces of the gate+up tiles of attention block j = BIDX - 8B (busy now, it cannot stage its
+      // own; without this the attention blocks were the last ones of every gate+up phase: tests/timing_blocks.py)
+      if (STG_GU > 0 && w == 2 && P.B <= STG_MAX_B && BIDX < 16 * P.B) {
+        enum { PIECES = (int)(TU4(KS_H) / 1024) };
+        const int* tb = (const int*)(smem + TB_OFF);
+        const int j = BIDX - 8 * P.B;
+        const int* tj = P.tiles + (P.B >= WIDE_MIN_B ? P.nwork * 8 : 0) + j * 8;
+        const int t0j = tj[2 * T_GU], ngj = tj[2 * T_GU + 1] - t0j;
+        const uint4* bj = D.nextW + ((long long)t0j - tb[2 * T_GU]) * (long long)TU4(KS_H);
+        if (ngj > 1) {
+          for (int i = lane; i < (STG_NP > 0 ? STG_NP : STG_GU * PIECES); i += 32) {
+            const int jj = i / PIECES, pc = i - jj * PIECES;
+            const int ti = (jj + 1) * ngj / (STG_GU + 1);
+            if (ti > 0 && ti < ngj) l2_stage(bj + (size_t)ti * TU4(KS_H) + pc * 1024, 16384);
+          }
+        }
+      }
+#endif
 #endif
     }
   }
@@ -2327,7 +3240,8 @@ __device__ __forceinline__ void embed_phase(unsigned char* smem) {
   const int gs = gen ? C.s : -1;
   const bool embed = gen ? (gs < P.n_steps) : true;
   op_embed(smem, gs, embed);
-  if (embed && (TIDX >> 5) < NLOAD) {
+  const bool l0t = P.l0tab && !P.l0build;
+  if (embed && !l0t && (TIDX >> 5) < NLOAD) {
     const uint4* tile = P.W + OFF_QKV + (size_t)((const int*)(smem + TB_OFF))[2 * T_QKV] * TU4(KS_H);
 #if STASH_ALL
     stash_loads(smem, tile, KS_H / 4, STASH_OFF, false, 1000, false);   // layer 0's first q/k/v tile of this block
@@ -2343,7 +3257,7 @@ __device__ __forceinline__ void embed_phase(unsigned char* smem) {
       int* tbo = (int*)(smem + TBO_OFF);
       tbo[0] = P.tiles_o[(row * P.nwork + BIDX) * 2]; tbo[1] = P.tiles_o[(row * P.nwork + BIDX) * 2 + 1];
     }
-    if (embed) { set_desc(smem, PH_QKV, 0); grid_barrier(smem, PH_EMBED TR_ARG(tr)); }
+    if (embed) { set_desc(smem, l0t ? PH_O : PH_QKV, 0); grid_barrier(smem, PH_EMBED TR_ARG(tr)); }
     else ((Desc*)(smem + DESC_OFF))->k = PH_DONE;
   }
   __syncthreads();
@@ -2355,17 +3269,22 @@ __device__ __forceinline__ void embed_phase(unsigned char* smem) {
 // The loop keeps nothing in registers from one phase to the next and makes no calls: a value kept across a
 // call (and the return address of a register-hungry callee) is spilled to local memory by all 1024 threads.
 // ---------------------------------------------------------------------------------------------------------
+template <bool SK>   // SK: greedy head through the certified int8 sketch (k_gensk)
 __device__ __forceinline__ void run(unsigned char* smem, const Params& Pk, int lm) {
   kernel_init(smem, Pk, lm);
   for (;;) {
     const int k = ((const volatile Desc*)(smem + DESC_OFF))->k;
     if (k == PH_DONE) break;
     if (k == PH_EMBED) { embed_phase(smem); continue; }
+#ifndef TRACK_A
+    if (SK && k == PH_LMARG && ((const Params*)(smem + MISC_OFF))->logits) { sk1_phase(smem); continue; }   // (null: diagnosis, exact head in this kernel)
+    if (SK && k == PH_SK2) { sk2_phase(smem); continue; }
+#endif
 #ifdef TRACK_A
     if (k == PH_NORM) { norm_phase(smem); continue; }
 #endif
     if (k == PH_O) att_phase(smem);
-    if ((TIDX >> 5) < NLOAD) loader_phase(smem); else coord_phase(smem);
+    if ((TIDX >> 5) < NLOAD) loader_phase<SK ? SK_LITE : 0>(smem); else coord_phase<SK>(smem);
   }
 }
 
@@ -2378,14 +3297,14 @@ __global__ void k_step(Params Pk) {
       unsigned c = 0;
       for (;;) {
         c++;
-        *(volatile unsigned*)Pk.clk = c;
+        *(volatile unsigned*)(Pk.trace + 64 * 256) = c;
         if ((c & 255u) == 0 && (int)(*(volatile unsigned*)Pk.sync - stop) >= 0) break;
       }
     }
     return;
   }
 #endif
-  run(smem, Pk, PH_LM);
+  run<false>(smem, Pk, PH_LM);
 #ifdef TRACE
   if (threadIdx.x == 0) atomicAdd(((const Params*)(smem + MISC_OFF))->sync, 1u);   // lets the clock block stop
 #endif
@@ -2393,7 +3312,12 @@ __global__ void k_step(Params Pk) {
 
 __global__ void k_generate(Params Pk) {
   extern __shared__ __align__(16) unsigned char smem[];
-  run(smem, Pk, PH_LMARG);
+  run<false>(smem, Pk, PH_LMARG);
+}
+
+__global__ void k_gensk(Params Pk) {
+  extern __shared__ __align__(16) unsigned char smem[];
+  run<true>(smem, Pk, PH_LMARG);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -2404,6 +3328,9 @@ struct Engine {
   int nsm, max_batch, max_ctx;
   int sx_bytes;      // sx area of a block's shared memory (grows with max_ctx beyond 8000 positions)
   long long launches, steps, errors;
+  int sk_mode;       // generate()/online: 0 exact head, 1 int8 sketch + exact rescoring, 2 the same with every tile rescored (test)
+  SkArgs* sk_dev;
+  int* sk_lrun;      // SkArgs::lrun (host copy of the pointer)    // device copy of the sketch's arguments (passed to k_gensk as Params.logits)
 };
 
 #define CK(x) do { cudaError_t e_ = (x); if (e_ != cudaSuccess) { fprintf(stderr, "CUDA error %s at %s:%d\n", cudaGetErrorString(e_), __FILE__, __LINE__); abort(); } } while (0)
@@ -2454,8 +3381,7 @@ void* mk_create(int max_batch, int max_ctx, const void* W, const void* embed, co
 #endif
     P.nwork = nb;
     P.stop_layer = NL;
-    CK(cudaMalloc(&P.clk, 64)); CK(cudaMemset(P.clk, 0, 64));
-    CK(cudaMalloc(&P.trace, sizeof(unsigned) * 64 * 256)); CK(cudaMemset(P.trace, 0, sizeof(unsigned) * 64 * 256));
+    CK(cudaMalloc(&P.trace, sizeof(unsigned) * (64 * 256 + 16))); CK(cudaMemset(P.trace, 0, sizeof(unsigned) * (64 * 256 + 16)));
     int* tb = new int[2 * nb * 8];
     const int nt[4] = {QKV_T, O_T, GU_T, LM_T};
     // NB_MAT > 0: q/k/v, gate+up and down tiles only on the first NB_MAT blocks (128 divides all three tile
@@ -2469,6 +3395,20 @@ void* mk_create(int max_batch, int max_ctx, const void* W, const void* embed, co
       e[0] = (int)((long long)bb * nt[k] / m); e[1] = (int)((long long)(b < m ? b + 1 : m) * nt[k] / m);
       if (b < m && e[1] <= e[0]) { fprintf(stderr, "mk_create: block without tiles\n"); abort(); }
     }
+#if GU_SHIFT > 0
+    // 1-2 sequences (narrow table): the attention blocks 0..7 start gate+up last (cold o tile, short stash) and were
+    // the last blocks of the phase; GU_SHIFT of their tiles each go to the blocks that hold no gate+up tiles (NB_MAT)
+    if (NB_MAT > 0 && NB_MAT + 4 <= nb && nb - NB_MAT >= 1 && (8 * GU_SHIFT) % (nb - NB_MAT) == 0) {
+      const int extra = nb - NB_MAT, per = 12 - GU_SHIFT, give = 8 * GU_SHIFT / extra;
+      int t = 0;
+      for (int b = 0; b < nb; b++) {
+        const int c = b < 8 ? per : b < NB_MAT ? GU_T / NB_MAT : give;
+        int* e = tb + b * 8 + 2 * T_GU;
+        e[0] = t; e[1] = t + c; t += c;
+      }
+      if (t != GU_T) { fprintf(stderr, "mk_create: GU_SHIFT table\n"); abort(); }
+    }
+#endif
     int* d; CK(cudaMalloc(&d, sizeof(int) * 2 * nb * 8)); CK(cudaMemcpy(d, tb, sizeof(int) * 2 * nb * 8, cudaMemcpyHostToDevice));
     P.tiles = d; delete[] tb;
     // o projection: blocks 0..8B-1 are busy with attention while the others stream their first o tile into shared
@@ -2509,41 +3449,112 @@ void* mk_create(int max_batch, int max_ctx, const void* W, const void* embed, co
   if (E->sx_bytes > sx_max) sx_max = E->sx_bytes;
   CK(cudaFuncSetAttribute(k_step, cudaFuncAttributeMaxDynamicSharedMemorySize, SX_OFF + sx_max));
   CK(cudaFuncSetAttribute(k_generate, cudaFuncAttributeMaxDynamicSharedMemorySize, SX_OFF + sx_max));
+  CK(cudaFuncSetAttribute(k_gensk, cudaFuncAttributeMaxDynamicSharedMemorySize, SX_OFF + sx_max));
+  CK(cudaMalloc(&E->sk_dev, sizeof(SkArgs))); CK(cudaMemset(E->sk_dev, 0, sizeof(SkArgs)));
   return E;
 }
 
-void mk_step(void* h, const void* tokens, void* logits, int B, int pos, int mode) {
+void mk_step(void* h, const void* tokens, void* logits, int B, int pos, int mode, void* err) {
   Engine* E = (Engine*)h;
   Params P = E->P;
   P.tokens = (const long long*)tokens; P.logits = (float*)logits; P.B = B; P.pos = pos;
+  P.gen_out = (long long*)err;   // step(): host-mapped error word (token id outside the vocabulary)
   P.sx_bytes = E->sx_bytes;
   k_step<<<E->nsm, NTHREAD, SX_OFF + E->sx_bytes>>>(P);
-  E->P.sync_base += (unsigned)(1 + E->P.stop_layer * (BARRIERS_PER_LAYER + (SPLIT_ON(B, pos) ? 1 : 0)) + NORM_BARRIERS(B, E->P.stop_layer) + TRACE_EXTRA) * E->P.nwork;
+  E->P.sync_base += (unsigned)(1 + E->P.stop_layer * (BARRIERS_PER_LAYER + (SPLIT_ON(B, pos) ? 1 : 0)) + NORM_BARRIERS(B, E->P.stop_layer) + TRACE_EXTRA - (E->P.l0tab ? 1 : 0)) * E->P.nwork;
   E->launches += 1;
   E->steps += 1;
   cudaError_t e = cudaGetLastError();
   if (e != cudaSuccess && E->errors++ < 5) fprintf(stderr, "mk_step: launch error: %s\n", cudaGetErrorString(e));
 }
 
-void mk_generate(void* h, const void* tokens, void* out, int B, int pos, int n_steps) {
+// online path: out = device address of host-mapped memory, tag != 0 goes into the upper 32 bits of every token
+void mk_generate_tag(void* h, const void* tokens, void* out, int B, int pos, int n_steps, unsigned tag) {
   Engine* E = (Engine*)h;
   Params P = E->P;
   P.tokens = (const long long*)tokens; P.gen_out = (long long*)out; P.B = B; P.pos = pos; P.n_steps = n_steps;
+  P.gen_tag = tag;
   P.sx_bytes = E->sx_bytes;
-  k_generate<<<E->nsm, NTHREAD, SX_OFF + E->sx_bytes>>>(P);
-  for (int i = 0; i < n_steps; i++) E->P.sync_base += (unsigned)(BARRIERS_PER_GEN_STEP + (SPLIT_ON(B, pos + i) ? NL : 0) + NORM_BARRIERS(B, NL)) * E->P.nwork;
+#ifndef TRACK_A
+  const int sk = E->sk_mode && E->sk_mode != 3 ? 1 : 0;
+#else
+  const int sk = 0;
+#endif
+#ifndef TRACK_A
+  if (sk && (SK_PF > 0 || SK_RT) && E->sk_lrun) CK(cudaMemsetAsync(E->sk_lrun, 0, 64));   // step 0's slot (stream-ordered)
+#endif
+  if (E->sk_mode) { P.logits = sk ? (float*)E->sk_dev : nullptr; k_gensk<<<E->nsm, NTHREAD, SX_OFF + E->sx_bytes>>>(P); }   // mode 3: diagnosis (exact head in k_gensk)
+  else k_generate<<<E->nsm, NTHREAD, SX_OFF + E->sx_bytes>>>(P);
+  for (int i = 0; i < n_steps; i++) E->P.sync_base += (unsigned)(BARRIERS_PER_GEN_STEP + sk + (SPLIT_ON(B, pos + i) ? NL : 0) + NORM_BARRIERS(B, NL) - (E->P.l0tab ? 1 : 0)) * E->P.nwork;
   E->launches += 1;
   E->steps += n_steps;
   cudaError_t e = cudaGetLastError();
   if (e != cudaSuccess && E->errors++ < 5) fprintf(stderr, "mk_generate: launch error: %s\n", cudaGetErrorString(e));
 }
 
+// greedy head of generate() / the online path: mode 0 exact, 1 sketch (w8: int8 tiles, rc: float4 {s, c1, c2, 0} per
+// row; see build_sketch in api.py), 2 sketch with every tile rescored (test), 3 exact head inside k_gensk (diagnosis).
+// Returns 0, or -1 (track A: no sketch).
+int mk_sketch(void* h, const void* w8, const void* rc, int mode) {
+  Engine* E = (Engine*)h;
+#ifdef TRACK_A
+  if (mode) return -1;
+#endif
+  CK(cudaDeviceSynchronize());
+  SkArgs a; memset(&a, 0, sizeof(a));
+  if (!E->sk_dev) return -2;
+  CK(cudaMemcpy(&a, E->sk_dev, sizeof(a), cudaMemcpyDeviceToHost));
+  if (!a.bl) CK(cudaMalloc(&a.bl, sizeof(float) * MAXB * E->nsm));
+  a.w8 = (const uint4*)w8; a.rc = (const float4*)rc; a.force = mode == 2;
+  if (!a.stat) { CK(cudaMalloc(&a.stat, 64)); CK(cudaMemset(a.stat, 0, 64)); }
+  if (!a.lrun) { CK(cudaMalloc(&a.lrun, 64)); CK(cudaMemset(a.lrun, 0, 64)); }
+  CK(cudaMemcpy(E->sk_dev, &a, sizeof(a), cudaMemcpyHostToDevice));
+  E->sk_lrun = a.lrun;
+  E->sk_mode = (w8 && rc) || mode == 3 ? mode : 0;
+  return 0;
+}
+
+// measurement builds (SK_RT): variant flags (bit 0: 16-byte x preparation, bits 4..7: candidate tiles staged per block)
+void mk_sketch_flags(void* h, int flags) {
+  Engine* E = (Engine*)h;
+  CK(cudaDeviceSynchronize());
+  SkArgs a;
+  CK(cudaMemcpy(&a, E->sk_dev, sizeof(a), cudaMemcpyDeviceToHost));
+  a.pad = flags;
+  CK(cudaMemcpy(E->sk_dev, &a, sizeof(a), cudaMemcpyHostToDevice));
+}
+
+// candidate tiles rescored since the last call (sum over steps and blocks); resets the counter
+long long mk_sketch_count(void* h) {
+  Engine* E = (Engine*)h;
+  SkArgs a; unsigned v = 0;
+  CK(cudaDeviceSynchronize());
+  CK(cudaMemcpy(&a, E->sk_dev, sizeof(a), cudaMemcpyDeviceToHost));
+  if (!a.stat) return -1;
+  CK(cudaMemcpy(&v, a.stat, 4, cudaMemcpyDeviceToHost)); CK(cudaMemset(a.stat, 0, 4));
+  return (long long)v;
+}
+
+void mk_generate(void* h, const void* tokens, void* out, int B, int pos, int n_steps) {
+  mk_generate_tag(h, tokens, out, B, pos, n_steps, 0u);
+}
+
+// page-locked host memory mapped into the device's address space (tokens of the online path)
+int mk_host_alloc(size_t bytes, void** hptr, void** dptr) {
+  void* hp = nullptr;
+  if (cudaHostAlloc(&hp, bytes, cudaHostAllocMapped) != cudaSuccess) { cudaGetLastError(); return -1; }
+  if (cudaHostGetDevicePointer(dptr, hp, 0) != cudaSuccess) { cudaGetLastError(); cudaFreeHost(hp); return -2; }
+  *hptr = hp;
+  return 0;
+}
+void mk_host_free(void* hptr) { if (hptr) cudaFreeHost(hptr); }
+
 // TRACE: copy out [blocks][8][8] timestamps and the final clock value
 void mk_trace(void* h, unsigned* out, unsigned* clk) {
   Engine* E = (Engine*)h;
   CK(cudaDeviceSynchronize());
   CK(cudaMemcpy(out, E->P.trace, sizeof(unsigned) * 64 * 256, cudaMemcpyDeviceToHost));
-  CK(cudaMemcpy(clk, E->P.clk, sizeof(unsigned), cudaMemcpyDeviceToHost));
+  CK(cudaMemcpy(clk, E->P.trace + 64 * 256, sizeof(unsigned), cudaMemcpyDeviceToHost));
 }
 
 // ---- calibration of the tile tables (engine start, off the per-token path) ----
@@ -2605,13 +3616,26 @@ int mk_track() {
 #endif
 }
 
+// track B, layer-0 table. mk_l0_rows: one launch computing layer 0's q/k/v rows of B tokens (embedding + q/k/v phase
+// of the normal kernel, then stop), copied into rows of `out` ([VOCAB][QKV_ROWS] float32). mk_set_l0tab: use it.
+void mk_l0_rows(void* h, const void* tokens, void* out, int B) {
+  Engine* E = (Engine*)h;
+  Params P = E->P;
+  P.tokens = (const long long*)tokens; P.logits = nullptr; P.B = B; P.pos = 0; P.l0build = 1; P.l0tab = nullptr;
+  P.sx_bytes = E->sx_bytes;
+  k_step<<<E->nsm, NTHREAD, SX_OFF + E->sx_bytes>>>(P);
+  E->P.sync_base += 2u * E->P.nwork;      // embedding, q/k/v
+  CK(cudaMemcpy2DAsync(out, sizeof(float) * QKV_ROWS, P.qkv, sizeof(float) * QKV_ROWS, sizeof(float) * QKV_ROWS, B, cudaMemcpyDeviceToDevice));
+}
+void mk_set_l0tab(void* h, const void* tab) { ((Engine*)h)->P.l0tab = (const float*)tab; }
 int mk_check() { cudaError_t e = cudaGetLastError(); if (e != cudaSuccess) fprintf(stderr, "mk_check: %s\n", cudaGetErrorString(e)); return (int)e; }
 
 void mk_destroy(void* h) {
   Engine* E = (Engine*)h;
   cudaDeviceSynchronize();
   Params& P = E->P;
-  cudaFree(P.xres); cudaFree(P.qkv); cudaFree(P.afrag); cudaFree(P.mfrag); cudaFree(P.xfrag); cudaFree(P.xraw); cudaFree(P.ssq); cudaFree(P.kc); cudaFree(P.vc); cudaFree(P.asc); cudaFree(P.att_done); cudaFree(P.sync); cudaFree(P.wstat); cudaFree(P.bm_val); cudaFree(P.bm_idx); cudaFree((void*)P.tiles); cudaFree((void*)P.tiles_o);
+  cudaFree(P.xres); cudaFree(P.qkv); cudaFree(P.afrag); cudaFree(P.mfrag); cudaFree(P.xfrag); cudaFree(P.xraw); cudaFree(P.ssq); cudaFree(P.kc); cudaFree(P.vc); cudaFree(P.asc); cudaFree(P.att_done); cudaFree(P.sync); cudaFree(P.wstat); cudaFree(P.bm_val); cudaFree(P.bm_idx);
+  if (E->sk_dev) { SkArgs a; if (cudaMemcpy(&a, E->sk_dev, sizeof(a), cudaMemcpyDeviceToHost) == cudaSuccess && a.bl) cudaFree(a.bl); if (a.stat) cudaFree(a.stat); if (a.lrun) cudaFree(a.lrun); cudaFree(E->sk_dev); } cudaFree((void*)P.tiles); cudaFree((void*)P.tiles_o);
   delete E;
 }
 

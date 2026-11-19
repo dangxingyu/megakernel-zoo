@@ -10,7 +10,8 @@ What it checks:
              the engine a track-B engine
   contract   engine/api.py defines class Engine(model_dir, max_batch, max_context) with reset() and step()
              (offline engines) or submit() and poll() (online engines, the name starts with "online")
-  timed path engine/api.py imports no general inference engine or library model code (vllm, sglang, transformers, ...)
+  timed path engine/api.py imports no general inference engine (vllm, sglang, ...) and no transformers model code
+             (transformers configs, tokenizers and rotary-embedding tables may be used at load time)
   registry   mkserve/registry.json has an entry whose "source" is this directory, with the required fields, a track
              that agrees with engine/TRACK, and a sha256 that matches the directory (mkserve's source_digest)
 
@@ -30,7 +31,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from mkserve.__main__ import is_product, source_digest  # noqa: E402  (the digest the server checks)
 
-FORBIDDEN_IMPORTS = ("vllm", "sglang", "transformers", "tensorrt_llm", "lmdeploy", "exllamav2", "llama_cpp", "mlc_llm")
+FORBIDDEN_IMPORTS = ("vllm", "sglang", "tensorrt_llm", "lmdeploy", "exllamav2", "llama_cpp", "mlc_llm")
+# transformers is allowed at load time for configuration and tables, never for a model or its layers
+TRANSFORMERS_OK = re.compile(r"^(AutoConfig|AutoTokenizer|PretrainedConfig|\w*Config|\w*RotaryEmbedding)$")
 REGISTRY_FIELDS = ("track", "kind", "source", "sha256", "from", "max_batch", "max_context", "what")
 BIG_FILE = 5 * 1024 * 1024
 NAME = re.compile(r"^(offline|online)-[a-z0-9][a-z0-9-]*$")
@@ -93,13 +96,16 @@ def check(path: Path, registry: dict) -> list[tuple[bool, str]]:
                 need = ("submit", "poll", "idle") if online else ("reset", "step")
                 missing = [m for m in need if m not in methods]
                 ok(not missing, f"Engine has {', '.join(need)}" + (f" (missing {', '.join(missing)})" if missing else ""))
-            mods = set()
+            mods, tf_bad = set(), []
             for n in ast.walk(tree):
                 if isinstance(n, ast.Import):
                     mods |= {a.name.split(".")[0] for a in n.names}
+                    tf_bad += [a.name for a in n.names if a.name.split(".")[0] == "transformers"]
                 elif isinstance(n, ast.ImportFrom) and n.module:
                     mods.add(n.module.split(".")[0])
-            bad = sorted(mods & set(FORBIDDEN_IMPORTS))
+                    if n.module.split(".")[0] == "transformers":
+                        tf_bad += [f"transformers.{a.name}" for a in n.names if not TRANSFORMERS_OK.match(a.name)]
+            bad = sorted(mods & set(FORBIDDEN_IMPORTS)) + sorted(set(tf_bad))
             ok(not bad, "no general inference engine or library model code imported in engine/api.py" + (f": {bad}" if bad else ""))
 
     entries = [(m, g, n, e) for m, gpus in registry.get("models", {}).items() for g, ge in gpus.items()

@@ -31,23 +31,23 @@
       "track": "B",
       "kind": "offline",
       "source": "../engines/qwen3-8b_h100/offline-b",
-      "sha256": "96f71fab041ba1c9",
-      "from": "run s10-q8b-h100-f1, submission s0002",
+      "sha256": "35606ee882e62c77",
+      "from": "run s11-q8b-h100-b1, submission s0020",
       "max_batch": 8,
       "max_context": 2048,
-      "what": "12-bit lossless weights, float32 residual; the fastest steady decode; step mode: sampling works, the prompt is fed one token per step",
-      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+      "what": "12-bit lossless weights, FP32 residual stream (not bit-identical to offline-a), certified 8-bit LM-head sketch on the greedy path; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
      },
      "offline-a": {
       "track": "A",
       "kind": "offline",
       "source": "../engines/qwen3-8b_h100/offline-a",
-      "sha256": "f435eaa477a5098e",
-      "from": "run s10-q8b-h100-f1, submission s0003",
+      "sha256": "677c093abe899b76",
+      "from": "run s11-q8b-h100-b1, submission s0016",
       "max_batch": 8,
       "max_context": 2048,
-      "what": "the general engines' number formats; step mode",
-      "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+      "what": "the checkpoint's BF16 weights; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
      }
     }
    }
@@ -175,6 +175,93 @@
       "max_context": 34816,
       "what": "the checkpoint's formats; requests admitted as they arrive (up to 128 in flight), chunked prompt processing, paged K/V and prefix reuse checked token by token inside the engine; requests beyond its limits are refused; greedy",
       "verified": "2026-11-16: 12 of 12 checks of scripts/mkserve_check.py on this card"
+     }
+    }
+   }
+  },
+  "openai/gpt-oss-20b": {
+   "h100": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/gpt-oss-20b_h100/offline-a",
+      "sha256": "e3c62dbfae14127e",
+      "from": "run s12-oss20-h100-a1, submission s0047",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's formats (MXFP4 experts, BF16 elsewhere); steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/gpt-oss-20b_h100/offline-b",
+      "sha256": "5c1135eb33cc71f1",
+      "from": "run s12-oss20-h100-a1, submission s0050",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "certified 8-bit LM-head sketch on the greedy path; router weights pre-multiplied by the norm weights in FP32 (not bit-identical to offline-a); steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
+     }
+    }
+   }
+  },
+  "Qwen/Qwen3-32B": {
+   "b200": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/qwen3-32b_b200/offline-a",
+      "sha256": "8ec6b210f016e452",
+      "from": "run s12-q32-b200-a1, submission s0033",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's BF16 weights; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/qwen3-32b_b200/offline-b",
+      "sha256": "2a834f516649b0cb",
+      "from": "run s12-q32-b200-a1, submission s0036",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "exact 12-bit weights, logits bit-identical to offline-a; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
+     }
+    }
+   }
+  },
+  "openai/gpt-oss-120b": {
+   "b200": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/gpt-oss-120b_b200/offline-a",
+      "sha256": "2c1aef22567c3414",
+      "from": "run s12-oss120-b200-a1, submission s0049",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's formats (MXFP4 experts, BF16 elsewhere); steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/gpt-oss-120b_b200/offline-b",
+      "sha256": "d5f39052dfd1b225",
+      "from": "run s12-oss120-b200-a1, submission s0051",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "certified 8-bit LM-head sketch on the greedy path, logits unchanged; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "suite v2 retest (2026-11-18): valid, every gate; not yet served through mkserve on this GPU"
      }
     }
    }
