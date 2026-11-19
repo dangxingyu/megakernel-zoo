@@ -13,9 +13,9 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-13.x-76B900.svg?logo=nvidia&logoColor=white)](#installation)
 [![GPUs](https://img.shields.io/badge/GPU-H100_%7C_B200-76B900.svg)](#supported-models)
-[![Blog](https://img.shields.io/badge/Blog-A_Megakernel_per_Model-1f5db8.svg)](https://dangxingyu.github.io/megakernel-dashboard/)
+[![Blog](https://img.shields.io/badge/Blog-A_Megakernel_per_Model-1f5db8.svg)](https://dangxingyu.github.io/megakernel/)
 
-[Blog post](https://dangxingyu.github.io/megakernel-dashboard/) | [Benchmark data](https://dangxingyu.github.io/megakernel-dashboard/full.html) | [Quick start](#quick-start) | [Benchmarks](#benchmarks) | [Build your own engine](#build-your-own-engine) | [Contributing](CONTRIBUTING.md)
+[Blog post](https://dangxingyu.github.io/megakernel/) | [Benchmark data](https://dangxingyu.github.io/megakernel/full.html) | [Quick start](#quick-start) | [Benchmarks](#benchmarks) | [Build your own engine](#build-your-own-engine) | [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -48,7 +48,7 @@ evaluator and benchmark suite, and the tooling to run the same kind of optimizat
   `/metrics` endpoint. The autoresearch kit adds a phase profiler for persistent kernels, a bit-identity check between two
   builds, and a playbook of what the earlier runs measured.
 - **2026-11-16** Initial release: 13 engines for 5 models on H100 and B200, `mkserve`, the evaluation suite and the
-  autoresearch kit. Write-up: [A Megakernel per Model](https://dangxingyu.github.io/megakernel-dashboard/).
+  autoresearch kit. Write-up: [A Megakernel per Model](https://dangxingyu.github.io/megakernel/).
 
 ## Contents
 
@@ -202,7 +202,7 @@ average at most 0.1 s apart):
 
 The serving engines have a slower 99th-percentile first token and, on Inkling-2-Small, a slower median time
 between tokens. Every measurement, including batch sizes from 1 to 64, long generations, long prompts, natural-text
-prompts and sampling, is in the [benchmark data tables](https://dangxingyu.github.io/megakernel-dashboard/full.html); the write-up discusses the limits.
+prompts and sampling, is in the [benchmark data tables](https://dangxingyu.github.io/megakernel/full.html); the write-up discusses the limits.
 
 To reproduce a comparison on your own card:
 
@@ -287,7 +287,7 @@ runs/           the record of every agent run
   Qwen3-8B match shared prompt prefixes by a 64-bit hash without comparing tokens.
 - Benchmark numbers are from single nodes and two to three rounds.
 
-The findings of the independent audit of every engine are summarized in the [write-up](https://dangxingyu.github.io/megakernel-dashboard/#limits).
+The findings of the independent audit of every engine are summarized in the [write-up](https://dangxingyu.github.io/megakernel/#limits).
 
 ## Citation
 
@@ -296,7 +296,7 @@ The findings of the independent audit of every engine are summarized in the [wri
   title        = {A Megakernel per Model},
   author       = {Dang, Xingyu},
   year         = {2026},
-  howpublished = {\url{https://dangxingyu.github.io/megakernel-dashboard/}},
+  howpublished = {\url{https://dangxingyu.github.io/megakernel/}},
   note         = {Code: \url{https://github.com/dangxingyu/megakernel-zoo}}
 }
 ```
