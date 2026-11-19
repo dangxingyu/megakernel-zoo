@@ -4,7 +4,7 @@
  "hw": "b200",
  "provisional": false,
  "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, one SSE chunk per token; 3 server starts x 3 repeats per system, eval/client.py through scripts/compare.sh, both systems in turns on one card in one job). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
- "source": "megakernel-mm3-q8b-compare-1: sglang B=1 308.2 tok/s, vllm B=1 279.3 tok/s, sglang B=8 2396.4 tok/s, vllm B=8 2190.7 tok/s; megakernel-mm3-q8b-sg18tc-1: sglang 0.5.18 + torch.compile B=1 268.7, B=8 2064.0 tok/s (vllm anchor 278.5 / 2196.3)",
+ "source": "<job>: sglang B=1 308.2 tok/s, vllm B=1 279.3 tok/s, sglang B=8 2396.4 tok/s, vllm B=8 2190.7 tok/s; <job>: sglang 0.5.18 + torch.compile B=1 268.7, B=8 2064.0 tok/s (vllm anchor 278.5 / 2196.3)",
  "systems": {
   "sglang": {
    "version": "0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on)",
@@ -26,7 +26,7 @@
      2396.8
     ]
    },
-   "job": "megakernel-mm3-q8b-compare-1",
+   "job": "<job>",
    "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16",
    "b8": 3338
   },
@@ -50,7 +50,7 @@
      2190.7
     ]
    },
-   "job": "megakernel-mm3-q8b-compare-1",
+   "job": "<job>",
    "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90",
    "b8": 3652
   },
@@ -74,7 +74,7 @@
      2063.9
     ]
    },
-   "job": "megakernel-mm3-q8b-sg18tc-1",
+   "job": "<job>",
    "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --enable-torch-compile",
    "b8": 3876,
    "note": "measured in its own job (another B200 card) with vLLM as anchor: vLLM there 3590 / 3642 us, within 0.3% of the main job. Slower than SGLang 0.5.23 with default flags on the B200 (unlike the H100)"

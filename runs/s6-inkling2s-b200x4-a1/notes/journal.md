@@ -2,7 +2,7 @@
 
 ## 0.0-0.5 h: bring-up
 
-- Pod facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
+- Machine facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
   the starter loads in ~2 min, my loader 48 layers in ~50 s with one thread per card).
 - sm_100a has no warp-level block-scaled MMA (`mma ... kind::mxf4nvf4.block_scale` is sm_120a only); only tcgen05.
   `cvt.rn.f16x2.e2m1x2` and `cvt.rn.f16x2.e4m3x2` exist but need `-gencode arch=compute_100a,code=sm_100a`
@@ -16,7 +16,7 @@
   6 layers; attention outputs rel 1e-3..2e-2, MLP outputs rel 1e-2..8e-2 growing with depth; the four cards' replicated
   state bitwise identical.
 
-## 0.5 h (pod outage, clock stopped): structure changes written before any timing
+## 0.5 h (machine outage, clock stopped): structure changes written before any timing
 
 - Routing (top-8 + union) computed redundantly by every block from the router logits: -2 grid barriers per layer.
 - Per-token step state (8 finished attention-residual blocks, the partial block, the attention output) lives in the
@@ -29,7 +29,7 @@
   step parity (one writer, many readers). B>=2 keeps one block per token + barriers (`ink_step_std`).
 - L2 prefetch (cp.async.bulk.prefetch.L2) of the next GEMV's weights by blocks idle in latency phases.
 
-## 0.5-1.7 h: first full-model runs (pod epochs 3-4, long outages in between)
+## 0.5-1.7 h: first full-model runs (machine epochs 3-4, long outages in between)
 
 - Correct from the first full run: argmax identical to the fork reference at 12/12 steps x 2 sequences, the 4 cards'
   replicated state bitwise identical, online submit/poll and generate() == step-by-step greedy at B=1/2/8.
@@ -61,7 +61,7 @@
   0.21-0.42 us after streaming 8 GB; fence.sc.sys after remote writes 2.05 us; fence.gpu 0.53 us.
 - Instruction cache is not the problem (routing phase 4.6 us cold vs 4.0 us warm, -DICTEST).
 
-## 5.4 h: s0003 submitted (queued by a pod loss); findings since s0002 (all with in-kernel globaltimer stamps)
+## 5.4 h: s0003 submitted (queued by a machine loss); findings since s0002 (all with in-kernel globaltimer stamps)
 - Strided GEMV warp mapping (logical warp = warp x 152 + block) made the same ~6-10 blocks 2x slower in every
   expert GEMV (per-block end times correlate 0.94-0.99 across layers and runs; the slow blocks' indices form
   arithmetic progressions, their SM ids look random -> a mapping effect: a block's 32 streams sit 729 KB apart in
@@ -169,11 +169,11 @@
   routing mask for the w2 fragments of unrouted (expert, token) columns, quant2 skips them (-87 us). Tried and off:
   two-level all-reduce at B=1 (bitwise identical, +150 us: the extra hop), rotated poll order (+430: spills),
   quant2 lookahead (+15), contiguous-row fragments with a gather (+100 at B=8).
-- 14.2 h: exec e0216 queued > 15 min with the cards free; the bridge stopped answering (mk gpu / mk note). Waiting.
-- 14.0-23.5 h (to the end of the run): no pod access. Exec e0216 (validation of the fixed build) stayed queued with the cards shown free and
-  the board at epoch 6; the bridge never answered mk gpu / mk note (four attempts). The agent clock kept counting.
+- 14.2 h: exec e0216 queued > 15 min with the cards free; the loop service stopped answering (mk gpu / mk note). Waiting.
+- 14.0-23.5 h (to the end of the run): no machine access. Exec e0216 (validation of the fixed build) stayed queued with the cards shown free and
+  the board at epoch 6; the loop service never answered mk gpu / mk note (four attempts). The agent clock kept counting.
   State left: s0013 is the best evaluated engine (git tag s0013); HEAD builds (tools/build_check.sh) and adds the
   B>=2 changes (in process B=8 6782 vs 7064 us, B=1 equal, bitwise identical) plus the untested W13_EARLYPF option
   (off by default).
-- 23.8 h: last attempt to resubmit the fixed build (B>=2 changes): mk submit got no answer from the bridge, nothing
+- 23.8 h: last attempt to resubmit the fixed build (B>=2 changes): mk submit got no answer from the loop service, nothing
   was sent. The run ends with s0013 as the best evaluated engine.

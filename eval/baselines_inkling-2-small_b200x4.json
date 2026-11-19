@@ -3,8 +3,8 @@
  "gpu": "one GB200 node: 4 x NVIDIA B200 (the engine owns all four)",
  "hw": "b200x4",
  "provisional": true,
- "calibre": "server end to end: 1e6 * B / decode tok/s on the client's clock (eval/client.py steady over HTTP, prompt 64, 1024 new tokens, greedy, ignore_eos, 1 warm-up + 3 repeats, one SSE chunk per token). TRIAL numbers from the stage-1 bring-up pod; the final ones come from scripts/compare.sh on one node.",
- "source": "megakernel-ink-bringup-2 (2026-11-12, attempt 1 after a preemption): SGLang 212.27 tok/s at B=1 (tpot p50 4.71 ms), 1211.46 tok/s at B=8 (tpot p50 6.57 ms), 3/3 clean repeats each. vLLM (vllm/vllm-openai:inkling-2-small arm64, its recipe's single_node_tp flags) did not start in that job: every TP worker failed in load_model / create_model",
+ "calibre": "server end to end: 1e6 * B / decode tok/s on the client's clock (eval/client.py steady over HTTP, prompt 64, 1024 new tokens, greedy, ignore_eos, 1 warm-up + 3 repeats, one SSE chunk per token). TRIAL numbers from the stage-1 bring-up machine; the final ones come from scripts/compare.sh on one node.",
+ "source": "<job> (2026-11-12, attempt 1 after a preemption): SGLang 212.27 tok/s at B=1 (tpot p50 4.71 ms), 1211.46 tok/s at B=8 (tpot p50 6.57 ms), 3/3 clean repeats each. vLLM (vllm/vllm-openai:inkling-2-small arm64, its recipe's single_node_tp flags) did not start in that job: every TP worker failed in load_model / create_model",
  "systems": {
   "sglang": {
    "version": "PR #50186 image lmsysorg/sglang:dev-inkling-2-small (arm64 sha256:198af079c599), cookbook GB200 flags: --tp 4 --ep 4 --moe-a2a-backend megamoe --attention-backend fa4 --bf16-gemm-backend torch --dtype bfloat16 --page-size 128, SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=4096; CUDA graphs on (default)",

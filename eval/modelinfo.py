@@ -37,12 +37,12 @@ from pathlib import Path
 # uses (our read-rate microbenchmark, dashboard/membw.json, reaches 3085). B200: derived from NVIDIA's system
 # figures (two cards: 16 TB/s), not published per card and not measured by us.
 CARDS = {
-    "h100": {"gpu": "NVIDIA H100 80GB HBM3", "request": "H100x1", "hbm_gb_s": 3350.0, "memory_gb": 85.5, "sms": 132, "arch": "x86_64",
+    "h100": {"gpu": "NVIDIA H100 80GB HBM3", "request": "1 × H100", "hbm_gb_s": 3350.0, "memory_gb": 85.5, "sms": 132, "arch": "x86_64",
              "hbm_source": "vendor peak for HBM3 as used by ForgeMegakernel; our microbenchmark reads 3085 GB/s"},
-    "b200": {"gpu": "NVIDIA B200 (GB200 node)", "request": "GB200x1", "hbm_gb_s": 8000.0, "memory_gb": 198.7, "sms": None, "arch": "aarch64",
+    "b200": {"gpu": "NVIDIA B200 (GB200 node)", "request": "1 × B200", "hbm_gb_s": 8000.0, "memory_gb": 198.7, "sms": None, "arch": "aarch64",
              "hbm_source": "derived from NVIDIA's GB200 system figures (16 TB/s for two cards); not measured"},
     # A whole node as the target (the engine owns every card): the figures are the sum over its cards.
-    "b200x4": {"gpu": "4 x NVIDIA B200 (one GB200 node)", "request": "GB200x4", "hbm_gb_s": 4 * 8000.0, "memory_gb": 4 * 198.7,
+    "b200x4": {"gpu": "4 x NVIDIA B200 (one GB200 node)", "request": "4 × B200", "hbm_gb_s": 4 * 8000.0, "memory_gb": 4 * 198.7,
                "sms": None, "arch": "aarch64", "cards": 4,
                "hbm_source": "4 x the B200 figure (8000 GB/s per card, derived from NVIDIA's GB200 system figures, not measured); "
                              "cards are joined by NVLink (NV18 between every pair, about 777 GB/s measured peer copy)"},

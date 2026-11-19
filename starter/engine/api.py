@@ -14,7 +14,7 @@ from transformers import AutoModelForCausalLM
 
 class Engine:
     def __init__(self, model_dir: str, max_batch: int, max_context: int):
-        # straight onto the card (a checkpoint larger than the pod's host memory loads too); MXFP4 experts (gpt-oss)
+        # straight onto the card (a checkpoint larger than the machine's host memory loads too); MXFP4 experts (gpt-oss)
         # stay in their format when transformers' MXFP4 kernels are installed
         self.model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16, device_map={"": "cuda"}).eval()
         self.past = None

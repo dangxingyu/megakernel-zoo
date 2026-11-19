@@ -43,7 +43,7 @@ import sys
 import time
 from pathlib import Path
 
-# In a pod prepared by scripts/eval_setup.sh, $MK_ROOT/eval_env.json says which Python has torch and where the
+# In a machine prepared by scripts/eval_setup.sh, $MK_ROOT/eval_env.json says which Python has torch and where the
 # reference is; started under another Python (the loop's worker has only the standard library), switch to it.
 _SETUP = {}
 _setup_file = Path(os.environ.get("MK_ROOT", "/tmp/mk")) / "eval_env.json"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bash scripts/mkserve_test.sh: start `python -m mkserve serve` for each engine in $MKSERVE_ENGINES on this pod's card and
+# bash scripts/mkserve_test.sh: start `python -m mkserve serve` for each engine in $MKSERVE_ENGINES on this machine's card and
 # use it as a person would (scripts/mkserve_check.py). One MK_SERVE_TEST line per check.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"

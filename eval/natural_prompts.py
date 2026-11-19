@@ -3,7 +3,7 @@
 tokens of this model's tokenizer, as a JSON list of token-id lists (eval/client.py --prompts-file).
 
 A third each of English prose (public-domain books from Project Gutenberg), Python source (the standard library of the
-pod's own interpreter) and word problems (the GSM8K test set), interleaved so that any few consecutive prompts mix the
+machine's own interpreter) and word problems (the GSM8K test set), interleaved so that any few consecutive prompts mix the
 three. Passages are cut at TOKENS tokens: engines that batch only prompts of equal length then decode them together.
 Without network access the prose falls back to the interpreter's pydoc topics and the questions to more source code.
 Prints one MK_ENV line saying where the text came from. The same seed gives the same prompts for the same tokenizer."""

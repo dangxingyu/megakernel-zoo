@@ -4,7 +4,7 @@
  "hw": "b200",
  "provisional": false,
  "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, one SSE chunk per token; 3 server starts x 3 repeats per system, eval/client.py through scripts/compare.sh, both systems in turns on one card in one job). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
- "source": "megakernel-mm2-oss120-compare-1: sglang B=1 455.2 tok/s, vllm B=1 407.7 tok/s, sglang B=8 2336.4 tok/s, vllm B=8 2134.9 tok/s; megakernel-mm2-oss120-vlrecipe-1: vllm_blackwell_recipe B=1 398.0 tok/s, vllm_blackwell_recipe B=8 2064.1 tok/s. SGLang and vLLM in turns on one card in megakernel-mm2-oss120-compare-1; the full-recipe vLLM line alone in megakernel-mm2-oss120-vlrecipe-1",
+ "source": "<job>: sglang B=1 455.2 tok/s, vllm B=1 407.7 tok/s, sglang B=8 2336.4 tok/s, vllm B=8 2134.9 tok/s; <job>: vllm_blackwell_recipe B=1 398.0 tok/s, vllm_blackwell_recipe B=8 2064.1 tok/s. SGLang and vLLM in turns on one card in <job>; the full-recipe vLLM line alone in <job>",
  "systems": {
   "sglang": {
    "version": "0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on; SGLang picks its gpt-oss kernels itself); SGLang's gpt-oss page gives no single-card flags",
@@ -26,7 +26,7 @@
      2343.3
     ]
    },
-   "job": "megakernel-mm2-oss120-compare-1",
+   "job": "<job>",
    "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --log-level info",
    "b8": 3424
   },
@@ -50,7 +50,7 @@
      2133.8
     ]
    },
-   "job": "megakernel-mm2-oss120-compare-1",
+   "job": "<job>",
    "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90 --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens",
    "b8": 3747
   },
@@ -74,7 +74,7 @@
      2063.5
     ]
    },
-   "job": "megakernel-mm2-oss120-vlrecipe-1",
+   "job": "<job>",
    "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90 --kv-cache-dtype fp8 --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --ma",
    "note": "NOT track-A aligned (FP8 KV cache, MXFP8 activations in the MoE if the environment variable took effect; the server log is in the store, not in the job log). Measured in its own job on another B200 card: slower than the aligned vLLM line at both batch sizes",
    "b8": 3876

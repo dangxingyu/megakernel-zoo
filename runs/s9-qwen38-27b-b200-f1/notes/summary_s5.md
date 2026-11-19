@@ -23,7 +23,7 @@ HTTP. SGLang 0.5.23: 9523 / 10231; the project's 1.10x line: 8657 / 9301.
 | s0017 | B | + the 25 ns barrier back-off | **8095** | 8862 |
 
 Not valid: s0002 (W12 with a sparse fp32 correction: numeric_long max 0.713 > 0.592, see below), s0003 (exact W12 without
-the multi-column prefill loop: http_tokens), s0005 (lost to pod failures; resubmitted as s0006).
+the multi-column prefill loop: http_tokens), s0005 (lost to machine failures; resubmitted as s0006).
 
 Best: s0017, 8095 / 8862 us: 1.176x / 1.154x SGLang, 1.104x / 1.107x the inherited engine (s0015: 8104 / 8860). Every logit of every track-B submission is
 bit-identical to the BF16 engine's (s0001): the gates see exactly the same numbers; only the speed differs.
@@ -72,7 +72,7 @@ engine/TRACK = "A W12" builds the track-B engine; "A" builds the track-A engine 
   (+3.4 %), two k-steps per 16-byte activation load (+1 %), the pair's activation loads before its escape test,
   rotated exponent nibbles, explicit global loads: slower or noise.
 - Re-tuning knobs: near-prefetch budget, residual-row preload, shared-memory size: the defaults stay.
-- Nsight Compute on this persistent kernel coincided with pod losses; not used again.
+- Nsight Compute on this persistent kernel coincided with machine losses; not used again.
 
 ## Next
 

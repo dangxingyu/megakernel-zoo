@@ -186,7 +186,7 @@ Changes measured on the skeleton build transfer to the full build:
 The earlier "unexplained" reactions to small changes were measured on the full build only; the skeleton build is the
 better instrument.
 
-## 10. L2 as a staging buffer (plan written while the pod was paused, before any measurement)
+## 10. L2 as a staging buffer (plan written while the machine was paused, before any measurement)
 
 Observation from section 9: stream time and skeleton time ADD (full 2534 = about 1600 of stream at 3.1 TB/s for the
 5.0 GB of 12-bit weights + about 800 of skeleton + attention). While a block is in the skeleton (norm, routing,
@@ -339,9 +339,9 @@ at B=1 (2360 -> 2341), over HTTP -8 against s0014.
   from launch to launch (blocks 0..7 go to SMs 124-131 in varying order). Plausible cause of the two clusters: the
   routing chain (leader, router blocks) sometimes lands on fast SMs. Started: roles by %smid from a load-time
   calibration (engine/api.py _roles, MK_ROLES); the first calibration found no fast SMs (under investigation when
-  the pod was lost, epoch 9).
+  the machine was lost, epoch 9).
 - Resolved (e0322-e0327): the 24 "fast" SMs exist only when a block leaves room for a larger L1. bench/smid_bench.cu
-  with 120-180 KB of shared memory per block: 24 SM ids (a fixed set per card; another set on the pod of epoch 9)
+  with 120-180 KB of shared memory per block: 24 SM ids (a fixed set per card; another set on the machine of epoch 9)
   finish 1.18-1.37x earlier; with 200 KB or more (the engine has ~220 KB) every SM streams equally (1.01). The card's
   total is the same in every case (3.08-3.13 TB/s by the slowest block); random or constant data, allocation size and
   offset do not matter. So there is nothing for an SM-aware role mapping to exploit in this engine: MK_ROLES is off.

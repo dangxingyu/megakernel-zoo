@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Directories on the the cloud object store, from inside a pod, with every byte checked.
+"""Directories on the the cloud object store, from inside a machine, with every byte checked.
 
     python scripts/cw/store.py put LOCAL_DIR s3://bucket/prefix [LEDGER_ROOT]   # upload, MANIFEST.json last
     python scripts/cw/store.py get s3://bucket/prefix LOCAL_DIR      # download and check against the manifest
@@ -27,7 +27,7 @@ The endpoint does not verify checksums and uploads have hung with no error, so n
   the command fails (exit 77), so a stalled store ends the stage instead of the job's hours.
 
 Runs in its own small venv with boto3 (scripts/cw/entry.sh), not in the project environment. Credentials and
-the endpoint come from the pod's environment (AWS_*), which this never prints.
+the endpoint come from the machine's environment (AWS_*), which this never prints.
 """
 
 from __future__ import annotations
@@ -212,7 +212,7 @@ def ledger(root: str) -> dict:
 
 def reconcile(root: str) -> None:
     """Write the ledger record of every complete prefix under the root that has none (prefixes stored before
-    the ledger existed, or by a pod that died between the manifest and the record)."""
+    the ledger existed, or by a machine that died between the manifest and the record)."""
     s3, (bucket, prefix) = client(), split(root)
     have = {o["Key"] for o in _list(s3, bucket, f"{prefix}/ledger/")}
     added = 0

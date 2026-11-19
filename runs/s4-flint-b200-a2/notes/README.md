@@ -16,11 +16,11 @@ it). Experiment switches are `-D` macros listed at the top of `mk.cu`, passed wi
 hand-over counters and three small buffers (`api._place_counters`, findings 13g; `MK_NOCAL=1` skips it, `stats()`
 reports the pages and the timings).
 
-## Tools (all run in the pod: `mk exec -- python tools/X.py`)
+## Tools (all run in the machine: `mk exec -- python tools/X.py`)
 
 Correctness and determinism
 - `test_engine.py --check --long --gen --time --w1 --serve`: gates against my own Hugging Face reference
-  (`hf_study.py --out /tmp/mkref` first; after every pod replacement), timing, the 64+1024 workload.
+  (`hf_study.py --out /tmp/mkref` first; after every machine replacement), timing, the 64+1024 workload.
 - `bcheck.py [steps]`: every batch size 2..8, every sequence, bitwise against the single-sequence run.
 - `digest1.py`, `digest_long.py`, `digest.py`: bitwise digests (batch 1 only / to position 1100 / mixed) to prove
   that a change computes the same thing.

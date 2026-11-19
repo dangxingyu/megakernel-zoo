@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Run once per pod by the loop's worker (setup_run --eval-setup "bash scripts/eval_setup.sh"), in the harness:
+# Run once per machine by the loop's worker (setup_run --eval-setup "bash scripts/eval_setup.sh"), in the harness:
 # the evaluator's Python environment and the float64 reference of the run's model. Model and card come from the
-# environment: MK_MODEL (Hugging Face id, default Qwen/Qwen3-8B) and MK_HW (h100 | b200; default: the card the pod
+# environment: MK_MODEL (Hugging Face id, default Qwen/Qwen3-8B) and MK_HW (h100 | b200; default: the card the machine
 # has), e.g. --eval-setup "MK_MODEL=RecursiveSI/flint MK_HW=b200 bash scripts/eval_setup.sh". The reference lines are
 # eval/baselines_<model>_<card>.json (<model>: the id's last part in lower case). Writes $MK_ROOT/eval_env.json:
-#   "env":     added to the environment of every job in the pod (the agent's `mk exec` included): a Python with torch
+#   "env":     added to the environment of every job in the machine (the agent's `mk exec` included): a Python with torch
 #   "private": read by eval/kernel_eval.py only (where the reference and the reference lines are)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"

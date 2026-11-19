@@ -37,26 +37,26 @@ pass buffers, and CUTLASS / ThunderKittens-style header code you compile into yo
 
 ## Your tools
 
-Everything that needs the GPU or real compute runs on the pod, never on the machine you are on (a login node
+Everything that needs the GPU or real compute runs on the machine, never on the machine you are on (a login node
 with no GPU for you; keep local commands light: editing, reading, git).
 
-- `mk exec [--timeout S] -- CMD` runs CMD in the pod's copy of your workspace: builds, tests, measurements.
-  The pod has the CUDA 13.2 toolkit (`nvcc`, headers), `nsys`, `ncu`, and `python` (also `$MK_PY`) with torch,
-  transformers, safetensors, numpy and pytest. Build products stay in the pod between calls but are lost when
-  the pod is replaced (`engine/build.sh` has to be able to rebuild everything). The command's output comes back
+- `mk exec [--timeout S] -- CMD` runs CMD in the machine's copy of your workspace: builds, tests, measurements.
+  The machine has the CUDA 13.2 toolkit (`nvcc`, headers), `nsys`, `ncu`, and `python` (also `$MK_PY`) with torch,
+  transformers, safetensors, numpy and pytest. Build products stay in the machine between calls but are lost when
+  the machine is replaced (`engine/build.sh` has to be able to rebuild everything). The command's output comes back
   to you (64 kB at most); files written to `$MK_EXEC_OUT` (2 MB at most in total) come back to
   `../execs/EID/out/` next to your workspace.
-- **Several jobs at once.** The pod has 4 cards and runs up to one job per card. A job sees only its
+- **Several jobs at once.** The machine has 4 cards and runs up to one job per card. A job sees only its
   card (as device 0; `$MK_CARD` says which one it is) and is pinned to CPU cores of its own, so jobs do not share
   a card or cores. Each `mk exec` blocks until its command ends: start several from background shells, or use
   `mk exec --detach` and `mk wait EID`. Every card has its **own copy of the workspace** and its own build
   products (`mk exec --card N` asks for a card, to reuse what was built there; otherwise the lowest free card is
   taken). `mk gpu` and `mk status` show every card and what runs on it. A sealed evaluation (`mk submit`) always
   runs **alone**: it starts when the running jobs have ended, and nothing else starts until it is done, so that
-  its timings are those of a quiet pod. A long detached job therefore delays a submission.
-- **The model's files** are in the pod at `$MK_MODEL_DIR`: `config.json`, the tokenizer, and the safetensors
+  its timings are those of a quiet machine. A long detached job therefore delays a submission.
+- **The model's files** are in the machine at `$MK_MODEL_DIR`: `config.json`, the tokenizer, and the safetensors
   shards listed in `model.safetensors.index.json` (the real weights; a shard's header lists every tensor's name,
-  dtype and shape). The Hugging Face implementation is in the pod's Python:
+  dtype and shape). The Hugging Face implementation is in the machine's Python:
   `python -c "import transformers, os; print(os.path.dirname(transformers.__file__))"`, then
   `models/qwen3_5/modeling_qwen3_5.py`; copy it to `$MK_EXEC_OUT` to read it here. Any measurement on the real
   weights or on real activations is an `mk exec` away. `$MK_HARNESS/eval/weights_census.py` is one example of
@@ -71,7 +71,7 @@ with no GPU for you; keep local commands light: editing, reading, git).
 - `mk board` shows every submission, the best so far, the reference lines and the time left.
 - `mk note "..."` puts a line on the run's timeline. `mk gpu` shows every card's memory, utilization and job.
 
-The pod can be replaced at any moment (a pause, then a fresh pod; a pod lives at most six hours). Nothing in it
+The machine can be replaced at any moment (a pause, then a fresh machine; a machine lives at most six hours). Nothing in it
 is durable. Your workspace, your notes and git are.
 
 ## What the evaluator does with a submission
@@ -98,7 +98,7 @@ is durable. Your workspace, your notes and git are.
 4. **Trace** (batch 1, under CUPTI): per decode step, kernel launches, host synchronizations, runtime API
    calls, memcpys, the share of time the GPU ran nothing, and idle gaps of 20 us or more.
 5. **Serve and measure over HTTP: this is the score.** The evaluator starts the engine behind the harness's HTTP
-   server (`$MK_HARNESS/eval/serve_engine.py`: an engine process, in the pod's Python with the workspace as
+   server (`$MK_HARNESS/eval/serve_engine.py`: an engine process, in the machine's Python with the workspace as
    working directory, and a front-end process that tokenizes, detokenizes and streams; a Unix socket between
    them) and measures it with the client that measured the baselines (`$MK_HARNESS/eval/client.py steady`):
    prompt 64, 1024 new tokens, greedy, one SSE chunk per token, batch 1 and batch 8, one warm-up and three
@@ -125,7 +125,7 @@ B200) `http_step_us` was within 6 to 11 us of `w1_like_step_us` at batch 1. A `-
 stage.
 
 The starter in `engine/` (the Hugging Face model behind the contract) was evaluated before the run started (job
-`megakernel-mm-selftest-q27-1`): `valid`, 84536 us per step at batch 1 and 86372 us at batch 8, timed in process
+`<job>`): `valid`, 84536 us per step at batch 1 and 86372 us at batch 8, timed in process
 (that evaluation had stages 1 to 4 only). It took 17 minutes, most of it loading the model three times and
 stepping through PyTorch; stage 5 adds a fourth load and about 8700 steps. An engine that loads and steps faster
 is evaluated faster.
@@ -153,8 +153,8 @@ a path to follow, and `--milestone` only records which one a submission was aimi
 
 Microseconds per decode step, measured by this project on the same kind of card:
 
-trials of 2026-11-10: megakernel-gb200-e11-q27-sglang-1 (105.0 tok/s at B=1, 781.9 at B=8),
-megakernel-gb200-e11-q27-vllm-1 (98.9 / 747.3). SGLang with torch.compile (the strongest configuration on
+trials of 2026-11-10: <job> (105.0 tok/s at B=1, 781.9 at B=8),
+<job> (98.9 / 747.3). SGLang with torch.compile (the strongest configuration on
 Qwen3-8B/H100) was not measured for this model.
 
 | System | Kind | Batch 1 | Batch 8 |
@@ -166,8 +166,8 @@ The project's claim for a model is a speed of at least **1.10x** the fastest gen
 batch 8: 8657 us per token at batch 1 (9523 / 1.10) and 9301 us per step at batch 8 (10231 / 1.10).
 
 These are trial numbers: a server end to end over HTTP on the client's clock (prompt 64, 1024 new tokens,
-greedy). Your headline is measured the same way, by the same client, in the evaluation's own pod; the baselines
-were measured in other pods on the same kind of card.
+greedy). Your headline is measured the same way, by the same client, in the evaluation's own machine; the baselines
+were measured in other machines on the same kind of card.
 
 ## Two results, kept apart
 
@@ -212,7 +212,7 @@ numbers; only you can record the reasons.
 ## The model: `Qwen/Qwen3.8-27B`
 
 Read from the checkpoint's `config.json`, its safetensors headers and the Hugging Face source (transformers
-5.22). The source in the pod is the specification; where this list and the source disagree, the source is right.
+5.22). The source in the machine is the specification; where this list and the source disagree, the source is right.
 
 - The checkpoint is multimodal (`Qwen3_5ForConditionalGeneration`, 27.78 B parameters, 55.6 GB, 18 shards, all
   BF16). **This run decodes text only**: the text decoder is `model.language_model.*` plus `lm_head.weight`
@@ -237,10 +237,10 @@ Read from the checkpoint's `config.json`, its safetensors headers and the Huggin
 
 - The engine's target is **one NVIDIA B200**; `nvidia-smi` names it "NVIDIA GB200", 189471 MiB, driver 595.71,
   CUDA 13.2. Ask the device for what is not listed here (compute capability, number of SMs, cache sizes).
-- The pod is a whole GB200 node with **four** such cards. The other cards are for running several experiments at
+- The machine is a whole GB200 node with **four** such cards. The other cards are for running several experiments at
   the same time (see "Your tools"); the engine, every evaluation and every reported number are for one card.
 - The host is **aarch64**: two Grace CPUs (Neoverse-V2), 144 cores, no SMT. Host code and build scripts must build
-  on Arm; nothing x86-only works. The pod is the whole node: no other tenant's jobs run on it.
+  on Arm; nothing x86-only works. The machine is the whole node: nothing else runs on it.
 - Peak memory bandwidth used for MBU: **8000 GB/s**. This figure is derived from the vendor's system numbers
   (two cards: 16 TB/s), not published per card and not measured by us. Treat MBU on this card as indicative.
 - The card also has FP8 and MXFP8 paths. 8-bit weights or activations are a separate, later setting: this run is BF16.

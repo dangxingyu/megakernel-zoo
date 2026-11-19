@@ -403,12 +403,12 @@ SHF/LOP3 nibble extract + IMAD (offset*128 + base) + LOP3 = ~5 instructions.
 - Shortest-first among the prompts still in time is not the order that loses the fewest deadlines when bursts
   overlap: a later burst's short prompts overtake an earlier burst's long one. Promoting one prompt per step - the
   earliest deadline among those projected to miss in shortest-first order at the largest pass size, if it and every
-  prompt it overtakes keep 0.3 s to spare by the same projection - saves one request of 780 at 8 req/s on the pod
-  (A/B on one pod epoch: 777 -> 778; 7 promotions in 120 s; none at 2 req/s), and in the simulator 20 -> 17 of 2120
+  prompt it overtakes keep 0.3 s to spare by the same projection - saves one request of 780 at 8 req/s on the machine
+  (A/B on one machine epoch: 777 -> 778; 7 promotions in 120 s; none at 2 req/s), and in the simulator 20 -> 17 of 2120
   over 300 s, 6 -> 3 of 1598 at 6 req/s, 103 -> 89 of 2608 at 10 req/s. TTFT p90 at 8 req/s 1.60 -> 1.66 s.
-- The same source scores 777 or 778 of 780 on two pods: one 32,768-token prompt (burst at 2.5 s) answers after 4.95
-  s in the simulator, under 5 s on pod epoch 6 and after 5.01 - 5.02 s on epoch 7. Margins (2 s from 20 decoding
+- The same source scores 777 or 778 of 780 on two machines: one 32,768-token prompt (burst at 2.5 s) answers after 4.95
+  s in the simulator, under 5 s on machine epoch 6 and after 5.01 - 5.02 s on epoch 7. Margins (2 s from 20 decoding
   sequences), earlier promotion and an honest arrival stamp move it by 0.01 - 0.09 s: its burst needs 4.9 s of the
-  largest passes. A result at this level is one request wide; compare builds on one pod and name the request.
+  largest passes. A result at this level is one request wide; compare builds on one machine and name the request.
 - The simulator (scheduler's code, fitted pass model) predicted s0037 - s0042 to the request and s0043 to within
-  this one request: at the limit it is 0.07 s optimistic against pod epoch 7.
+  this one request: at the limit it is 0.07 s optimistic against machine epoch 7.

@@ -3,8 +3,8 @@
  "gpu": "NVIDIA B200 (one card of a GB200 node)",
  "hw": "b200",
  "provisional": true,
- "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, 5 repeats). These are TRIAL numbers, measured in other pods than the engine under test, which is timed in its own process (step, no sampling, no HTTP): the easier calibre. A speedup here is an upper bound on the end-to-end one until both are measured on one card by one client (scripts/compare.sh).",
- "source": "trials of 2026-11-10: megakernel-gb200-e11-q27-sglang-1 (105.0 tok/s at B=1, 781.9 at B=8), megakernel-gb200-e11-q27-vllm-1 (98.9 / 747.3). SGLang with torch.compile (the strongest configuration on Qwen3-8B/H100) was not measured for this model",
+ "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, 5 repeats). These are TRIAL numbers, measured in other machines than the engine under test, which is timed in its own process (step, no sampling, no HTTP): the easier calibre. A speedup here is an upper bound on the end-to-end one until both are measured on one card by one client (scripts/compare.sh).",
+ "source": "trials of 2026-11-10: <job> (105.0 tok/s at B=1, 781.9 at B=8), <job> (98.9 / 747.3). SGLang with torch.compile (the strongest configuration on Qwen3-8B/H100) was not measured for this model",
  "systems": {
   "sglang": {
    "version": "0.5.23, default flags (CUDA graphs)",

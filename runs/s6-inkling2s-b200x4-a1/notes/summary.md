@@ -1,7 +1,7 @@
 # Summary: an Inkling-2-Small decode engine on one GB200 node (4x B200)
 
 Final (24 h). Best submission: **s0013, track A, http_step_us_b1 = 3624 us** (B=8 6955 us). `engine/` holds s0013
-(git tag s0013). No pod access from 14.0 h to the end of the run.
+(git tag s0013). No machine access from 14.0 h to the end of the run.
 
 | | SGLang PR #50186 (HTTP) | this engine s0013 (HTTP) | ratio |
 |---|---|---|---|
@@ -38,7 +38,7 @@ before a spin; redux top-8; prefetch issued by an idle warp) -> 4260 (load depth
 on a counter of the qkv strips it reads; acq_rel hand-offs) -> 4049 (paired o_proj strips; B>=2 race fix) ->
 3959 (register relief: 32-bit GEMV indices, launch state in shared memory; two-chain quantization) -> 3624
 (the cards' tensor-parallel partials cross as bf16 pairs with tags instead of fp32: half the bytes every block polls).
-Not yet submitted at 14.5 h (a build mistake made s0014 fail, then the bridge went down): B=8 ~6680 expected from
+Not yet submitted at 14.5 h (a build mistake made s0014 fail, then the loop service went down): B=8 ~6680 expected from
 whole-region K/V prefetch and routing-masked w2 inputs (in process 7064 -> 6782 us).
 
 ## Lessons that generalise (each measured; journal.md has the numbers)
@@ -74,7 +74,7 @@ restructured around shared activation fragments; not reached in this run.
 B>=2 only, bitwise identical to s0013: whole-region K/V L2 prefetch (the non-token blocks' tiny bulk prefetches had
 delayed the attn_in barrier by ~4.6 us) and a routing mask so w2 reads zeros for unrouted (expert, token) columns and
 quant2 skips them. In process B=8 7064 -> 6782 us, B=1 equal (e0215). Its first submission (s0014) failed to build
-(my error: a buffer made conditional, its users not); the fixed build never reached the evaluator (pod outage).
+(my error: a buffer made conditional, its users not); the fixed build never reached the evaluator (machine outage).
 Also there: W13_EARLYPF (w13 L2 prefetch per expert during the top-8, by the idle last warp), off and untested.
 
 ## What I would try next

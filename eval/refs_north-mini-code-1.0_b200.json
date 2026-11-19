@@ -15,6 +15,6 @@
   "name": "vllm (general engine)",
   "metric": "http_step_us_b1",
   "value": 2727,
-  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-north-compare-1; batch 8: 4516 us per step. 0.32.0 (torch 2.13.0+cu132), default flags plus --max-model-len 32768 (as on the H100)"
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 4516 us per step. 0.32.0 (torch 2.13.0+cu132), default flags plus --max-model-len 32768 (as on the H100)"
  }
 ]

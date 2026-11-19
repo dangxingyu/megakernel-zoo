@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# What a pod gives us (H100 x86 or GB200 aarch64): GPU, driver, CPU and memory limits, toolchain, network, object store.
+# What a machine gives us (H100 x86 or GB200 aarch64): GPU, driver, CPU and memory limits, toolchain, network, object store.
 # Prints names of credential variables, never their values.
 set -uo pipefail
 section() { echo; echo "=== $1"; }

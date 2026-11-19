@@ -317,7 +317,7 @@ units smaller than a tile at the end of a phase.
 Bugs found on the way: (1) my single-run A/B script compiled the current source whatever SRC said, which
 made s0015 look 140 us slower for an hour ("environment drift" that did not exist); (2) the phase
 descriptor grew into the control block in shared memory (hang at step 1): layout now has static_asserts.
-Also: the software trace clock is not a stable time base (tick rate depends on memory traffic); the pod was
+Also: the software trace clock is not a stable time base (tick rate depends on memory traffic); the machine was
 replaced once (epoch 2) and reproduces the same timings.
 
 ## s0016: pipelining across the tile barrier
@@ -652,7 +652,7 @@ Everything below at T = 1024 columns, 24576 x 4096 (gate+up), per SM.
   Hopper path: wgmma (warpgroup MMA: 4 warps, 64 x N x 16 per instruction, both operands read from shared
   memory through descriptors) and cp.async.bulk (the copy engine moves bytes global -> shared memory; no warp
   executes a load) with mbarriers. I did not know these instructions well enough to reach for them unprompted;
-  the instruction forms are from the CUTLASS headers (read in the pod; nothing of CUTLASS is compiled in).
+  the instruction forms are from the CUTLASS headers (read in the machine; nothing of CUTLASS is compiled in).
 New kernel (engine/eng.cu k_gemm, generator engine/gen_wg.py): block = 2 consumer warpgroups + 1 producer warp,
 128 rows x 2 NB columns, NB in {16, 32, 64, 128} by the number of columns, 4 stages of 64 K in shared memory,
 "full" / "empty" mbarriers per stage. Weights and activations are stored as [k/64][row/8][(k%64)/8][row%8][k%8]:
@@ -957,7 +957,7 @@ Not done, with reasons: K split over the two warpgroups of a block (a new canoni
 with 64 streams the 4096-row matrices are then bound by HBM at ~2.6 TB/s anyway).
 
 ## Same-run comparisons only (a lesson), and the producer loop
-Numbers from different pod commands differ by up to 5% on the GEMM benchmark (20.5 vs 19.5 ms at 1024 columns for
+Numbers from different machine commands differ by up to 5% on the GEMM benchmark (20.5 vs 19.5 ms at 1024 columns for
 the same code), and a variant I had built as "the old behaviour" (one producer) was 0.38 ms per step slower
 than the committed build: my first multi-producer loop (`if (gc % NPROD != prod) continue;` inside the loop over
 all stages) cost that much by itself, and four producers were only hiding it. From here on every A/B is
@@ -1131,7 +1131,7 @@ Replay unchanged: 175/189.
 
 ## s0018: q, K, V prepared in the q/k/v GEMM's epilogue up to 16 columns
 Expected: step 5.66-5.68 / 5.82-5.83 ms, generate 0.02 above; online unchanged (175 +- 1).
-Measured (s0018; evaluated after two pod replacements): VALID, 0.926 (175/189), tbt p50 23 / p99 41 ms; step
+Measured (s0018; evaluated after two machine replacements): VALID, 0.926 (175/189), tbt p50 23 / p99 41 ms; step
 5.68 / 5.84 ms, generate 5.70 / 5.84. As predicted. The board's lines for the offline step are 5.62 / 5.97.
 
 ## Shortest first among prompts that arrive together (TTFT p50 1.33 -> 0.25 s)
@@ -1151,9 +1151,9 @@ every warp after the block barrier: step 5.68 -> 5.73 ms, 5.83 -> 6.08 at B=8.
 Two more replays at 1.3 s: 175 and 174 with tbt p50 25 ms both times: no margin on the board's 25 ms.
 Decision: shortest first with boost slack 1.2 s (tbt p50 24 ms). One request stands on the 5 s edge, so the share
 is 174 or 175.
-A latent bug found by the test suite on the new pod: eng_read_tokens (only used with MK_DEVSCHED=0, the Python
+A latent bug found by the test suite on the new machine: eng_read_tokens (only used with MK_DEVSCHED=0, the Python
 scheduler on the host) had no ctypes argument types, so the 64-bit engine handle went through a C int and the
-call only worked while the process heap was below 4 GB; on this pod it crashed. Declared. The evaluated path
+call only worked while the process heap was below 4 GB; on this machine it crashed. Declared. The evaluated path
 (device scheduler) never calls it.
 
 ## s0019: shortest first among prompts that arrive together
@@ -1448,13 +1448,13 @@ B=48 8.85 -> 8.27. Replay: decode-only passes 11.4 -> 10.3 ms measured; 179 of 1
 Expected: 0.947 (179), TTFT p50 0.22-0.24 / p90 3.8 / p99 7.9 s, tbt p50 23 ms, offline 5.58 / 5.72 ms.
 Measured (s0026): VALID, 0.947 (179/189), TTFT p50 0.221 / p90 3.76 / p99 7.94 / max 9.45 s, tbt p50 23.0 / p90
 66 / p99 74 ms, longest gap 86 ms; offline step 5.568 / 5.706 ms. As predicted.
-After s0026 (pod epoch 7):
+After s0026 (machine epoch 7):
 - Prefill attention with warpgroup 0's scores of the next segment left in flight during its scalar work
   (ATT_ASYNC=1): same bits, no change at any size (2040 / 28672: 125.3 vs 126.3 ms). Switch kept, off.
 - Tail guard with the light passes (track B): 8 s 179 / tbt 23, 6 s 179 / 24, 5.5 s 179 / 25, 5.25 s 179 / 25,
   5 s 181 / 26. A second, milder level (55 ms passes from 5 s, 80 ms from 8 s; simulator): 180, tbt +3 ms.
   Guard stays at 8 s.
-- Track A on this pod: offline 5.98 / 6.10 ms (the s0025 code: 6.01 / 6.12, so the pod, not the code; track B
+- Track A on this machine: offline 5.98 / 6.10 ms (the s0025 code: 6.01 / 6.12, so the machine, not the code; track B
   5.57 / 5.71 here as before). Replay: 175-176 of 189, tbt p50 31, TTFT p99 9.3 s; large passes run 1.18x the
   cost model (track B 1.07). Light passes help track A too (decode pass B=8 6.91 -> 6.38 ms; replay 175 -> 176).
   The last track-A submission (s0024: 0.947) stays its record; not resubmitted.
@@ -1487,7 +1487,7 @@ some and waits, so the kernel still cannot end before its predecessor): device-l
 (the regression of trigger mode 4 gone), B=8 / B=32 and offline unchanged. All tests pass, replay 179.
 
 ## Track A after the launch work; a near-miss trigger
-Track A (this pod): offline 5.67 / 5.84 ms (s0024: 5.90 / 6.07; the line 5.62 / 5.97: B=8 in, B=1 0.9% over).
+Track A (this machine): offline 5.67 / 5.84 ms (s0024: 5.90 / 6.07; the line 5.62 / 5.97: B=8 in, B=1 0.9% over).
 Online it is short of capacity: replay 176 (0.931), tbt p50 30 ms with guard 8; guard 12: 174 / 31; no guard:
 169 / 26; normal target 24 or 22 ms: 173 / 33-37 (slower prompt passes leave more time in the tail mode).
 Track A cannot meet the tbt line with this engine; the record stays s0024.
@@ -1511,7 +1511,7 @@ Against the board's requirements (track B, the evaluator's numbers for s0028):
   (multicast did not help), attention by tensor + scalar issue (three warpgroups, async scores: no help), decode
   attention by HBM. The engine is near what this design gives.
 Track A (engine/TRACK = A): record s0024 (0.947, 5.90 / 6.07 ms); now 5.67 / 5.84 ms offline, online short of
-the tbt line on this pod (journal above).
+the tbt line on this machine (journal above).
 
 ## Super-segments of 8192 positions instead of 4096 (SS_LOG 6): no
 nsys of a 2040-column pass at context 16k: GEMMs 52%, attention 40%, k_prep 2.8%, k_attn_fold 2.5% (the parts of
@@ -1614,8 +1614,8 @@ s0032 (track B): expected 0.958 (181), tbt p50 24.2-24.8 ms. Measured: VALID, 0.
 3.37 / p99 7.82 / max 9.48 s, but tbt p50 25.28 ms - over the board's 25 ms line (this time the evaluator's
 median came out 0.3 ms ABOVE my replays). Offline 5.454 / 5.568. Not compliant: s0031's setting (guard 8 s,
 0.952, tbt 23.5) stays the one that meets every line; looking for 181 with more margin, else guard back to 8.
-Margin search (pod epoch 9): guard 5 with 70 ms tail passes 181 / tbt 24.8, 24.8; guard 5 with a 26 ms normal
-target 181 / 25.1, 25.2; guard 6 180 / 25.2, 25.2 (on this pod the same settings run ~0.5-1 ms higher than on the
+Margin search (machine epoch 9): guard 5 with 70 ms tail passes 181 / tbt 24.8, 24.8; guard 5 with a 26 ms normal
+target 181 / 25.1, 25.2; guard 6 180 / 25.2, 25.2 (on this machine the same settings run ~0.5-1 ms higher than on the
 last one). No setting gives 181 with a safe margin under 25 ms. Default back to guard 8 s (s0031's setting).
 Overload level (simulator): passes of 140-200 ms while the estimated backlog is past 12-15 s: at 1.5x the rate
 TTFT p99 15.7 -> 19.5-20.3 s and 100+ streams over the 100 ms line; at the standard rate 180 -> 173. No.
@@ -1639,15 +1639,15 @@ keeps arrival times in float32, so the Python reference now does the same in thi
 estimate (0 mismatches at 1, 1.5 and 2x the rate). Standard rate: never triggers (180, same TTFT). 1.5x the rate,
 240 s: TTFT p99 10.8 s either way (13.2 s with s0029's engine: the light passes, PDL and per-shape kernels moved
 it), max 22.8 -> 19.7 s, share 544 -> 545 of 585. Default on.
-Time between tokens, run to run (pod epoch 9, three replays each): near 0.75 s / target 27 ms: 180, tbt p50 24.1,
+Time between tokens, run to run (machine epoch 9, three replays each): near 0.75 s / target 27 ms: 180, tbt p50 24.1,
 25.0, 25.2; near 0.75 / target 25: 180, 24.1, 24.6, 24.7; near off / target 27: 179, 23.3, 23.1, 23.1. The median
-moves by ~1 ms between runs and pods (s0031's evaluator run: 23.5). Default now target 25 ms with near 0.75 s
+moves by ~1 ms between runs and machines (s0031's evaluator run: 23.5). Default now target 25 ms with near 0.75 s
 (more margin at the same share); submitted to see the evaluator's number.
 s0033 (track B): expected 0.952, tbt p50 23.6-24.7 ms. Measured: VALID, 0.952 (180/189), TTFT p50 0.215 / p90 3.63
-/ p99 7.95 / max 9.53 s, tbt p50 24.77 / p99 74 ms, longest gap 87 ms; offline 5.453 / 5.564 (this pod). Under
+/ p99 7.95 / max 9.53 s, tbt p50 24.77 / p99 74 ms, longest gap 87 ms; offline 5.453 / 5.564 (this machine). Under
 the line, with a thin margin (s0031's 23.5 was the other end of the same spread). If a re-measurement needs the
 margin, MK_NEAR_S=0 gives 179 of 189 at ~23 ms.
-Final validation of HEAD (s0033's engine, pod epoch 9): tests/run_all.sh passes; tools/online_eval.py --rates
+Final validation of HEAD (s0033's engine, machine epoch 9): tests/run_all.sh passes; tools/online_eval.py --rates
 "2 4 1": valid, every milestone up to h0_step / online_beats_engines; r2 0.952, TTFT p99 7.94 s, tbt p50 24.1 ms;
 r1 (0.86 req/s) 0.951 (s0029's engine: 0.942), tbt p50 20.1; r4 (3.07 req/s) 0.894 (0.910 with the 27 ms target:
 the shorter normal passes cost prompt throughput under overload), TTFT p99 23.7 s.
@@ -1699,10 +1699,10 @@ Next: scheduling knobs that buy tbt margin at the same share (the line is 25 ms,
 ## Near-miss pass target of its own (MK_TARGET_NEAR_MS, default = the tail target: no change)
 Expected: the near-miss window (some prompt estimated in (5, 5.75] s) runs 80 ms passes; a shorter target there
 (45-60 ms) might keep the 180th first token on time with less time between tokens. Parity of the device and Python
-schedulers with the new knob: 0 mismatching passes (sim --impl both, target-near 45). Replays (pod epoch 9):
+schedulers with the new knob: 0 mismatching passes (sim --impl both, target-near 45). Replays (machine epoch 9):
 80 ms 180 / 180 (tbt p50 23.9 / 24.1), 45 ms 179 / 179 (24.0 / 23.8), 60 ms 180 / 180 (24.1 / 24.1). The
 window is too short to move the median; 45 ms loses the near miss it is there for. Default stays 80 (knob kept).
-Normal pass target below 25 ms (replays, pod epoch 9): 23 ms 179 / 179 (tbt p50 23.1 / 23.1), 24 ms 179 / 179
+Normal pass target below 25 ms (replays, machine epoch 9): 23 ms 179 / 179 (tbt p50 23.1 / 23.1), 24 ms 179 / 179
 (24.0 / 23.1), 25 ms 180 / 180 (24.0 / 24.0). The 180th request needs the 25 ms passes' prompt throughput; 25 is
 the knee. Default stays 25 ms.
 
@@ -1751,12 +1751,12 @@ chunk's path, against ~150 ns of weight streaming per chunk); batches of up to 8
 6772 us (waiting for a batch drains the weight pipeline). The input would have to be normalized once per block
 for the whole K (128 KB at 16 columns, next to 96 KB of weight stages): a new stage layout, not in the time
 left. Reverted; track A keeps its norm kernels (5.73 / 5.86 ms, s0034).
-Final checks of HEAD (pod epoch 9): tests/run_all.sh passes on track B and on track A (engine/TRACK=A in the pod
+Final checks of HEAD (machine epoch 9): tests/run_all.sh passes on track B and on track A (engine/TRACK=A in the machine
 only): unit/bitwise, GEMM shapes, generate, 34000 positions, online (device loop, host steps, Python scheduler,
 small ring/arena).
 Normal target 24.5 ms (track B): 180 / 180, tbt p50 24.2 / 23.8 (25 ms in the same run: 180, 24.0). Within the
 run-to-run spread of the median; 25 stays. (A first set of these replays ran a stale track-A library left in the
-pod by the track-A suite run: build.sh decided by mtimes and the workspace sync restores TRACK's old mtime. It
+machine by the track-A suite run: build.sh decided by mtimes and the workspace sync restores TRACK's old mtime. It
 now also records the track and flags it built with, engine/libeng.so.flags, and rebuilds when they differ.)
 
 ## State at 34.7 h
@@ -1799,7 +1799,7 @@ in the same GPU time (5992 / 5996 ms), but prep_v8's run did it in 270 passes in
 3.7% under the measured times against 1.7%: the cost model's per-column terms were calibrated with the old
 k_prep, and smaller passes cost more per column). The 2% kernel gain did not reach the burst; the pass sizes did
 change. A recalibration (tests/calib_cost.py) would be the way to take such a gain; not done in the time left.
-Track A, more weight stages requested before the wait (PDL_EARLY, pod epoch 10): 3: 5676 / 5840 us, 6: 5668 /
+Track A, more weight stages requested before the wait (PDL_EARLY, machine epoch 10): 3: 5676 / 5840 us, 6: 5668 /
 5825, 10: 5682 / 5828. -8 / -15 us: not worth a switch (and the default would move track B's knife edge).
 
 ## What I would do next (35.8 h)
@@ -1813,14 +1813,14 @@ Track A, more weight stages requested before the wait (PDL_EARLY, pod epoch 10):
 - Prefill: the 12-bit lossless weights of the other runs do not help prompt passes; the large GEMMs are at
   ~650-710 TFLOP/s and attention at ~466; the first-token tail at 1.61 req/s is bounded by the largest burst's
   work (~9.5 s for 245k tokens).
-HEAD on the new pod (epoch 10), clean build: test_eng PASS, offline 5414 / 5550 us, replays 180 / 180 (tbt p50
+HEAD on the new machine (epoch 10), clean build: test_eng PASS, offline 5414 / 5550 us, replays 180 / 180 (tbt p50
 24.2 / 24.2 ms, TTFT p90 3.62 / 3.63 s). Submitted as the final track-B source (s0033's engine; since then only
 track-A code, a default-preserving knob and build.sh's flags check).
 s0035 (track B, final source): expected 0.952, tbt p50 23.5-25, offline ~5.41 / 5.55. Measured: VALID, 0.952
 (180/189), TTFT p50 0.223 / p90 3.63 / p99 7.97 / max 9.51 s, tbt p50 24.1 / p99 73.8 ms, longest gap 86 ms,
 offline 5.413 / 5.551 ms; every milestone up to h0_step. As expected.
 The operator's TTFT p99 condition, measured their way (300 s of arrivals; tests/replay.py --duration 300, final
-engine, pod epoch 10): 1.61 req/s: 383 requests, 0.977 within, TTFT p50 0.20 / p90 2.46 / p99 7.6 / max 9.3 s,
+engine, machine epoch 10): 1.61 req/s: 383 requests, 0.977 within, TTFT p50 0.20 / p90 2.46 / p99 7.6 / max 9.3 s,
 tbt p50 20.4 ms; 2.39 req/s: 585 requests, 0.959, TTFT 0.22 / 3.12 / 7.9 / 10.6 s, tbt p50 35.3 ms, longest gap
 88-91 ms. Against the engines' HTTP numbers (p99 ~6 s at 1.61, 9.5 / 10.1 s at 2.39): better at 2.39 req/s,
 still 1.6 s behind at 1.61 (the same burst-clearing bound).
@@ -1854,7 +1854,7 @@ of the whole K (4096) once per block into a resident 64 KB region of shared memo
 .async, barrier), and the stages carry only weights (q/k/v with preparation: 9 stages instead of 10 to fit 221 KB).
 The ADD kernels are unchanged (x and the per-tile sums of squares as before); the first norm of layer 0 and the
 final norm stay kernels.
-Measured (pod epoch 10): with 8 columns: B=1 5676 -> 5526 us, B=8 5840 -> 6055 (the normalization of 8 columns is
+Measured (machine epoch 10): with 8 columns: B=1 5676 -> 5526 us, B=8 5840 -> 6055 (the normalization of 8 columns is
 16 vectors per thread in a row); so only for 1 column (TA_PB_T 1): 5529 / 5838 us. Track A's offline lines (5.62 /
 5.97 ms) are both met now. Bits equal: tests/run_all.sh with engine/TRACK=A passes (bitwise prefill/steps, GEMM
 shapes, generate, 34000 positions, online). Track B unchanged (all of it under TRACK_A): 5415 / 5551 us, PASS.
@@ -1908,7 +1908,7 @@ L2 persistence window over the residual stream (an MK_L2X knob, access-policy wi
 node; H100 allows 31 MB set aside): 1024-column passes at context 0-5k: off 24.8-33.4 ms, 16 MB 24.7-32.9 (noise),
 32 MB 26.1-34.7 (worse); 2048-column passes to context 30k: 32 MB +1-3 ms per pass (attention's K/V lose the L2).
 Not kept (code reverted).
-tools/online_eval.py --rates "2 4 1" with s0037's engine (pod epoch 10): valid; r2 (1.57 req/s) 180/189 = 0.952,
+tools/online_eval.py --rates "2 4 1" with s0037's engine (machine epoch 10): valid; r2 (1.57 req/s) 180/189 = 0.952,
 tbt p50 23.9 ms, TTFT p50 0.22 / p99 7.97 s; r1 (0.86 req/s) 98/103 = 0.951, tbt p50 20.0 ms, TTFT p99 7.9 s;
 r4 (3.07 req/s) 327/368 = 0.889, tbt p50 62 ms, TTFT p50 0.91 / p99 24.3 s (past capacity).
 Track A with EPI_XST, same session, alternating against s0036's source: before 178 / 177 (tbt p50 23.8 / 23.9),
@@ -1921,7 +1921,7 @@ loop decode passes (tests/online_dec.py, tests/ab_dec2.sh): B=24 6855 / 6853 us 
 gain (one or two column groups per thread there); the threshold stays 64.
 
 ## Final state (38.7 h)
-HEAD, clean build on pod epoch 10: test_eng --steps 200 PASS, test_online (poisoned pages) PASS, offline 5414 /
+HEAD, clean build on machine epoch 10: test_eng --steps 200 PASS, test_online (poisoned pages) PASS, offline 5414 /
 5551 us. Track B = s0037 (0.952, 180/189, tbt p50 23.8 ms); track A (TRACK=A) = s0038 (0.947, 179/189, tbt p50
 23.7 ms, offline 5.53 / 5.84 ms).
 Tail guard with s0037's engine (one session): guard 6 s 180 / 180 (tbt p50 24.0 / 24.3, TTFT p90 3.37 / 3.35, p99

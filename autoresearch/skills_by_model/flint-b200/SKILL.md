@@ -37,26 +37,26 @@ pass buffers, and CUTLASS / ThunderKittens-style header code you compile into yo
 
 ## Your tools
 
-Everything that needs the GPU or real compute runs on the pod, never on the machine you are on (a login node
+Everything that needs the GPU or real compute runs on the machine, never on the machine you are on (a login node
 with no GPU for you; keep local commands light: editing, reading, git).
 
-- `mk exec [--timeout S] -- CMD` runs CMD in the pod's copy of your workspace: builds, tests, measurements.
-  The pod has the CUDA 13.2 toolkit (`nvcc`, headers), `nsys`, `ncu`, and `python` (also `$MK_PY`) with torch,
-  transformers, safetensors, numpy and pytest. Build products stay in the pod between calls but are lost when
-  the pod is replaced (`engine/build.sh` has to be able to rebuild everything). The command's output comes back
+- `mk exec [--timeout S] -- CMD` runs CMD in the machine's copy of your workspace: builds, tests, measurements.
+  The machine has the CUDA 13.2 toolkit (`nvcc`, headers), `nsys`, `ncu`, and `python` (also `$MK_PY`) with torch,
+  transformers, safetensors, numpy and pytest. Build products stay in the machine between calls but are lost when
+  the machine is replaced (`engine/build.sh` has to be able to rebuild everything). The command's output comes back
   to you (64 kB at most); files written to `$MK_EXEC_OUT` (2 MB at most in total) come back to
   `../execs/EID/out/` next to your workspace.
-- **Several jobs at once.** The pod has 4 cards and runs up to one job per card. A job sees only its
+- **Several jobs at once.** The machine has 4 cards and runs up to one job per card. A job sees only its
   card (as device 0; `$MK_CARD` says which one it is) and is pinned to CPU cores of its own, so jobs do not share
   a card or cores. Each `mk exec` blocks until its command ends: start several from background shells, or use
   `mk exec --detach` and `mk wait EID`. Every card has its **own copy of the workspace** and its own build
   products (`mk exec --card N` asks for a card, to reuse what was built there; otherwise the lowest free card is
   taken). `mk gpu` and `mk status` show every card and what runs on it. A sealed evaluation (`mk submit`) always
   runs **alone**: it starts when the running jobs have ended, and nothing else starts until it is done, so that
-  its timings are those of a quiet pod. A long detached job therefore delays a submission.
-- **The model's files** are in the pod at `$MK_MODEL_DIR`: `config.json`, the tokenizer, and the safetensors
+  its timings are those of a quiet machine. A long detached job therefore delays a submission.
+- **The model's files** are in the machine at `$MK_MODEL_DIR`: `config.json`, the tokenizer, and the safetensors
   shards listed in `model.safetensors.index.json` (the real weights; a shard's header lists every tensor's name,
-  dtype and shape). The Hugging Face implementation is in the pod's Python:
+  dtype and shape). The Hugging Face implementation is in the machine's Python:
   `python -c "import transformers, os; print(os.path.dirname(transformers.__file__))"`, then
   `models/flint/modeling_flint.py`; copy it to `$MK_EXEC_OUT` to read it here. Any measurement on the real
   weights or on real activations is an `mk exec` away. `$MK_HARNESS/eval/weights_census.py` is one example of
@@ -71,7 +71,7 @@ with no GPU for you; keep local commands light: editing, reading, git).
 - `mk board` shows every submission, the best so far, the reference lines and the time left.
 - `mk note "..."` puts a line on the run's timeline. `mk gpu` shows every card's memory, utilization and job.
 
-The pod can be replaced at any moment (a pause, then a fresh pod; a pod lives at most six hours). Nothing in it
+The machine can be replaced at any moment (a pause, then a fresh machine; a machine lives at most six hours). Nothing in it
 is durable. Your workspace, your notes and git are.
 
 ## What the evaluator does with a submission
@@ -91,7 +91,7 @@ is durable. Your workspace, your notes and git are.
    (for Qwen3-8B the same figures are 0.010, 0.08 and 95.1%). The limits are therefore: median error at most
    0.121, maximum at most 1.98, top-1 agreement at least 91.9%. The starter (the same Hugging Face model stepped
    token by token) measured 0.066 / 1.48 and 92.1%. Where that distance comes from was measured once (job
-   megakernel-mm-gate-study-1, the same 8 sequences of 1152 tokens, teacher forced): BF16 and the float32
+   <job>, the same 8 sequences of 1152 tokens, teacher forced): BF16 and the float32
    reference pick a different set of 6 experts in 33% of all (layer, token) pairs (7% in the first
    mixture-of-experts layers, 48% in the last; 98% of the tokens differ in at least one layer, the median token
    in 12 of 47; where the sets differ, 5 of the 6 experts are usually the same). The reference's own margin
@@ -107,7 +107,7 @@ is durable. Your workspace, your notes and git are.
 4. **Trace** (batch 1, under CUPTI): per decode step, kernel launches, host synchronizations, runtime API
    calls, memcpys, the share of time the GPU ran nothing, and idle gaps of 20 us or more.
 5. **Serve and measure over HTTP: this is the score.** The evaluator starts the engine behind the harness's HTTP
-   server (`$MK_HARNESS/eval/serve_engine.py`: an engine process, in the pod's Python with the workspace as
+   server (`$MK_HARNESS/eval/serve_engine.py`: an engine process, in the machine's Python with the workspace as
    working directory, and a front-end process that tokenizes, detokenizes and streams; a Unix socket between
    them) and measures it with the client that measured the baselines (`$MK_HARNESS/eval/client.py steady`):
    prompt 64, 1024 new tokens, greedy, one SSE chunk per token, batch 1 and batch 8, one warm-up and three
@@ -134,7 +134,7 @@ B200) `http_step_us` was within 6 to 11 us of `w1_like_step_us` at batch 1. A `-
 stage.
 
 The starter in `engine/` (the Hugging Face model behind the contract) was evaluated before the run started (job
-`megakernel-mm-selftest-flint-1`): `valid`, 82074 us per step at batch 1 and 83153 us at batch 8, timed in
+`<job>`): `valid`, 82074 us per step at batch 1 and 83153 us at batch 8, timed in
 process (that evaluation had stages 1 to 4 only). It took 16 minutes, most of it loading the model three times
 and stepping through PyTorch; stage 5 adds a fourth load and about 8700 steps. An engine that loads and steps
 faster is evaluated faster.
@@ -164,7 +164,7 @@ a path to follow, and `--milestone` only records which one a submission was aimi
 
 Microseconds per decode step, measured by this project on the same kind of card:
 
-trial of 2026-11-10: megakernel-gb200-e11-flint-vllm-1 (507.4 tok/s at B=1, 2107.5 at B=8). SGLang 0.5.23 cannot
+trial of 2026-11-10: <job> (507.4 tok/s at B=1, 2107.5 at B=8). SGLang 0.5.23 cannot
 load this model (its tag has no srt/models/flint.py), so vLLM is the only general engine here.
 
 | System | Kind | Batch 1 | Batch 8 |
@@ -175,8 +175,8 @@ The project's claim for a model is a speed of at least **1.10x** the fastest gen
 batch 8: 1792 us per token at batch 1 (1971 / 1.10) and 3451 us per step at batch 8 (3796 / 1.10).
 
 These are trial numbers: a server end to end over HTTP on the client's clock (prompt 64, 1024 new tokens,
-greedy). Your headline is measured the same way, by the same client, in the evaluation's own pod; the baselines
-were measured in other pods on the same kind of card.
+greedy). Your headline is measured the same way, by the same client, in the evaluation's own machine; the baselines
+were measured in other machines on the same kind of card.
 
 ## Two results, kept apart
 
@@ -221,13 +221,13 @@ numbers; only you can record the reasons.
 ## The model: `RecursiveSI/flint`
 
 Read from the checkpoint's `config.json`, its safetensors headers and the Hugging Face source (transformers
-5.22). The source in the pod is the specification; where this list and the source disagree, the source is right.
+5.22). The source in the machine is the specification; where this list and the source disagree, the source is right.
 
 - Text-only decoder, 39.79 B parameters, all BF16, 79.6 GB in 15 safetensors shards. Hidden size 2048, 49 layers,
   vocabulary 150144, output head not tied to the embedding (`lm_head.weight`, 615 MB).
 - On the B200 (189471 MiB) the 79.57 GB = 74.1 GiB of BF16 tensors take well under half of the card. On a smaller
   card they would not: an H100 has 81559 MiB = 79.6 GiB, which leaves about 5.5 GiB for everything else. We
-  tried it (job megakernel-mm-flint-h100-1): the Hugging Face starter runs on one H100 and passes the same
+  tried it (job <job>): the Hugging Face starter runs on one H100 and passes the same
   evaluation (56111 us per step at batch 1, 56657 at batch 8, with 82.2 GB of the card in use at the end of its
   timed run); vLLM 0.33.0 did not start with this model on one H100 (flags `--gpu-memory-utilization 0.97
   --max-model-len 4096`, two attempts).
@@ -250,10 +250,10 @@ Read from the checkpoint's `config.json`, its safetensors headers and the Huggin
 
 - The engine's target is **one NVIDIA B200**; `nvidia-smi` names it "NVIDIA GB200", 189471 MiB, driver 595.71,
   CUDA 13.2. Ask the device for what is not listed here (compute capability, number of SMs, cache sizes).
-- The pod is a whole GB200 node with **four** such cards. The other cards are for running several experiments at
+- The machine is a whole GB200 node with **four** such cards. The other cards are for running several experiments at
   the same time (see "Your tools"); the engine, every evaluation and every reported number are for one card.
 - The host is **aarch64**: two Grace CPUs (Neoverse-V2), 144 cores, no SMT. Host code and build scripts must build
-  on Arm; nothing x86-only works. The pod is the whole node: no other tenant's jobs run on it.
+  on Arm; nothing x86-only works. The machine is the whole node: nothing else runs on it.
 - Peak memory bandwidth used for MBU: **8000 GB/s**. This figure is derived from the vendor's system numbers
   (two cards: 16 TB/s), not published per card and not measured by us. Treat MBU on this card as indicative.
 - The card also has FP8 and MXFP8 paths. 8-bit weights or activations are a separate, later setting: this run is BF16.

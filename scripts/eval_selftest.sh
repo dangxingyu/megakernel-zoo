@@ -2,7 +2,7 @@
 # bash scripts/eval_selftest.sh [MODEL_REPO]: make (or fetch) the float64 reference for the model and run the
 # kernel evaluator on the starter engine (Hugging Face behind the contract). The starter must come out "valid":
 # if it does not, the evaluator or its tolerance is wrong, not the engine.
-# The card is MK_HW (h100 | b200; default: the pod's card); the reference lines are eval/baselines_<model>_<card>.json.
+# The card is MK_HW (h100 | b200; default: the machine's card); the reference lines are eval/baselines_<model>_<card>.json.
 # MK_REF_DTYPE (auto | float64 | float32) and MK_REF_CARDS (spread the reference over N cards) go to eval/make_reference.py; MK_REF_REMAKE=1 makes the reference
 # again although the store has one; MK_SELFTEST_MODES ("quick full" by default; "none": only the reference) picks
 # the evaluations. A reference is only token ids and logits: it can be made on another card than the run's.

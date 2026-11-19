@@ -246,11 +246,11 @@ def main() -> int:
     try:
         import pynvml
         pynvml.nvmlInit()
-        card = int(os.environ.get("MK_CARD", "0") or 0)  # NVML counts all cards of the pod, whatever CUDA may see
+        card = int(os.environ.get("MK_CARD", "0") or 0)  # NVML counts all cards of the machine, whatever CUDA may see
         card = card if card < pynvml.nvmlDeviceGetCount() else 0
         report["gpu_memory_used_gb"] = pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(card)).used / 1e9
         report["card"] = card
-        # every card of the pod (a whole-node engine spreads over them; a one-card engine leaves the others empty)
+        # every card of the machine (a whole-node engine spreads over them; a one-card engine leaves the others empty)
         report["gpu_memory_used_gb_per_card"] = [round(pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(i)).used / 1e9, 2)
                                                  for i in range(pynvml.nvmlDeviceGetCount())]
     except Exception:

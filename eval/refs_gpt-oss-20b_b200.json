@@ -15,12 +15,12 @@
   "name": "sglang (general engine)",
   "metric": "http_step_us_b1",
   "value": 1547,
-  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-oss20-compare-1; batch 8: 2165 us per step. 0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on; SGLang picks its gpt-oss kernels itself); SGLang's gpt-oss page gives no single-card flags"
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 2165 us per step. 0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on; SGLang picks its gpt-oss kernels itself); SGLang's gpt-oss page gives no single-card flags"
  },
  {
   "name": "vllm (general engine)",
   "metric": "http_step_us_b1",
   "value": 1761,
-  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-oss20-compare-1; batch 8: 2422 us per step. 0.32.0 (torch 2.13.0+cu132), vLLM recipe flags for gpt-oss without the ones that change number formats or streaming (as on the H100 and for gpt-oss-120b on the B200): --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192; left out: --stream-interval 20 (20 tokens per SSE chunk: the client times one chunk per token) and the Blackwell recipe's --kv-cache-dtype fp8 / VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1. MXFP4 experts as stored, BF16 activations and KV: track A"
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 2422 us per step. 0.32.0 (torch 2.13.0+cu132), vLLM recipe flags for gpt-oss without the ones that change number formats or streaming (as on the H100 and for gpt-oss-120b on the B200): --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192; left out: --stream-interval 20 (20 tokens per SSE chunk: the client times one chunk per token) and the Blackwell recipe's --kv-cache-dtype fp8 / VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1. MXFP4 experts as stored, BF16 activations and KV: track A"
  }
 ]

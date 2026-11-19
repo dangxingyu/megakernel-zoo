@@ -3,7 +3,7 @@
  "gpu": "NVIDIA H100 80GB HBM3",
  "provisional": true,
  "calibre": "server end to end: 1e6 * B / decode tok/s (client clock, prompt 64, 1024 new tokens). The engine under test is timed as step-no-sampling, which is the easier calibre: a speedup here is an upper bound on the end-to-end one.",
- "source": "trial runs of 2026-11-09 (megakernel-e11-sglang-try2, megakernel-e11-vllm-try2, megakernel-mpk-compare-2); to be replaced by the E1.1 ledger numbers; sglang_0518_tc added 2026-11-10 from megakernel-e11-sglang0518-tc-try1",
+ "source": "trial runs of 2026-11-09 (<job>, <job>, <job>); to be replaced by the E1.1 ledger numbers; sglang_0518_tc added 2026-11-10 from <job>",
  "systems": {
   "sglang": {
    "version": "0.5.23, default flags (CUDA graphs); 0.5.18 with default flags measures the same (6703 / 7142)",
@@ -28,7 +28,7 @@
    "general_engine": true,
    "b1": 6066,
    "b8": 6836,
-   "note": "trial megakernel-e11-sglang0518-tc-try1, 5 repeats: 164.8 tok/s at B=1, 1170.3 at B=8. The strongest general-engine line we have: 9-10% faster at B=1 than SGLang or vLLM with default flags. On 0.5.23 the same flag gives 59 ms per step (broken), so the newest release is not the strongest baseline."
+   "note": "trial <job>, 5 repeats: 164.8 tok/s at B=1, 1170.3 at B=8. The strongest general-engine line we have: 9-10% faster at B=1 than SGLang or vLLM with default flags. On 0.5.23 the same flag gives 59 ms per step (broken), so the newest release is not the strongest baseline."
   }
  },
  "paper_reported": {

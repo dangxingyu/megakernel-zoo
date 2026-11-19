@@ -4,7 +4,7 @@
  "provisional": true,
  "workload": "Mooncake FAST'25 tool & agent trace (commit aaa49180), first 120 s at each nominal rate, inputs cut at 32768 tokens, outputs at 1024, greedy, ignore_eos; prompts synthesized from the trace's 512-token prefix hashes",
  "service_levels": {"ttft_s": 5.0, "tbt_s": 0.1},
- "calibre": "server end to end over HTTP, client clock, one 120 s replay per rate from a cold prefix cache (megakernel-e16-vllm-try1, megakernel-e16-sglang-try1, 2026-11-10). The engine under test is measured in process, which is the easier calibre.",
+ "calibre": "server end to end over HTTP, client clock, one 120 s replay per rate from a cold prefix cache (<job>, <job>, 2026-11-10). The engine under test is measured in process, which is the easier calibre.",
  "systems": {
   "vllm": {"version": "0.32.0, default flags",
    "r0.5": {"offered_req_s": 0.44, "slo_share": 0.642, "ttft_p50_ms": 1253, "ttft_p90_ms": 5344, "tbt_p99_ms": 320.6, "gap_max_ms": 451, "output_tok_s": 135},

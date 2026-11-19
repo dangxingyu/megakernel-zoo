@@ -15,18 +15,18 @@
   "name": "sglang (general engine)",
   "metric": "http_step_us_b1",
   "value": 3244,
-  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-q8b-compare-1; batch 8: 3338 us per step. 0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on)"
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 3338 us per step. 0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on)"
  },
  {
   "name": "vllm (general engine)",
   "metric": "http_step_us_b1",
   "value": 3581,
-  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-q8b-compare-1; batch 8: 3652 us per step. 0.32.0 (torch 2.13.0+cu132), default flags"
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 3652 us per step. 0.32.0 (torch 2.13.0+cu132), default flags"
  },
  {
   "name": "sglang_0518_tc (general engine)",
   "metric": "http_step_us_b1",
   "value": 3722,
-  "note": "server end to end over HTTP, same client and card type, megakernel-mm3-q8b-sg18tc-1; batch 8: 3876 us per step. 0.5.18 (torch 2.13.0+cu130) with --enable-torch-compile (CUDA graphs on); the strongest line on the H100"
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 3876 us per step. 0.5.18 (torch 2.13.0+cu130) with --enable-torch-compile (CUDA graphs on); the strongest line on the H100"
  }
 ]

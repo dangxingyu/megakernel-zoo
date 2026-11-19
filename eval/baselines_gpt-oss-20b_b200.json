@@ -4,7 +4,7 @@
  "hw": "b200",
  "provisional": false,
  "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, one SSE chunk per token; 3 server starts x 3 repeats per system, eval/client.py through scripts/compare.sh, both systems in turns on one card in one job). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
- "source": "megakernel-mm3-oss20-compare-1: sglang B=1 646.4 tok/s, vllm B=1 567.8 tok/s, sglang B=8 3695.2 tok/s, vllm B=8 3303.2 tok/s",
+ "source": "<job>: sglang B=1 646.4 tok/s, vllm B=1 567.8 tok/s, sglang B=8 3695.2 tok/s, vllm B=8 3303.2 tok/s",
  "systems": {
   "sglang": {
    "version": "0.5.23 (torch 2.14.1+cu130), default flags (CUDA graphs on; SGLang picks its gpt-oss kernels itself); SGLang's gpt-oss page gives no single-card flags",
@@ -26,7 +26,7 @@
      3695.2
     ]
    },
-   "job": "megakernel-mm3-oss20-compare-1",
+   "job": "<job>",
    "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16",
    "b8": 2165
   },
@@ -50,7 +50,7 @@
      3287.4
     ]
    },
-   "job": "megakernel-mm3-oss20-compare-1",
+   "job": "<job>",
    "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90 --no-enable-prefix-caching --max-cudagraph-capture-size 2048 --max-num-batched-tokens 8192",
    "b8": 2422
   }

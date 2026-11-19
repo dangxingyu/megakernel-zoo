@@ -1,7 +1,7 @@
 # Engine as built (run s7-inkling2s-b200x4-fa1, track A) and what is still open
 
 engine/ is the source of s0020: 3307 us per token at B=1 and 5378 us per step at B=8 over HTTP (1.424x / 1.228x
-SGLang's 4711 / 6604), track A, measured on the last pod of the run; on the previous pod the same B=1 kernel gave
+SGLang's 4711 / 6604), track A, measured on the last machine of the run; on the previous machine the same B=1 kernel gave
 3296-3300 us (s0013, the best headline figure, and s0016-s0018). Against s0013 the engine adds the tensor-core path
 for the NVFP4 w13 GEMV at batch >= 4: in-process B=8 step 5522 -> 5381 us (-2.6%), +46 GB per card.
 `MK_CFLAGS=-DNO_TC13` builds the engine of s0013 (one layout, one kernel).

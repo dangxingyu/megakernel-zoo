@@ -7,7 +7,7 @@ Most checkpoints load through AutoModelForCausalLM, including multimodal ones wh
 multi-token-prediction head are left on disk). A family without one loads as its image-text model; it is then only
 ever called with token ids, and the vision tower just sits in memory.
 
-`device_map` places every tensor on the card as it is read, so a model larger than the pod's host memory can be
+`device_map` places every tensor on the card as it is read, so a model larger than the machine's host memory can be
 loaded (a float32 Flint is 159 GB); without `accelerate` the model goes through host memory instead.
 
 `cards` > 1 spreads the layers over that many cards (device_map "auto", layer after layer: one card works at a time),

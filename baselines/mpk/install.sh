@@ -5,7 +5,7 @@ set -euo pipefail
 # src/kernel/task_register.cc passes 15 arguments to a 14-marker template for multitoken_paged_attention_hopper_impl
 # and the server aborts while generating the megakernel on an H100 (upstream CI runs on B200 only).
 # MPK_PATCH=hopper-marker instead builds any later commit with that one missing "$" added and nothing else changed.
-# On a B200 (GB200 pods) the Hopper path is not generated: use the newest pin unpatched, MPK_COMMIT=d90383d0...
+# On a B200 (GB200 machines) the Hopper path is not generated: use the newest pin unpatched, MPK_COMMIT=d90383d0...
 COMMIT="${MPK_COMMIT:-97de25929c09}"
 src="$MK_ROOT/src/mirage${MPK_TAG:+-$MPK_TAG}"
 source "$MK_REPO/scripts/cuda_toolkit.sh"

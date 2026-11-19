@@ -45,7 +45,7 @@ other dense matrices were measured in the 12-bit code on the new kernel: none pa
 - **Next:** the list at the end of this section; first the register lottery of the step function (up to 10 us at
   B=1 and 110 us at B=8 between builds of the same layer code).
 
-### Submissions of the extension (one pod, epoch 5)
+### Submissions of the extension (one machine, epoch 5)
 
 | submission | track | what | B=1 (us) | B=8 (us) |
 |---|---|---|---|---|
@@ -67,7 +67,7 @@ other dense matrices were measured in the 12-bit code on the new kernel: none pa
    are not summed in one order even in track A. They are left out of the table (they were in s0028); the table holds
    the normed embedding and the q, r, sink, k, v rows (141 strips, one order everywhere). `ink_l0t_ok()` states the
    condition in the source and the loader checks it.
-3. **Verification before each track-B submission** (tools/x_verify.sh, x_bits.py, x_cmp.py, x_l0t.py; all on the pod):
+3. **Verification before each track-B submission** (tools/x_verify.sh, x_bits.py, x_cmp.py, x_l0t.py; all on the machine):
    - logits: sha1 of the FP32 logits of every step, 64 random prompt tokens then greedy, for the unchanged s0020
      source, my source built as A, and built as B: equal on every step (B=1 512, B=8 1152 to position 1151, B=2 256,
      B=4 256, B=5 160; from e0112 on also B=3 160, 2,496 steps, the form in which s0034 / s0035 were checked);
@@ -94,7 +94,7 @@ other dense matrices were measured in the 12-bit code on the new kernel: none pa
 
 ### What the two items are worth here
 
-In process on one pod, separate builds of one source (greedy 1024 tokens, min of 3, two rounds):
+In process on one machine, separate builds of one source (greedy 1024 tokens, min of 3, two rounds):
 
 | build | B=1 | B=8 |
 |---|---|---|
@@ -143,7 +143,7 @@ pays, and layer 0 the only place where anything depends on the token id alone.
   (s0034 / s0035) by compiling the unembedding GEMV per kernel in the form that left that kernel's layers fast.
 - Before tabulating anything, check that track A computes it in one summation order. Here that needed reading the
   GEMV schedule (gate split), not just the model.
-- Taking one change back at a time on one pod (tools/x_var.sh) showed which change moved the build's speed (not
+- Taking one change back at a time on one machine (tools/x_var.sh) showed which change moved the build's speed (not
   the loader order, not the layer-0 code); only the stamps showed where the time went.
 
 ### What I would try next on this kernel
@@ -188,7 +188,7 @@ per step at B=8** over HTTP. SGLang: 4711 / 6604; the 1.10x line: 4283 / 6004.
   this run (inherited engine made valid) was s0002: 5317 / 9340. B=1 is past the 1.10x line (4283), B=8 is at parity
   (6604) and 6.7 % short of its 1.10x line (6004). 28 submissions, 27 valid.
 - **Worked, model-specific (track B, lossless, logits bit-identical):** the unembedding in an exact 12-bit code and
-  load-time token tables for layer 0: together 22-26 us at B=1 (0.55 %) and about 20 us at B=8 (0.3 %), in six same-pod pairs.
+  load-time token tables for layer 0: together 22-26 us at B=1 (0.55 %) and about 20 us at B=8 (0.3 %), in six same-machine pairs.
 - **Worked, kernel (track A):** hardware E2M1 conversion instead of a compare chain in the input quantizers (-7 % at B=1);
   GEMV schedules without global hand-offs and with a block's two strips at once; prefetch, fence and cross-card store
   costs taken off the critical paths; compact w2 fragments, pipelined MXFP8 loads and larger NVFP4 groups at B>=2;
@@ -214,31 +214,31 @@ per step at B=8** over HTTP. SGLang: 4711 / 6604; the 1.10x line: 4283 / 6004.
 | s0011 | A | B>=2 routing per token block, conv helpers; top-8 with a shorter chain | 4239 | 7035 |
 | s0012 | A | kernel prepared for the token tables, switch off (reference of the next two) | 4235 | 7044 |
 | s0013 | **B** | layer-0 token tables (same binary as s0012) | 4221.5 | 7037 |
-| s0014 | **B** | 12-bit unembedding + layer-0 tables (same binary; evaluated on the next pod) | 4195 | 7004 |
-| s0015 | A | B>=2: MXFP8 loads pipelined (next unit's loads before the current unit's MMAs); pod 2 | 4215 | 6899 |
-| s0016 | **B** | 12-bit unembedding + layer-0 tables on the s0015 binary; pod 2 | 4188 | 6884 |
-| s0017 | A | B=1: attention scores on the tensor cores, value sum 8 dimensions per thread; pod 2 | 4174 | 6901 |
-| s0018 | **B** | 12-bit unembedding + layer-0 tables on the s0017 binary; pod 2 | 4151 | 6882 |
-| s0019 | A | B>=2: NVFP4 units loaded per group 6 (w13) / 5 (w2) instead of 4; pod 2 | 4176 | 6803 |
-| s0020 | A | prefetch policy re-measured per kernel, reader-side fences removed, tensor-core scores at B>=2; pod 2 | 4074 | 6540 |
-| s0021 | **B** | 12-bit unembedding + layer-0 tables on the s0020 source; pod 2 | 4051 | 6513 |
-| s0022 | A | block-per-strip GEMVs: a block's two strips at once on the two halves of its warps; pod 2 | 4014 | 6425 |
-| s0023 | **B** | 12-bit unembedding + layer-0 tables on the s0022 source; pod 2 | 3991 | 6406 |
-| s0024 | A | B=1: attention items of 64 positions (chunk size a template parameter; 128-position twin beyond 2048); pod 4 | 3997 | 6459 |
-| s0025 | **B** | 12-bit unembedding + layer-0 tables on the s0024 source; pod 4 | 3975 | 6436 |
-| s0026 | **B** | s0025 with the MK_NO_RED switch ignored (api.py only, same kernel binary); pod 4 | 3975 | 6436 |
-| s0027 | A | B>=2 kernel builds its pair map for every batch size (it can run a single sequence again); pod 4 | **3997** | **6455** |
-| s0028 | **B** | 12-bit unembedding + layer-0 tables on the s0027 source; pod 4 | **3974** | **6433** |
+| s0014 | **B** | 12-bit unembedding + layer-0 tables (same binary; evaluated on the next machine) | 4195 | 7004 |
+| s0015 | A | B>=2: MXFP8 loads pipelined (next unit's loads before the current unit's MMAs); machine 2 | 4215 | 6899 |
+| s0016 | **B** | 12-bit unembedding + layer-0 tables on the s0015 binary; machine 2 | 4188 | 6884 |
+| s0017 | A | B=1: attention scores on the tensor cores, value sum 8 dimensions per thread; machine 2 | 4174 | 6901 |
+| s0018 | **B** | 12-bit unembedding + layer-0 tables on the s0017 binary; machine 2 | 4151 | 6882 |
+| s0019 | A | B>=2: NVFP4 units loaded per group 6 (w13) / 5 (w2) instead of 4; machine 2 | 4176 | 6803 |
+| s0020 | A | prefetch policy re-measured per kernel, reader-side fences removed, tensor-core scores at B>=2; machine 2 | 4074 | 6540 |
+| s0021 | **B** | 12-bit unembedding + layer-0 tables on the s0020 source; machine 2 | 4051 | 6513 |
+| s0022 | A | block-per-strip GEMVs: a block's two strips at once on the two halves of its warps; machine 2 | 4014 | 6425 |
+| s0023 | **B** | 12-bit unembedding + layer-0 tables on the s0022 source; machine 2 | 3991 | 6406 |
+| s0024 | A | B=1: attention items of 64 positions (chunk size a template parameter; 128-position twin beyond 2048); machine 4 | 3997 | 6459 |
+| s0025 | **B** | 12-bit unembedding + layer-0 tables on the s0024 source; machine 4 | 3975 | 6436 |
+| s0026 | **B** | s0025 with the MK_NO_RED switch ignored (api.py only, same kernel binary); machine 4 | 3975 | 6436 |
+| s0027 | A | B>=2 kernel builds its pair map for every batch size (it can run a single sequence again); machine 4 | **3997** | **6455** |
+| s0028 | **B** | 12-bit unembedding + layer-0 tables on the s0027 source; machine 4 | **3974** | **6433** |
 
 Final track A: **s0027, 3997 / 6455 us = 1.179x / 1.023x SGLang** (inherited: 0.886x / 0.707x). B=1 is above the 1.10x line
 (4283); B=8 is at parity (6604) but not at 1.10x (6004). Milestones: build, correct, device_loop, gpu_never_waits, parity.
 Final track B: **s0028, 3974 / 6433 us = 1.185x / 1.027x**: the same source with engine/TRACK = "B W12U L0T".
-Repeatability of the evaluator on one pod with one kernel binary: s0025 3974.72 / 6436.0, s0026 3975.02 / 6436.4 us:
+Repeatability of the evaluator on one machine with one kernel binary: s0025 3974.72 / 6436.0, s0026 3975.02 / 6436.4 us:
 the track-B difference of 22 us at B=1 is about 70 times the B=1 repeatability.
-(The lowest B=8 figures on the board are s0022 / s0023, 6425 / 6406, on the previous pod: the B>=2 kernel of s0024 is
+(The lowest B=8 figures on the board are s0022 / s0023, 6425 / 6406, on the previous machine: the B>=2 kernel of s0024 is
 bit-identical to theirs, the 0.5 % is the node.)
-The pod was replaced after s0013 and again before s0024; the nodes differ by ~0.5 % on the same binary (s0012 against
-s0015 at B=1: 4235 / 4215 with an unchanged B=1 kernel). Track-B differences are therefore quoted only within one pod
+The machine was replaced after s0013 and again before s0024; the nodes differ by ~0.5 % on the same binary (s0012 against
+s0015 at B=1: 4235 / 4215 with an unchanged B=1 kernel). Track-B differences are therefore quoted only within one machine
 and one binary.
 engine/TRACK: "A" = track A; "B W12U L0T" = both model-specific changes (each can be given alone). One binary for all.
 
@@ -322,7 +322,7 @@ number of distinct experts per layer (44-50); such builds are compared on a fixe
 ## A defect found and fixed late (s0027)
 
 From s0005 to s0026 the B>=2 kernel built the pair map of its compact w2 fragments only for B > 1 and hung when given a
-single sequence (reachable through the debugging switch MK_NO_RED=1; found when a test of mine held the pod for 40
+single sequence (reachable through the debugging switch MK_NO_RED=1; found when a test of mine held the machine for 40
 minutes). s0027 builds the map whenever that kernel runs: logits on the normal paths bitwise unchanged, and a single
 sequence runs through the B>=2 kernel again (4390 us per token). The evaluated B=1 path always used the B=1 kernels.
 

@@ -2,7 +2,7 @@
 
 ## 0.0-0.5 h: bring-up
 
-- Pod facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
+- Machine facts: 152 SMs/card, 227 KB smem/block, 126 MB L2, 955 GB host RAM (the 393 GB of weights stay in the page cache:
   the starter loads in ~2 min, my loader 48 layers in ~50 s with one thread per card).
 - sm_100a has no warp-level block-scaled MMA (`mma ... kind::mxf4nvf4.block_scale` is sm_120a only); only tcgen05.
   `cvt.rn.f16x2.e2m1x2` and `cvt.rn.f16x2.e4m3x2` exist but need `-gencode arch=compute_100a,code=sm_100a`
@@ -16,7 +16,7 @@
   6 layers; attention outputs rel 1e-3..2e-2, MLP outputs rel 1e-2..8e-2 growing with depth; the four cards' replicated
   state bitwise identical.
 
-## 0.5 h (pod outage, clock stopped): structure changes written before any timing
+## 0.5 h (machine outage, clock stopped): structure changes written before any timing
 
 - Routing (top-8 + union) computed redundantly by every block from the router logits: -2 grid barriers per layer.
 - Per-token step state (8 finished attention-residual blocks, the partial block, the attention output) lives in the
@@ -29,7 +29,7 @@
   step parity (one writer, many readers). B>=2 keeps one block per token + barriers (`ink_step_std`).
 - L2 prefetch (cp.async.bulk.prefetch.L2) of the next GEMV's weights by blocks idle in latency phases.
 
-## 0.5-1.7 h: first full-model runs (pod epochs 3-4, long outages in between)
+## 0.5-1.7 h: first full-model runs (machine epochs 3-4, long outages in between)
 
 - Correct from the first full run: argmax identical to the fork reference at 12/12 steps x 2 sequences, the 4 cards'
   replicated state bitwise identical, online submit/poll and generate() == step-by-step greedy at B=1/2/8.
@@ -61,7 +61,7 @@
   0.21-0.42 us after streaming 8 GB; fence.sc.sys after remote writes 2.05 us; fence.gpu 0.53 us.
 - Instruction cache is not the problem (routing phase 4.6 us cold vs 4.0 us warm, -DICTEST).
 
-## 5.4 h: s0003 submitted (queued by a pod loss); findings since s0002 (all with in-kernel globaltimer stamps)
+## 5.4 h: s0003 submitted (queued by a machine loss); findings since s0002 (all with in-kernel globaltimer stamps)
 - Strided GEMV warp mapping (logical warp = warp x 152 + block) made the same ~6-10 blocks 2x slower in every
   expert GEMV (per-block end times correlate 0.94-0.99 across layers and runs; the slow blocks' indices form
   arithmetic progressions, their SM ids look random -> a mapping effect: a block's 32 streams sit 729 KB apart in
@@ -159,8 +159,8 @@
   slower with the switch off (4241 -> 4277); now the row copy sits in layer 0's attention-input phase and the loader sets
   layer 0's qkv_strips to 0: switch off 4236 / 7095, tables 4222 / 7088, tables + 12-bit unembedding 4212 / 7076.
 - s0012 (5.1 h, A, reference binary) 4235 / 7044; s0013 (B, layer-0 tables) 4221.5 / 7037; s0014 (B, both) 4195 / 7004, but the
-  pod was replaced before s0014 (epoch 2; the new node runs the same binary ~0.45 % faster: A in process 4217 / 7060 against
-  4236 / 7095). Same-pod pairs since then: s0015 (A) 4214.8 / 6899 and s0016 (B both) **4188.4 / 6884**: track B = -26 us
+  machine was replaced before s0014 (epoch 2; the new node runs the same binary ~0.45 % faster: A in process 4217 / 7060 against
+  4236 / 7095). Same-machine pairs since then: s0015 (A) 4214.8 / 6899 and s0016 (B both) **4188.4 / 6884**: track B = -26 us
   (-0.63 %) at B=1 and -15 us (-0.22 %) at B=8, as in process (-24 / -19).
 - s0015 (6.0 h, track A): MXFP8 loads pipelined in the B>=2 kernel (next unit's loads before the current unit's MMAs): B=8
   7060 -> 6938 in process, 6899 over HTTP. Two units ahead: +0.6 %. The same for NVFP4 (as a second loop): frame 240 -> 352-504 B,
@@ -213,29 +213,29 @@
   run time costs most of the gain (4009), and the fallback I tried, the B>=2 kernel for a single sequence beyond 2048
   positions, hangs: since s0005 the B>=2 kernel builds its (token, expert) pair map only for B > 1, so it cannot run B = 1
   (reachable only with MK_NO_RED=1 or such a fallback; the evaluator's B=1 always takes the B=1 kernel). Left as it is and
-  written down here; variant in scratch/ink_chunk64_variant.cu. The hanging test held the pod until its timeout.
-- s0024 (11.1 h, track A, pod epoch 4 after a third pod loss): attention items of 64 positions in the B=1 kernel, done
+  written down here; variant in scratch/ink_chunk64_variant.cu. The hanging test held the machine until its timeout.
+- s0024 (11.1 h, track A, machine epoch 4 after a third machine loss): attention items of 64 positions in the B=1 kernel, done
   properly: the chunk size is a template parameter of the step function, `ink_step_red` uses 64, a twin `ink_step_red128`
   takes over for a single sequence beyond 2048 positions (tested across the switch to 2170 positions): **3996.5 / 6459**
   (pred 3995 / 6425; the B>=2 kernel is bit-identical to s0022's: the B=8 difference is the node).
 - s0025 (11.2 h, **track B** on the s0024 source): **3974.7 / 6436** (pred 3974 / 6440): -21.8 us (-0.55 %) / -23 us (-0.36 %).
-  Fifth same-pod pair; the track-B difference has been 22-26 us at B=1 every time.
+  Fifth same-machine pair; the track-B difference has been 22-26 us at B=1 every time.
 - Final state: engine/ = s0024 source, engine/TRACK = "B W12U L0T" (= s0025); "A" gives s0024.
   Open: the B>=2 kernel cannot run B=1 (summary, "Known limitation"); B=8 is 6.7 % short of the 1.10x line.
 - s0026 (11.5 h, track B, final): s0025 with MK_NO_RED ignored in api.py (same kernel binary): **3975.02 / 6436**, against
-  3974.72 / 6436.0 for s0025 on the same pod: the evaluator repeats to 0.3 us at B=1 with one binary on one pod.
+  3974.72 / 6436.0 for s0025 on the same machine: the evaluator repeats to 0.3 us at B=1 with one binary on one machine.
   engine/ = s0026 source, engine/TRACK = "B W12U L0T"; "A" gives the track-A engine of s0024.
-- 11.4 h, on the final kernel (pod epoch 4, bit-identical variants, B=1): K/V prefetch at once 4008 / serial 4010 against
+- 11.4 h, on the final kernel (machine epoch 4, bit-identical variants, B=1): K/V prefetch at once 4008 / serial 4010 against
   none 3998; NVFP4 group 2 instead of 3: 3997. The defaults stay; nothing further submitted.
 - s0027 (11.6 h, track A): the B>=2 kernel builds its pair map for every batch size (phase_route gets the kernel kind
   instead of testing B > 1); MK_NO_RED works again (B=1 through the B>=2 kernel: 4390 us per token, tokens consistent).
   Logits bitwise equal to s0026's build on the normal paths: **3996.7 / 6455** (s0024: 3996.5 / 6459).
-- s0028 (11.7 h, **track B**, final): **3974.0 / 6433**: -22.7 us (-0.57 %) / -22 us against s0027. Sixth same-pod pair.
+- s0028 (11.7 h, **track B**, final): **3974.0 / 6433**: -22.7 us (-0.57 %) / -22 us against s0027. Sixth same-machine pair.
 - Final state: engine/ = s0028 source, engine/TRACK = "B W12U L0T"; "A" gives s0027. No known defect left open;
   B=8 remains 6.7 % short of the 1.10x line (6004).
-- 11.8 h, reference for later comparisons (final kernel, pod epoch 4, tools/t_replay.py: its own greedy stream of 64 + 1024
+- 11.8 h, reference for later comparisons (final kernel, machine epoch 4, tools/t_replay.py: its own greedy stream of 64 + 1024
   tokens saved and teacher-forced through step(), 41.4 distinct experts per layer at B=8): track A 4010 / 6077 us per step
-  at B=1 / B=8, track B 3990 / 6056 (-20 / -21 us). The stream is not kept (pod files are lost); the tool regenerates it.
+  at B=1 / B=8, track B 3990 / 6056 (-20 / -21 us). The stream is not kept (machine files are lost); the tool regenerates it.
 
 ## Extension (operator, 2026-11-15 22:37): 3 more agent-hours, 11.72 -> 15.00
 
@@ -281,7 +281,7 @@ beyond the context limit (the audit, `audits/ink-final/REPORT.md`, open doubt 1)
   launched, a request of 64 + 34 refused, 64 + 33 (last position 95) served and equal to generate().
 - 12.1 h, rehearsal of the evaluator's loops with the track-B engine (e0106): B=1 step 3276 / generate 3255 / w1-like
   3421 / online 3300 us; B=8 4642 (context 64-320) / 5305 / 5598 / 5469; online = greedy 100 %.
-- 12.25 h, same-pod A/B in process (e0107, generate 1024 tokens after a 64-token prompt, min of 3, two rounds):
+- 12.25 h, same-machine A/B in process (e0107, generate 1024 tokens after a 64-token prompt, min of 3, two rounds):
 
   | build | B=1 | B=8 |
   |---|---|---|
@@ -331,7 +331,7 @@ beyond the context limit (the audit, `audits/ink-final/REPORT.md`, open doubt 1)
 - 12.75 h, s0032 (track A) queued: the same source with TRACK = A (guard + dormant table code on the s0020 kernel).
 - 12.95 h, **s0032 (track A)**: the source of s0031 with TRACK = A. **3307.9 / 5395 us** (pred 3308 / 5396); s0029
   (unchanged s0020 source): 3308.4 / 5394. The context guard and the dormant table code cost nothing; the evaluator
-  repeats to 0.5 us at B=1 and 1 us at B=8 on this pod. Track B over HTTP from one source: s0031 against s0032
+  repeats to 0.5 us at B=1 and 1 us at B=8 on this machine. Track B over HTTP from one source: s0031 against s0032
   **-17.0 us (0.51 %) / -19 us (0.35 %)**.
 - 13.0 h, what else: the 12-bit code for one more dense matrix at a time on this kernel (e0111, `tools/x_w12x.sh`,
   source in `scratch/w12x/`; each variant's logits bitwise equal to the s0020 source on 336 steps, round trip of every

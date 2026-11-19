@@ -4,7 +4,7 @@
  "hw": "b200",
  "provisional": false,
  "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, one SSE chunk per token; 3 server starts x 3 repeats per system, eval/client.py through scripts/compare.sh, both systems in turns on one card in one job). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
- "source": "megakernel-mm3-north-compare-1: vllm B=1 366.8 tok/s, B=8 1771.5 tok/s. Cohere's megakernel server (@ 67d0b9ca, systems 'cohere vllm' in the same job) builds on the aarch64 host but fails to start on the B200 in all 3 rounds: 'CUDA error (flash-attention/hopper/flash_fwd_launch_template.h:165): no kernel image is available for execution on the device' (FlashAttention-3 Hopper kernels; its README targets x86 H100 only), so vLLM is the only line on this card. SGLang does not list this model.",
+ "source": "<job>: vllm B=1 366.8 tok/s, B=8 1771.5 tok/s. Cohere's megakernel server (@ 67d0b9ca, systems 'cohere vllm' in the same job) builds on the aarch64 host but fails to start on the B200 in all 3 rounds: 'CUDA error (flash-attention/hopper/flash_fwd_launch_template.h:165): no kernel image is available for execution on the device' (FlashAttention-3 Hopper kernels; its README targets x86 H100 only), so vLLM is the only line on this card. SGLang does not list this model.",
  "systems": {
   "vllm": {
    "version": "0.32.0 (torch 2.13.0+cu132), default flags plus --max-model-len 32768 (as on the H100)",
@@ -26,7 +26,7 @@
      1771.5
     ]
    },
-   "job": "megakernel-mm3-north-compare-1",
+   "job": "<job>",
    "flags": "vllm serve MODEL_DIR --served-model-name m --host 127.0.0.1 --port $MK_PORT --dtype bfloat16 --gpu-memory-utilization 0.90 --max-model-len 32768",
    "b8": 4516
   }

@@ -21,7 +21,7 @@
 
 ## hours 1.3-2.2: s0001, s0002: from 16.8 ms to 10.7 ms without touching the algorithm
 
-- The bridge daemon of the run crashed (stat on a spool ack file already removed by `mk`); nothing answered for
+- The loop service of the run crashed (stat on a spool ack file already removed by `mk`); nothing answered for
   33 minutes. Restarted it with its own command line; noted on the timeline.
 - s0001 (track A, valid): expected ~16800 us over HTTP, measured 16990 (B=1) / 17606 (B=8). All gates pass
   (rel-L2 0.0101 median against float32, batch bitwise equal, generate and HTTP tokens identical 8/8), milestones
@@ -52,7 +52,7 @@
   the verify launch, one small launch per further draft). test_multi: bit-identical for 9 (B,P) settings on the
   first run. test_spec: 1024 tokens identical to step-by-step greedy on the three timed seeds at B=1 and B=8.
   Submitted as s0003 expecting ~2100 us (B=1 median: loop prompt) and ~7500 us (B=8).
-- The pod was replaced during the evaluation of s0003 (epochs 5 -> 6); it is queued again.
+- The machine was replaced during the evaluation of s0003 (epochs 5 -> 6); it is queued again.
 - Written while waiting: a context-copy drafter (last 6 tokens seen before, and the continuation agrees with the MTP
   head's first draft -> copy the continuation, chained MTP launches skip themselves); the W12 decode microbenchmark
   (bench/w12.cu) and an exact exponent census (tools/census.py). Plan for W12 if the card can decode fast enough:
@@ -60,11 +60,11 @@
   unpacking), every out-of-window weight (and exact zeros) patched into the decoded register from a per-warp list:
   a pure re-encoding, bit-identical activations, no rescaling.
 
-## hours 2.5-2.6 (the pod was replaced four times, clock stopped most of the time)
+## hours 2.5-2.6 (the machine was replaced four times, clock stopped most of the time)
 
-- s0003 was never evaluated: its pod died twice during the evaluation ("pod_lost ... not run a third time"). The
+- s0003 was never evaluated: its machine died twice during the evaluation ("pod_lost ... not run a third time"). The
   engine it carried is superseded; the next track-B submission replaces it.
-- Census and W12 microbenchmark ran between two pod losses (findings M4, C6): escape rate 1.86e-4 with a
+- Census and W12 microbenchmark ran between two machine losses (findings M4, C6): escape rate 1.86e-4 with a
   15-exponent window per tensor, no exact zeros anywhere, and W12 decoding is 23 % faster than BF16 streaming in
   quads per second. Decision: build W12 into the stream loop (track B). Out-of-window weights are patched into the
   decoded register from a per-warp list in stream order, so the MMA operands are bit-identical to BF16 storage
@@ -72,13 +72,13 @@
 - A bug of mine: a chained draft launch that skips itself returned without advancing the barrier counter the host
   had already accounted for; the next launch waited forever. Fixed (the skipping launch adds its barrier count).
 
-## 00:03-06:00 PST: no pod (cluster outage), clock stopped at 2.57 h
+## 00:03-06:00: no machine (cluster outage), clock stopped at 2.57 h
 
-- Pods of whole-node requests (GB200x4, H100x8) stopped reporting a warm-up index at 00:03; the bridges of this run
-  and of the sibling B200 run stopped themselves after four failed starts. 1-GPU H100 pods recovered around 04:30,
-  GB200x4 pods had not by 05:41 (three retries of mine: the bridge's stop state reset in bridge/state.json with a
+- Machines of whole-node requests (4 × B200, 8 × H100) stopped reporting a warm-up index at 00:03; the bridges of this run
+  and of the sibling B200 run stopped themselves after four failed starts. 1-GPU H100 machines recovered around 04:30,
+  4 × B200 machines had not by 05:41 (three retries of mine: the loop service's stop state reset in its state file with a
   backup, each noted with `mk note`; from the second retry on with a single attempt per retry).
-- Written without a pod (all untested on the card, in this order of risk):
+- Written without a machine (all untested on the card, in this order of risk):
   1. skipped chain launches now advance the barrier counter (the hang of e0085);
   2. two shared-memory slots per warp instead of three (whole tiles use the slot of the last piece as scratch, a
      finalized tile is summed in place): at 16 columns the activations of a 5120-wide matrix (164 KB) fit in L1 again;
@@ -88,7 +88,7 @@
      < 0.1 token per pass, less than a chain launch costs);
   5. W12 in the stream loop with patches, the packer, the per-warp patch lists and an independent decoder for the
      bit-for-bit check (the code/decode arithmetic checked in pure Python on 200,000 random k-steps).
-- Test plan when a pod is back: track-A regression (logits against HF, batch-bitwise), multi-position equality
+- Test plan when a machine is back: track-A regression (logits against HF, batch-bitwise), multi-position equality
   including P=16, speculative identity on the timed seeds, W12 bit-for-bit on all tensors and W12 logits against
   BF16-storage logits, then submissions: track B (drafts), track B (drafts + W12), track A again.
 
@@ -126,11 +126,11 @@
 - Per-op timer (block 0 stamps %globaltimer after each barrier, tools/op_times.py): even with out_proj's whole share
   prefetched into L2 during the recurrent op, out_proj only drops 17.6 -> 15.9 us. The small GEMMs are not
   DRAM-bound: each warp streams ~6 quads, so the load latency per iteration and the cut-tile finalize dominate.
-- Pod losses: epochs 17 -> 18 at hour 3.9.
+- Machine losses: epochs 17 -> 18 at hour 3.9.
 
-## hours 3.9 (clock stopped): pod outage from 10:26 PST; offline work, untested on the card
+## hours 3.9 (clock stopped): machine outage from 10:26; offline work, untested on the card
 
-Written while no pod was available (queued tests e0146-e0148):
+Written while no machine was available (queued tests e0146-e0148):
 - minimal-state stream loops for BF16 and W12 (the loop carries only pointers, a down-counter, the quads left in
   the tile, accumulators, one quad of weights, one k-step of activations; tile bookkeeping is recomputed at tile
   ends) - aimed at the 8 spills per iteration of the 32-column loop;
@@ -163,7 +163,7 @@ Each GEMM loses ~8 us to ramp, finalize, epilogue and barrier (~2 ms per step), 
   sequence could never be promoted again), and the verify pass's MTP input picked its hidden-state column with
   the uniform formula. After the fixes: decodes token-identical; 5629 / 5667 / 5835 us per step on the timed seed
   sets (uniform: 6368 / 6386 / 6891). Submitted as s0008.
-- Pods: epochs 18 (1 h 25 min without a pod), 19, 20 (single-card pods), 21.
+- Machines: epochs 18 (1 h 25 min without a machine), 19, 20 (single-card machines), 21.
 
 ## hours 4.15-4.5: s0008 (track B, valid), s0009 (track A, valid); what the tail is not
 
@@ -237,7 +237,7 @@ Each GEMM loses ~8 us to ramp, finalize, epilogue and barrier (~2 ms per step), 
 - Latent bug fixed on the way: the replay staged na (accepted positions of the previous pass, up to 32) rows
   into areas sized for the current pass's PM; a 32-position pass followed by a <= 8-position one with na > 16
   would have overlapped the staged k and delta. The layout is now chosen from max(P, na_max) on both sides.
-- Pod lost at hour 5.63 (epoch 21 -> 22) while listing spills.
+- Machine lost at hour 5.63 (epoch 21 -> 22) while listing spills.
 
 ## hour 5.6-6.0: s0010 (track B) - 622 / 4496 us
 
@@ -348,12 +348,12 @@ Each GEMM loses ~8 us to ramp, finalize, epilogue and barrier (~2 ms per step), 
   (an acquire-release counter per output unit, the same additions in the same order): one op and one grid
   barrier less per attention layer. Bit-identical; same-card A/B: B=1 P=32 -0.9 %, B=8 x 4 -1.0 %, B=1 step
   -0.8 %, B=8 step -0.6 %.
-- Pod lost at hour 9.32 (epoch 22 -> 23) while testing the softmax fold (score op leaves per-tile max and
+- Machine lost at hour 9.32 (epoch 22 -> 23) while testing the softmax fold (score op leaves per-tile max and
   exp-sums, the value sum makes the probabilities; not bit-identical to the old softmax's summation order).
 - Negative: softmax folded into score (per-tile statistics) + value sum (probabilities made there): correct (rel-L2
   0.0100 / 0.0299, top-1 99.6 %, identity tests pass) but single steps +1.9 % (B=1) / +1.6 % (B=8) and 32
   positions only -0.4 %: every value-sum unit recomputes the statistics and reads fp32 scores. Reverted.
-- Pod lost again at hour 10.12 (epoch 23 -> 24).
+- Machine lost again at hour 10.12 (epoch 23 -> 24).
 
 ## hour 10.1-10.9: recurrent-op inputs 4 channels per thread; s0018 (track B) 488 / 3695, s0019 (track A) 10150 / 11435
 
@@ -650,7 +650,7 @@ Each GEMM loses ~8 us to ramp, finalize, epilogue and barrier (~2 ms per step), 
   volatile moves: local loads in the loop body 28 -> 8, none after a call. Same card: B=1 step 9234 -> 8981,
   B=8 10506 -> 10243, B=1x32 12500 -> 12173 (-2.5 to -2.7 %); bitwise identical to HEAD, all tests pass.
 - s0042 (track A): predicted ~9005 / ~9815, measured 9006 / 9900 us: 1.057x / 1.033x SGLang.
-- The run's bridge daemon exited at 10:55 (FileNotFoundError in its spool scan, a vanished ack file) right after
+- The run's loop service exited at 10:55 (FileNotFoundError in its spool scan, a vanished ack file) right after
   s0043 was submitted; restarted with its own command at 10:58 (mk note). s0043 was evaluated normally.
 - s0043 (track C build of the s0042 kernel): predicted ~415 / ~3310, measured 414 / 3275.
 - Negative: in the recurrent op, the split half and the speculative flag re-read after the calls (shared memory,
