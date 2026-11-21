@@ -265,6 +265,46 @@
      }
     }
    }
+  },
+  "thinkingmachines/Inkling-2-Mini": {
+   "b200": {
+    "default": "offline-a",
+    "engines": {
+     "offline-a": {
+      "track": "A",
+      "kind": "offline",
+      "source": "../engines/inkling-2-mini_b200/offline-a",
+      "sha256": "e7907d5a804a8b77",
+      "from": "run s17-mini-b200-ma, submission s0014",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "the checkpoint's formats (NVFP4 / MXFP8 experts decoded exactly, expert inputs kept in BF16 as the model's reference does, BF16 elsewhere); one kernel built for one sequence and one for 2 to 8, whose logits differ from each other within the evaluator's tolerance (in a batch, a sequence's logits do not depend on the others); steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-21: valid in the evaluator (every gate, the hidden set included), every release check (eval/release_check.py), and 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-b": {
+      "track": "B",
+      "kind": "offline",
+      "source": "../engines/inkling-2-mini_b200/offline-b",
+      "sha256": "08aa2c67e02d6e78",
+      "from": "run s17-mini-b200-mb, submission s0020",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "certified 8-bit LM-head sketch with exact rescoring on the greedy path of the one-sequence kernel; logits bit-identical to offline-a at 1 and 8 sequences; steady decode only; step mode: sampling works, the prompt is fed one token per step",
+      "verified": "2026-11-21: valid in the evaluator (every gate, the hidden set included), every release check (eval/release_check.py), and 12 of 12 checks of scripts/mkserve_check.py on this card"
+     },
+     "offline-c": {
+      "track": "C",
+      "kind": "offline",
+      "source": "../engines/inkling-2-mini_b200/offline-c",
+      "sha256": "2b48f9ffbe04e280",
+      "from": "run s16-mini-b200-c1, submission s0022",
+      "max_batch": 8,
+      "max_context": 2048,
+      "what": "exact speculative decoding with one sequence: drafts from the checkpoint's MTP head (DSpark, mtp.safetensors) and from n-gram copies of the context, verified in one pass by a track-A decode step (logits bit-identical to run s15-mini-b200-a2, submission s0025, and at one sequence to offline-a); its tokens equal its own one-token-per-step greedy tokens; 2 to 8 sequences decode one token per step; a request that arrives while others decode waits for them; served in native mode (greedy); --mode step: one token per step, with sampling",
+      "verified": "2026-11-21: valid in the evaluator with track C's rules (every gate, the hidden set included), every release check (eval/release_check.py), lossless in eval/spec_check.py (natural text and the benchmark's prompts, 1 and 8 sequences, staggered requests: 56 of 56 sequences identical), and 12 of 12 checks of scripts/mkserve_check.py on this card (native mode)"
+     }
+    }
+   }
   }
  }
 }

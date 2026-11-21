@@ -12,7 +12,7 @@
 | `doctor [MODEL]` | checks the card, `nvcc`, the Python packages, which engines exist for this card and whether the weights are downloaded; prints the fix for every line that fails |
 | `list` | every (model, card, engine) with its track and kind; `*` marks the default |
 | `pull MODEL` | builds the engine and downloads the weights now, so that `serve` starts at once |
-| `serve MODEL` | `--engine NAME` or `--track A\|B`, `--port`, `--host`, `--model-dir` (a local snapshot), `--api-key KEY` (Bearer token on `/v1/*`), `--served-model-name`, `--mode auto\|native\|step` |
+| `serve MODEL` | `--engine NAME` or `--track A\|B\|C`, `--port`, `--host`, `--model-dir` (a local snapshot), `--api-key KEY` (Bearer token on `/v1/*`), `--served-model-name`, `--mode auto\|native\|step` |
 | `chat` | a streaming terminal chat with any running OpenAI-compatible server (`--url`, `--temperature`); prints tokens per second after each answer |
 | `bench` | the project's workload against any OpenAI-compatible server: random 64-token prompts, 1,024 greedy tokens, 1 and 8 requests at once (`--batch`, `--prompt-tokens`, `--max-tokens`, `--rounds`); prints milliseconds per step, tokens per second and time to first token |
 
@@ -35,6 +35,10 @@ Endpoints: `/v1/models`, `/health`, `/metrics` (Prometheus text: requests, token
 | prompt | prefilled in chunks inside the engine | one token per step |
 | sampling | greedy only (a sampling request is decoded greedily with a warning; `--strict-sampling` refuses it) | `temperature`, `top_p`, `seed` |
 | a request that ends early | the answer ends, the engine's row decodes on to `max_tokens` (the contract has no cancel) | the row is dropped |
+
+A track-C engine (exact speculative decoding: it drafts several tokens and verifies them in one pass) drafts only in
+its own `submit`/`poll`, so `--mode auto` serves it in native mode (greedy); `--mode step` serves the same engine one
+token per step, with sampling and without speculation.
 
 ## Request validation
 

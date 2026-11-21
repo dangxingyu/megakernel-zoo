@@ -82,7 +82,7 @@ that passes the public set and fails your hidden one has learned the public inpu
 
 ```jsonc
 "offline-b": {
-  "track": "B",                                  // A or B, as in engine/TRACK
+  "track": "B",                                  // A, B or C, as in engine/TRACK
   "kind": "offline",                             // offline (reset/step) or online (submit/poll)
   "source": "../engines/qwen3-8b_h100/offline-b",
   "sha256": "b76d9f48be969976",                  // first 16 hex digits; scripts/check_engine.py prints the value
@@ -102,7 +102,12 @@ The model's `"default"` engine changes only when the new engine passes every che
   distillation or approximation of weights or activations, and no part of the model skipped.
 - **Track A** keeps the checkpoint's weights, number formats and data flow; every operator runs for every token and
   one token is produced per pass. **Track B** may change how the model is stored and what is computed at load time, if
-  the function is unchanged in exact arithmetic. The two are reported separately.
+  the function is unchanged in exact arithmetic. **Track C** drafts and verifies several tokens per pass (speculative
+  decoding) and must be lossless: with greedy decoding, its tokens equal its own one-token-per-step greedy tokens for
+  every sequence (`MK_TRACK=c` in `scripts/eval_setup.sh` turns on that gate and the token-based rate, and
+  [`eval/spec_check.py`](eval/spec_check.py) checks it on natural text, at batch 1 and 8 and with requests that
+  arrive one after another). The three are reported separately; track C is compared only with the general engines'
+  own speculative decoding.
 - **Self-contained.** No general inference engine or library model code (vLLM, SGLang, transformers, ...) in the timed
   path; everything is rebuilt from the submitted source by `engine/build.sh`, and nothing large is committed (weights
   and tables are made at load time).

@@ -42,15 +42,25 @@ _img_transplant_env() {  # NAME: prints the shell lines (each ending in ";") tha
       done
     done
     # absolute prefixes the image's files refer to (venv and its interpreter, shebangs, CUDA_HOME, workspaces)
-    for d in /opt/sglang /opt/python /opt/venv /sgl-workspace /vllm-workspace /usr/local/lib/python3.12; do
+    for d in /opt/sglang /opt/python /opt/venv /opt/uv /sgl-workspace /vllm-workspace /usr/local/lib/python3.12 /usr/local/lib/python3.13 /usr/local/lib/python3.14; do
       [ -e "$R$d" ] && [ ! -e "$d" ] && { mkdir -p "$(dirname "$d")"; ln -s "$R$d" "$d"; }
     done
   fi
   for d in "$R"/opt/*/pyvenv.cfg; do [ -f "$d" ] && venv="$(dirname "$d")" && break; done
+  local uvpy=""; for d in "$R"/opt/uv/python/cpython-3*/bin/python3; do [ -x "$d" ] && uvpy="${d#$R}" && break; done
   if [ -n "$venv" ]; then  # a venv on a relocatable interpreter (uv): runs as it is through the symlinked prefixes
     echo "export MK_IMG_PY='/opt/$(basename "$venv")/bin/python3';"
+  elif [ -n "$uvpy" ]; then  # a uv-managed interpreter with the packages installed into it (vLLM images since 2026-11)
+    echo "export MK_IMG_PY='$uvpy';"
   else  # the distribution's interpreter: its own stdlib through PYTHONHOME, its dist-packages through PYTHONPATH
-    echo "export PYTHONHOME='$R/usr' PYTHONPATH='$R/usr/local/lib/python3.12/dist-packages:$R/usr/lib/python3/dist-packages' MK_IMG_PY='$R/usr/bin/python3.12';"
+    # its version: the one whose dist-packages hold torch (vLLM nightlies moved to 3.14), else 3.12
+    local pv=3.12; for d in "$R"/usr/local/lib/python3.*/dist-packages/torch; do [ -d "$d" ] && pv="$(basename "$(dirname "$(dirname "$d")")")" && pv="${pv#python}" && break; done
+    local home="$R/usr"; [ -x "$R/usr/bin/python$pv" ] || home="$R/usr/local"   # a source-built interpreter lives in /usr/local
+    echo "export PYTHONHOME='$home' PYTHONPATH='$R/usr/local/lib/python$pv/dist-packages:$R/usr/lib/python3/dist-packages' MK_IMG_PY='$home/bin/python$pv';"
+    # its Python.h includes the Debian multiarch <$(uname -m)-linux-gnu/python$pv/pyconfig.h>: run-time compiles (Triton's driver.c,
+    # JIT extensions) need that one directory of the image's /usr/include, not the whole tree (its libc headers are older)
+    local ma="$R/usr/include/$(uname -m)-linux-gnu/python$pv" shim="$MK_ROOT/img/$1.pyinc"
+    if [ -d "$ma" ]; then mkdir -p "$shim/$(uname -m)-linux-gnu" && ln -sfn "$ma" "$shim/$(uname -m)-linux-gnu/python$pv"; echo "export CPATH='$shim'\${CPATH:+:\$CPATH};"; fi
   fi
   echo "export LD_LIBRARY_PATH='$farm:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH:-}';"
   echo "export PATH=\"\$(dirname \"\$MK_IMG_PY\"):$R/usr/local/cuda/bin:$R/usr/local/bin:\$PATH\" CUDA_HOME='$R/usr/local/cuda';"

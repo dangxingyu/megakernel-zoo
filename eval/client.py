@@ -107,10 +107,40 @@ def has_token(choice: dict) -> bool:
     return bool(text) or (text is not None and choice.get("finish_reason") is None)
 
 
+def chunk_token_count(choice: dict) -> int | None:
+    """How many tokens a stream chunk carries, when the server says: our front end's mk_token_ids, or the per-token
+    entries of OpenAI logprobs (completions: logprobs.tokens; chat: logprobs.content). None when it does not say."""
+    if isinstance(choice.get("mk_token_ids"), list):
+        return len(choice["mk_token_ids"])
+    lp = choice.get("logprobs")
+    if isinstance(lp, dict):
+        if isinstance(lp.get("tokens"), list):
+            return len(lp["tokens"])
+        if isinstance(lp.get("content"), list):
+            return len(lp["content"])
+    return None
+
+
+def chunk_weights(record: dict, tokens: int) -> list[float]:
+    """Tokens per content chunk of one stream (track C, token-based rates). The counts the server reported when it
+    reported them for every chunk and they add up to the stream's completion tokens; otherwise the first chunk
+    (the prompt's output) counts 1 and the stream's other tokens are spread evenly over its other chunks. A server
+    that sends one chunk per token gets weight 1 for every chunk: the token-based rate is then exactly the chunk rate."""
+    n = len(record["chunks"])
+    known = record.get("chunk_tokens") or []
+    if n and len(known) == n and all(k is not None for k in known) and sum(known) == tokens:
+        return [float(k) for k in known]
+    if n <= 1:
+        return [float(tokens)] * n
+    rest = (tokens - 1) / (n - 1)
+    return [1.0] + [rest] * (n - 1)
+
+
 async def one_stream(session: aiohttp.ClientSession, base: str, body: dict) -> dict:
     """Send one streaming completion. Returns send time, the arrival time of every content chunk, usage."""
     path = "/v1/chat/completions" if "messages" in body else "/v1/completions"
-    record = {"t_send": time.perf_counter(), "chunks": [], "usage": None, "finish": None, "error": None, "text_len": 0, "text": []}
+    record = {"t_send": time.perf_counter(), "chunks": [], "chunk_tokens": [], "usage": None, "finish": None, "error": None,
+              "text_len": 0, "text": []}
     try:
         async with session.post(base + path, json=body) as resp:
             if resp.status != 200:
@@ -130,6 +160,7 @@ async def one_stream(session: aiohttp.ClientSession, base: str, body: dict) -> d
                 for choice in event.get("choices") or []:
                     if has_token(choice):
                         record["chunks"].append(now)
+                        record["chunk_tokens"].append(chunk_token_count(choice))
                     piece = choice.get("text") if "delta" not in choice else (choice.get("delta") or {}).get("content")
                     if piece:
                         record["text"].append(piece)
@@ -168,6 +199,9 @@ def summarize_steady(records: list[dict], args) -> dict:
     w0 = max(r["chunks"][0] for r in records)
     w1 = min(r["chunks"][-1] for r in records)
     in_window = sum(sum(1 for t in r["chunks"] if w0 < t <= w1) for r in records)
+    # Token-based (track C): the same window, every chunk weighted by the tokens it carries (chunk_weights).
+    weights = [chunk_weights(r, n) for r, n in zip(records, tokens)]
+    in_window_tokens = sum(sum(w for t, w in zip(r["chunks"], ws) if w0 < t <= w1) for r, ws in zip(records, weights))
     nvml_util = args.nvml_sampler.mean(w0, w1) if getattr(args, "nvml_sampler", None) else None
     gaps = [(b - a) * 1e3 for r in records for a, b in zip(r["chunks"], r["chunks"][1:])]
     # Long decodes: the token gap by how many tokens the stream has already generated (its context grows with it).
@@ -193,6 +227,9 @@ def summarize_steady(records: list[dict], args) -> dict:
             "finish": [r["finish"] for r in records],
             "e2e_tok_s": sum(tokens) / (t_last - t0),
             "decode_tok_s": in_window / (w1 - w0) if w1 > w0 else float("nan"),
+            "decode_tok_s_by_tokens": in_window_tokens / (w1 - w0) if w1 > w0 else float("nan"),
+            "tokens_per_chunk": sum(tokens) / max(1, sum(counted)),
+            "chunk_tokens_reported": all(len(r.get("chunk_tokens") or []) == len(r["chunks"]) and all(k is not None for k in r["chunk_tokens"]) for r in records),
             "decode_window_s": w1 - w0, "nvml_util": nvml_util, "tpot_ms_by_generated": by_position,
             "ttft_s": [r["chunks"][0] - r["t_send"] for r in records],
             "tpot_ms": {"p50": pct(gaps, 0.50), "p90": pct(gaps, 0.90), "p99": pct(gaps, 0.99),
@@ -225,7 +262,7 @@ async def steady(args) -> dict:
             if args.keep_chunks:
                 summary["chunk_times"] = [[t - records[0]["t_send"] for t in r["chunks"]] for r in records]
             tag = "warmup" if repeat < 0 else "repeat"
-            brief = {k: summary.get(k) for k in ("clean", "one_chunk_per_token", "e2e_tok_s", "decode_tok_s", "tpot_ms", "errors") if k in summary}
+            brief = {k: summary.get(k) for k in ("clean", "one_chunk_per_token", "e2e_tok_s", "decode_tok_s", "decode_tok_s_by_tokens", "tokens_per_chunk", "tpot_ms", "errors") if k in summary}
             if summary.get("tokens") and not summary.get("clean"):
                 brief.update(tokens=summary["tokens"], chunks=summary["chunks"], prompt_tokens=summary["prompt_tokens"], finish=summary["finish"])
             print(f"MK_STEADY {tag} {repeat} B={args.batch} P={args.prompt_tokens} N={args.max_tokens} {json.dumps(brief)}", flush=True)
@@ -245,6 +282,9 @@ async def steady(args) -> dict:
             "tokens_per_stream": statistics.median([t for r in good for t in r["tokens"]]) if good else None,
             "prompt_tokens_seen": sorted({p for r in good for p in r["prompt_tokens"] if p is not None}) if good else None,
             "e2e_tok_s": spread("e2e_tok_s"), "decode_tok_s": spread("decode_tok_s"),
+            # track C: decode_tok_s with every chunk weighted by its tokens (equal to decode_tok_s at one chunk per token)
+            "decode_tok_s_by_tokens": spread("decode_tok_s_by_tokens"),
+            "tokens_per_chunk": statistics.median([r["tokens_per_chunk"] for r in good]) if good else None,
             "tpot_p50_ms": statistics.median([r["tpot_ms"]["p50"] for r in good]) if good else None,
             "tpot_p99_ms": statistics.median([r["tpot_ms"]["p99"] for r in good]) if good else None,
             "ttft_median_s": statistics.median([t for r in good for t in r["ttft_s"]]) if good else None,

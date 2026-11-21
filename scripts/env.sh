@@ -92,3 +92,14 @@ wait_http() {
   done
   return 1
 }
+
+# mk_tf_spec MODEL_REPO: the transformers the eval venv gets for this model. Inkling-2-Mini (inkling2_loop) is in no
+# released or main-branch transformers: the evaluator's BF16 path is the open pull request huggingface/transformers#51050
+# at a pinned head (a source archive: no git needed in the pod).
+MK_TF_INKLING2_LOOP="${MK_TF_INKLING2_LOOP:-e916f57dfd7e}"
+mk_tf_spec() {
+  case "$(echo "${1:-}" | tr 'A-Z' 'a-z')" in
+    *inkling-2-mini*) echo "transformers @ https://github.com/huggingface/transformers/archive/$MK_TF_INKLING2_LOOP.tar.gz" ;;
+    *) echo transformers ;;
+  esac
+}

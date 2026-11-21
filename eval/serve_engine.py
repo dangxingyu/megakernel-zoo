@@ -127,6 +127,10 @@ async def frontend_main(args) -> int:
     reader, writer = await asyncio.open_unix_connection(args.sock, limit=1 << 24)
     queues: dict[int, asyncio.Queue] = {}
     counter = itertools.count(1)
+    # Tokens per engine event (one poll() result for one request, or one step of the cohort adapter): for a
+    # speculative engine that hands over each verification step's tokens at once, the acceptance length. GET
+    # /mk/bursts (?reset=1) reports and optionally clears it; the evaluator reads it around each measurement.
+    bursts = {"events": 0, "tokens": 0, "hist": {}}
 
     async def pump() -> None:
         while True:
@@ -135,8 +139,20 @@ async def frontend_main(args) -> int:
                 os._exit(3)  # the engine process died: a server that answers nothing must not stay up
             for rid, tokens, finished in json.loads(line):
                 q = queues.get(rid)
+                if tokens:
+                    bursts["events"] += 1
+                    bursts["tokens"] += len(tokens)
+                    bursts["hist"][len(tokens)] = bursts["hist"].get(len(tokens), 0) + 1
                 if q is not None:
                     q.put_nowait((tokens, finished))
+
+    async def burst_stats(request):
+        report = {"events": bursts["events"], "tokens": bursts["tokens"],
+                  "tokens_per_event": bursts["tokens"] / bursts["events"] if bursts["events"] else None,
+                  "hist": {str(k): v for k, v in sorted(bursts["hist"].items())}}
+        if request.query.get("reset"):
+            bursts.update(events=0, tokens=0, hist={})
+        return web.json_response(report)
 
     async def models(_request):
         return web.json_response({"object": "list", "data": [{"id": args.model, "object": "model"}]})
@@ -189,7 +205,7 @@ async def frontend_main(args) -> int:
         return resp
 
     app = web.Application(client_max_size=1 << 26)
-    app.add_routes([web.get("/v1/models", models), web.post("/v1/completions", completions)])
+    app.add_routes([web.get("/v1/models", models), web.post("/v1/completions", completions), web.get("/mk/bursts", burst_stats)])
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", args.port).start()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Inkling-2-Small (`model_type: inkling2`) text decoder in plain PyTorch, for the reference and for checking engines.
+"""Inkling-2-Small (`model_type: inkling2`) and Inkling-2-Mini (`inkling2_loop`) text decoder in plain PyTorch, for the reference and for checking engines.
 
 There is no Hugging Face implementation of this model (transformers 5.22 and main know only Inkling v1). The public
 definitions of the function are the general engines' model code; the specification used here is SGLang's pull
@@ -26,10 +26,28 @@ Two precisions:
          definition); the products of the quantized operands, their per-token and per-expert outer scales and
          everything after are float64.
 
+Inkling-2-Mini (`model_type: inkling2_loop`, config text_config.loop_config): the same layers, with layers
+core_start..core_end-1 (6..17) applied num_passes (3) times with shared weights, 48 applications per token from 24
+layers. The specification is the open pull request huggingface/transformers#51050 ("Add Inkling2 Mini") at head
+e916f57dfd7e (models/inkling2_loop/modular_inkling2_loop.py): each pass has its own K/V and
+short-convolution state (Config.applications, cache slots); passes after the first start again from the pre-loop
+hidden and block states and mix four messages (query, key, value, MLP inputs) into each loop layer's inputs. That
+pull request dequantizes the experts on load and does NOT quantize expert input activations, although the
+checkpoint's hf_quant_config.json lists them (NVFP4 per-token for layers 0-19, MXFP8 for 20-23): for the looped model
+`act_quant` is therefore off by default (Inkling2.act_quant; checked: float32 logits equal transformers#51050's float32
+logits to rel. L2 1.4e-6 median, <job>, scripts/mini/ref_check.py). "fork" for the looped model is
+a BF16 path of the same kind as the PR's BF16 model, not bit-identical to it.
+
 Both: logits are 30 * tanh(z / 30) of the unembedding; only the first `unpadded_vocab_size` (200058) entries are
 real tokens and only those are returned. The vision tower and mtp.safetensors are not used (text decoding).
 
     python eval/inkling2_ref.py --model-dir DIR --ids ids.npy --positions pos.npy --modes fork,high --out-dir OUT
+    python eval/inkling2_ref.py --model-dir DIR --greedy-prompts prompts.json --total 2000 --ids ids.npy --out-dir OUT
+
+The second form makes token sequences the way eval/make_reference.py does with the Hugging Face BF16 model: the
+prompts (a JSON list of token-id lists of one length, eval/natural_prompts.py) and their greedy continuation in fork
+precision (Decoder, all sequences in step), the EOS tokens of config.json / generation_config.json banned so that
+no sequence ends. --deadline S stops early (the sequences are then shorter than --total; the log says so).
 """
 
 from __future__ import annotations
@@ -52,6 +70,8 @@ E2M1_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
 BF16 = torch.bfloat16
 SPEC = {"sglang_pr": "sgl-project/sglang#50186", "sglang_commit": "237ba6baf2f2",
         "transcription": "NovaSky-AI/SkyRL#2730 @ a7a8ba5e (reference.py, quant.py), Apache-2.0"}
+SPEC_LOOP = {"transformers_pr": "huggingface/transformers#51050", "transformers_commit": "e916f57dfd7e",
+             "files": "src/transformers/models/inkling2_loop/modular_inkling2_loop.py, src/transformers/core_model_loading.py"}
 
 
 @dataclass
@@ -83,12 +103,18 @@ class Config:
     route_scale: float
     use_gate_bias: bool
     final_logit_softcapping: float
+    loop: tuple | None = None  # Inkling-2-Mini (inkling2_loop): (core_start, core_end, num_passes), else None
 
     @classmethod
     def load(cls, model_dir) -> "Config":
         text = json.loads((Path(model_dir) / "config.json").read_text())["text_config"]
-        names = cls.__dataclass_fields__
+        names = [k for k in cls.__dataclass_fields__ if k != "loop"]
         cfg = cls(**{k: text[k] for k in names})
+        lc = text.get("loop_config")
+        if lc:
+            assert not lc.get("is_varloop"), "variable-loop checkpoints are not supported"
+            cfg.loop = (lc["core_start"], lc["core_end"], lc["num_passes"])
+            assert cfg.loop[0] % cfg.n_layers_per_attn_res_block == 0 and cfg.loop[1] % cfg.n_layers_per_attn_res_block == 0
         # the swa_* fields equal the global ones in this checkpoint; the code below assumes it
         for k in ("head_dim", "num_attention_heads", "num_key_value_heads"):
             assert text.get("swa_" + k, getattr(cfg, k)) == getattr(cfg, k), k
@@ -97,6 +123,23 @@ class Config:
 
     def is_local(self, i: int) -> bool:
         return i in self.local_layer_ids
+
+    def applications(self) -> list:
+        """The decoder-layer applications of one token, in order: (layer, pass, cache slot). Without a loop, layer i
+        once with slot i. With loop (s, e, P): layers 0..s-1, then layers s..e-1 P times (pass 0 uses slots s..e-1,
+        pass p >= 1 slots L + (p - 1)(e - s) + (i - s): every pass has its own K/V and convolution state, as
+        transformers#51050's cache_offset), then layers e..L-1."""
+        L = self.num_hidden_layers
+        if not self.loop:
+            return [(i, 0, i) for i in range(L)]
+        s, e, P = self.loop
+        out = [(i, 0, i) for i in range(s)]
+        for p in range(P):
+            out += [(i, p, i if p == 0 else L + (p - 1) * (e - s) + (i - s)) for i in range(s, e)]
+        return out + [(i, 0, i) for i in range(e, L)]
+
+    def cache_slots(self) -> int:
+        return len(self.applications()) if not self.loop else self.num_hidden_layers + (self.loop[2] - 1) * (self.loop[1] - self.loop[0])
 
 
 class Prec:
@@ -181,6 +224,28 @@ class AttnResState:
 
     def output(self):
         return block_attn_res(self.blocks, self.partial, self.m.w["attn_res.output_query"], self.m.cfg.attn_res_normalize_values, self.m.p)[0]
+
+
+# ---------------------------------------------------------------------------------------------- loop messages (Mini)
+# transformers#51050 (Inkling2LoopMessageAttentionResidual, Inkling2LoopMessageGate): in passes p >= 1 over the loop
+# layers, every loop layer l gets four messages (query, key, value, MLP input) by attention over depth of the PREVIOUS
+# pass's blocks past the pre-loop ones (the first block it appended is the pre-loop output, the same in every pass, and
+# is skipped) and its final partial sum; each of the layer's four inputs x becomes (1 - tanh(F g)) x + tanh(G g) msg
+# with g = D [unit_rms(x), unit_rms(msg)] (D rank 64, BF16 in the engines; F, G float32).
+
+def message_gate(m: "Inkling2", i: int, which: str, x, msg):
+    p, w, eps = m.p, m.layers[i], m.cfg.rms_norm_eps
+    xf, mf = x.to(p.cd), msg.to(p.cd)
+    unit = lambda v: v * torch.rsqrt(v.square().mean(-1, keepdim=True) + eps)  # noqa: E731
+    g = linear(torch.cat([unit(xf), unit(mf)], dim=-1), w[f"controllers.{which}.down_weight"], p).to(p.cd)
+    forget = torch.tanh(g @ w[f"controllers.{which}.forget_weight"].to(p.cd).t())
+    gain = torch.tanh(g @ w[f"controllers.{which}.gain_weight"].to(p.cd).t())
+    return (1 - forget) * xf + gain * mf
+
+
+def messages(m: "Inkling2", prev_blocks, prev_partial, loop_layer: int):
+    """(query, key, value, mlp) messages of loop layer `loop_layer` from the previous pass (`cd` tensors)."""
+    return block_attn_res(prev_blocks, prev_partial, m.w["loop_queries"][loop_layer], True, m.p)
 
 
 # ---------------------------------------------------------------------------------------------- short convolutions
@@ -479,35 +544,111 @@ class Inkling2:
                         self.w[key] = f.get_tensor(name).to(dev)
         for i in range(L):
             assert "w13_weight" in self.experts[i] and "w2_weight" in self.experts[i], i
+        if cfg.loop:  # [2n, H] (query, mlp) and (key, value) pairs per loop layer -> [n, 4, H]: query, key, value, mlp
+            qm = self.w.pop("middle_cycle_cross_pass_queries").unflatten(0, (-1, 2))
+            kv = self.w.pop("middle_cycle_cross_pass_kv_queries").unflatten(0, (-1, 2))
+            assert qm.shape[0] == cfg.loop[1] - cfg.loop[0], qm.shape
+            self.w["loop_queries"] = torch.stack([qm[:, 0], kv[:, 0], kv[:, 1], qm[:, 1]], dim=1)
+            for i in range(*cfg.loop[:2]):
+                for which in ("attn", "k", "v", "mlp"):
+                    c = {k: self.layers[i][f"controllers.{which}.{k}_weight"].shape for k in ("down", "forget", "gain")}
+                    assert c["down"][1] == 2 * cfg.hidden_size and c["forget"] == c["gain"] == (cfg.hidden_size, c["down"][0]), (i, which, c)
+        self.act_quant = not cfg.loop  # Mini: the transformers#51050 function (experts dequantized, inputs not quantized)
 
     def layer(self, i):
         return self.layers[i]
 
+    def layer_inputs(self, i, state, msgs):
+        """The attention's query, key and value inputs of layer i (after the norms; with the loop messages in passes
+        p >= 1)."""
+        cfg, p, w = self.cfg, self.p, self.layers[i]
+        local = cfg.is_local(i)
+        streams = state.attention_input(i, 1 if local else 3)
+        if local:
+            if msgs is None:
+                xq = xk = xv = rms_norm(streams[0], w["attn_norm.weight"], cfg.rms_norm_eps, p)
+            else:
+                xq, xk, xv = (rms_norm(message_gate(self, i, which, streams[0], msg), w["attn_norm.weight"], cfg.rms_norm_eps, p)
+                              for which, msg in (("attn", msgs[0]), ("k", msgs[1]), ("v", msgs[2])))
+        else:
+            if msgs is not None:
+                streams = [message_gate(self, i, which, x, msg) for which, x, msg in zip(("attn", "k", "v"), streams, msgs[:3])]
+            xq = rms_norm(streams[0], w["q_input_norm.weight"], cfg.rms_norm_eps, p)
+            xk = rms_norm(streams[1], w["k_input_norm.weight"], cfg.rms_norm_eps, p)
+            xv = rms_norm(streams[2], w["v_input_norm.weight"], cfg.rms_norm_eps, p)
+        return xq, xk, xv
+
+    def mlp_input(self, i, state, attn, msgs):
+        x = state.mlp_input(i, attn)
+        if msgs is not None:
+            x = message_gate(self, i, "mlp", x, msgs[3])
+        return rms_norm(x, self.layers[i]["mlp_norm.weight"], self.cfg.rms_norm_eps, self.p)
+
+    def run(self, state, layer_fn):
+        """Every application of a decoder layer to `state` in order: layer_fn(i, state, msgs, slot). The loop
+        (transformers#51050 Inkling2LoopTextModel.forward): the pre-loop state is kept; each pass after the first starts
+        again from it and gets messages from the previous pass's blocks (past the pre-loop ones and the first one the
+        pass appended) and its final partial sum."""
+        cfg = self.cfg
+        if not cfg.loop:
+            for i, _, slot in cfg.applications():
+                layer_fn(i, state, None, slot)
+            return
+        s, e, P = cfg.loop
+        L = cfg.num_hidden_layers
+        for i in range(s):
+            layer_fn(i, state, None, i)
+        pre_blocks, pre_partial = list(state.blocks), state.partial
+        for i in range(s, e):
+            layer_fn(i, state, None, i)
+        for pas in range(1, P):
+            prev_blocks, prev_partial = state.blocks[len(pre_blocks) + 1:], state.partial
+            state.blocks, state.partial = list(pre_blocks), pre_partial
+            for l, i in enumerate(range(s, e)):
+                state.to(self.layer_device[i])
+                msgs = messages(self, [b.to(self.layer_device[i]) for b in prev_blocks], prev_partial.to(self.layer_device[i]), l)
+                layer_fn(i, state, msgs, L + (pas - 1) * (e - s) + l)
+        for i in range(e, L):
+            layer_fn(i, state, None, i)
+
     @torch.no_grad()
-    def hidden(self, ids, record=None):
+    def hidden(self, ids, record=None, taps=None, features=None):
+        """ids [R, T] -> final hidden [R, T, H]. `record` (dict): expert choices per application slot; `taps`
+        (list): the partial sum after every application (cd), for a layer-by-layer comparison. `features` (dict
+        {application index: None}): filled with the running attention-residual partial block at the START of those
+        applications (0-based, loop passes counted; the draft head's target_layer_ids, eval/inkling2_mtp.py), [R, T, H]
+        in the stored dtype; the key len(applications) gets the final-norm output."""
         cfg, p = self.cfg, self.p
         ids = ids.to(self.first)
         R, T = ids.shape
         positions = torch.arange(T, device=self.first)
         h0 = rms_norm(self.w["embed.weight"][ids], self.w["embed_norm.weight"], cfg.rms_norm_eps, p)
         state = AttnResState(self, h0)
-        for i in range(cfg.num_hidden_layers):
+        visit = [0]
+
+        def layer(i, state, msgs, slot):
             dev, w = self.layer_device[i], self.layers[i]
             state.to(dev)
-            local = cfg.is_local(i)
-            streams = state.attention_input(i, 1 if local else 3)
-            if local:
-                xq = xk = xv = rms_norm(streams[0], w["attn_norm.weight"], cfg.rms_norm_eps, p)
-            else:
-                xq = rms_norm(streams[0], w["q_input_norm.weight"], cfg.rms_norm_eps, p)
-                xk = rms_norm(streams[1], w["k_input_norm.weight"], cfg.rms_norm_eps, p)
-                xv = rms_norm(streams[2], w["v_input_norm.weight"], cfg.rms_norm_eps, p)
+            if features is not None and visit[0] in features:
+                features[visit[0]] = state.partial.to(p.sd).clone()
+            visit[0] += 1
+            xq, xk, xv = self.layer_inputs(i, state, msgs)
             attn = static_sconv(attention(self, i, xq, xk, xv, positions.to(dev)), w["attn_sconv.weight"], p)
-            mlp_in = rms_norm(state.mlp_input(i, attn), w["mlp_norm.weight"], cfg.rms_norm_eps, p)
-            mlp = static_sconv(moe(self, i, mlp_in, record), w["mlp_sconv.weight"], p)
+            mlp_in = self.mlp_input(i, state, attn, msgs)
+            rec = {} if record is not None else None
+            mlp = static_sconv(moe(self, i, mlp_in, rec), w["mlp_sconv.weight"], p)
+            if record is not None:
+                record[slot] = rec[i]
             state.finalize(i, attn, mlp)
+            if taps is not None:
+                taps.append(state.partial.float().cpu())
+
+        self.run(state, layer)
         state.to(self.last)
-        return rms_norm(state.output(), self.w["norm.weight"], cfg.rms_norm_eps, p)
+        out = rms_norm(state.output(), self.w["norm.weight"], cfg.rms_norm_eps, p)
+        if features is not None and visit[0] in features:
+            features[visit[0]] = out
+        return out
 
     @torch.no_grad()
     def logits(self, hidden):
@@ -521,7 +662,8 @@ class Inkling2:
 
 class Decoder:
     """Token-by-token decoding of B sequences in step (all at the same position), with the state the model carries
-    from one token to the next: per layer the K/V of earlier positions (after the short convolution, the L2 clip and
+    from one token to the next: per layer application slot (Config.applications: Mini's loop layers have one slot per
+    pass) the K/V of earlier positions (after the short convolution, the L2 clip and
     the value norm), and the last kernel-1 inputs of the four short convolutions (K and V projections, attention
     output, MoE output). The attention residuals and everything else are per token. Same arithmetic as
     Inkling2.hidden() on the whole sequence (the starter engine is this in fork precision)."""
@@ -533,8 +675,9 @@ class Decoder:
         kv = cfg.num_key_value_heads * cfg.head_dim
         H = cfg.hidden_size
         self.cache = []
-        for i in range(cfg.num_hidden_layers):
-            dev = model.layer_device[i]
+        slot_layer = {slot: i for i, _, slot in cfg.applications()}
+        for slot in range(cfg.cache_slots()):
+            dev = model.layer_device[slot_layer[slot]]
             z = lambda *shape: torch.zeros(*shape, dtype=p.sd, device=dev)  # noqa: E731
             self.cache.append({"k": z(max_batch, max_context, cfg.num_key_value_heads, cfg.head_dim), "v": z(max_batch, max_context, cfg.num_key_value_heads, cfg.head_dim),
                                "k_in": z(max_batch, lags, kv), "v_in": z(max_batch, lags, kv), "attn": z(max_batch, lags, H), "mlp": z(max_batch, lags, H)})
@@ -561,17 +704,12 @@ class Decoder:
         H, KV, D = cfg.num_attention_heads, cfg.num_key_value_heads, cfg.head_dim
         h0 = rms_norm(m.w["embed.weight"][tokens.to(m.first)][:, None], m.w["embed_norm.weight"], cfg.rms_norm_eps, p)
         state = AttnResState(m, h0)
-        for i in range(cfg.num_hidden_layers):
-            dev, w, c = m.layer_device[i], m.layers[i], self.cache[i]
+
+        def layer(i, state, msgs, slot):
+            dev, w, c = m.layer_device[i], m.layers[i], self.cache[slot]
             state.to(dev)
             local = cfg.is_local(i)
-            streams = state.attention_input(i, 1 if local else 3)
-            if local:
-                xq = xk = xv = rms_norm(streams[0], w["attn_norm.weight"], cfg.rms_norm_eps, p)
-            else:
-                xq = rms_norm(streams[0], w["q_input_norm.weight"], cfg.rms_norm_eps, p)
-                xk = rms_norm(streams[1], w["k_input_norm.weight"], cfg.rms_norm_eps, p)
-                xv = rms_norm(streams[2], w["v_input_norm.weight"], cfg.rms_norm_eps, p)
+            xq, xk, xv = m.layer_inputs(i, state, msgs)
             q = linear(xq, w["attn.wq_du.weight"], p)
             r = linear(xq, w["attn.wr_du.weight"], p)
             gate = linear(xq, w["attn.gate_attn.weight"], p)
@@ -612,10 +750,12 @@ class Decoder:
             out = out * torch.sigmoid(lse - sink[:, 0].to(p.cd)).unsqueeze(-1)
             attn_raw = linear(out.reshape(B, 1, H * D).to(p.sd), w["attn.wo_ud.weight"], p).to(p.sd)
             attn = static_sconv(self._push(c["attn"][:B], attn_raw), w["attn_sconv.weight"], p)[:, -1:]
-            mlp_in = rms_norm(state.mlp_input(i, attn), w["mlp_norm.weight"], cfg.rms_norm_eps, p)
+            mlp_in = m.mlp_input(i, state, attn, msgs)
             mlp_raw = moe(m, i, mlp_in).to(p.sd)
             mlp = static_sconv(self._push(c["mlp"][:B], mlp_raw), w["mlp_sconv.weight"], p)[:, -1:]
             state.finalize(i, attn, mlp)
+
+        m.run(state, layer)
         state.to(m.last)
         hidden = rms_norm(state.output(), m.w["norm.weight"], cfg.rms_norm_eps, p)
         self.pos += 1
@@ -629,11 +769,53 @@ def logits_from_hidden(hidden, unembed, cap: float, unpadded: int, dtype=torch.f
     return cap * torch.tanh(z / cap)
 
 
+def eos_tokens(model_dir) -> list[int]:
+    """EOS ids of config.json (top level and text_config) and generation_config.json, as make_reference.py bans them."""
+    found: set[int] = set()
+    for name in ("config.json", "generation_config.json"):
+        f = Path(model_dir) / name
+        if not f.exists():
+            continue
+        conf = json.loads(f.read_text())
+        for c in (conf, conf.get("text_config") or {}):
+            e = c.get("eos_token_id")
+            found |= set() if e is None else ({e} if isinstance(e, int) else set(e))
+    return sorted(found)
+
+
+@torch.no_grad()
+def greedy(model: Inkling2, prompts: torch.Tensor, total: int, banned: list[int], deadline: float = 0.0) -> torch.Tensor:
+    """prompts [R, P] -> [R, <= total]: the prompt fed one token per step, then greedy decoding, in fork precision."""
+    model.p = Prec("fork")
+    R, P = prompts.shape
+    dec = Decoder(model, R, total)
+    ids = prompts.clone().cpu()
+    t0 = time.time()
+    for t in range(total - 1):
+        logits = dec.step(ids[:, t].to(model.first))
+        if t + 1 < P:
+            continue
+        logits[:, banned] = -float("inf")
+        ids = torch.cat([ids, logits.argmax(-1).cpu()[:, None]], dim=1)
+        done = t + 1
+        if done in (P + 15, P + 99) or done % 250 == 0:
+            el = time.time() - t0
+            print(f"MK_INK greedy {ids.shape[1]} of {total} tokens at {el:.0f}s ({el / done * 1e3:.0f} ms per step)", flush=True)
+        if deadline and time.time() - t0 > deadline:
+            print(f"MK_INK greedy stopped by the deadline ({deadline:.0f}s) at {ids.shape[1]} of {total} tokens", flush=True)
+            break
+    return ids
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", required=True)
-    ap.add_argument("--ids", required=True, help="int64 [R, T] .npy")
-    ap.add_argument("--positions", required=True, help="int64 [P] .npy: positions whose logits are kept")
+    ap.add_argument("--ids", required=True, help="int64 [R, T] .npy (written by --greedy-prompts)")
+    ap.add_argument("--positions", help="int64 [P] .npy: positions whose logits are kept")
+    ap.add_argument("--greedy-prompts", default="", help="JSON list of prompt token-id lists: make --ids instead (see above)")
+    ap.add_argument("--sequences", type=int, default=8, help="--greedy-prompts: the first this many prompts")
+    ap.add_argument("--total", type=int, default=2000, help="--greedy-prompts: sequence length")
+    ap.add_argument("--deadline", type=float, default=0.0, help="--greedy-prompts: stop decoding after this many seconds (0: never)")
     ap.add_argument("--modes", default="high", help="comma list of fork, high: one weight load, one pass per mode")
     ap.add_argument("--dtype", choices=["float64", "float32"], default="float64", help="precision of the high mode")
     ap.add_argument("--batch", type=int, default=8, help="sequences per forward")
@@ -649,9 +831,18 @@ def main() -> int:
     model = Inkling2(args.model_dir, mode="fork")
     print(f"MK_INK loaded in {time.time() - t0:.0f}s; memory per card GB "
           f"{[round(torch.cuda.memory_allocated(d) / 1e9, 1) for d in range(torch.cuda.device_count())]}", flush=True)
+    cfg = model.cfg
+    if args.greedy_prompts:
+        pool = json.loads(Path(args.greedy_prompts).read_text())[: args.sequences]
+        prompts = torch.tensor(pool, dtype=torch.long)
+        banned = eos_tokens(args.model_dir)
+        print(f"MK_INK greedy: {prompts.shape[0]} prompts of {prompts.shape[1]} tokens to {args.total}; banned EOS {banned}", flush=True)
+        ids = greedy(model, prompts, args.total, banned, args.deadline)
+        np.save(args.ids, ids.numpy().astype(np.int64))
+        print(f"MK_INK greedy done {tuple(ids.shape)} in {time.time() - t0:.0f}s", flush=True)
+        return 0
     ids = torch.from_numpy(np.load(args.ids)).long()
     pos = torch.from_numpy(np.load(args.positions)).long()
-    cfg = model.cfg
     if args.engine_hidden:
         hid = torch.from_numpy(np.load(args.engine_hidden))
         un = model.w["unembed.weight"]

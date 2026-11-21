@@ -47,6 +47,9 @@ workload="${COMPARE_WORKLOAD:-steady}"; rates="${COMPARE_RATES:-1 2}"
 echo "MK_ENV compare workload=$workload systems=${systems[*]} rounds=$rounds batches=$batches repeats=$repeats rates=$rates"
 # COMPARE_SG_FLAGS / COMPARE_VL_FLAGS: further serve flags of the two general engines (for example --quantization fp8).
 read -r -a sg_more <<< "${COMPARE_SG_FLAGS:-}"; read -r -a vl_more <<< "${COMPARE_VL_FLAGS:-}"
+# COMPARE_IMAGES=1 also offers vllm-spec (vLLM's flags plus COMPARE_VL_SPEC) and sglang-spec from the image (SGLang's
+# flags plus COMPARE_SG_SPEC, environment COMPARE_SG_SPEC_ENV); COMPARE_VLLM_WHEEL=1 serves vLLM PR #69028's wheel from
+# the store over the nightly image (scripts/mini/vllm_pr_build.sh) instead of COMPARE_VLLM_IMAGE.
 # COMPARE_SG_BASE replaces SGLang's base flags (default --enable-torch-compile, the fastest setting of 0.5.18; broken on
 # 0.5.23). System `sglang-spec` is the same SGLang with COMPARE_SG_SPEC added (its native speculative decoding).
 read -r -a sg_base <<< "${COMPARE_SG_BASE---enable-torch-compile}"; read -r -a sg_spec <<< "${COMPARE_SG_SPEC:-}"
@@ -71,14 +74,25 @@ eval_ready=0
 for system in "${systems[@]}"; do
   t=$(date +%s)
   case "$system" in
-    sglang-spec) [ -x "$MK_ROOT/venvs/sglang/bin/python" ] || { SGLANG_VERSION="${SGLANG_VERSION:-0.5.18}" bash baselines/sglang/install.sh > "$MK_ROOT/logs/install-sglang.log" 2>&1 || { tail -n 30 "$MK_ROOT/logs/install-sglang.log" | cut -c1-300; exit 12; }; grep MK_ENV "$MK_ROOT/logs/install-sglang.log"; } ;;
-    sglang) if [ "$images" = 1 ]; then img_pull sglang "$SGL_IMAGE" > "$MK_ROOT/logs/install-sglang.log" 2>&1 || { tail -n 20 "$MK_ROOT/logs/install-sglang.log"; exit 12; }
-              grep MK_ENV "$MK_ROOT/logs/install-sglang.log"; stage "prepare $system" ok $t; continue; fi
+    sglang-spec) if [ "$images" = 1 ]; then [ -x "$MK_ROOT/img/sglang/bin/bash" ] && [ "${sgl_ready:-0}" = 1 ] || { img_pull sglang "$SGL_IMAGE" > "$MK_ROOT/logs/install-sglang.log" 2>&1 || { tail -n 20 "$MK_ROOT/logs/install-sglang.log"; exit 12; }; grep MK_ENV "$MK_ROOT/logs/install-sglang.log"; }
+              sgl_ready=1; stage "prepare $system" ok $t; continue; fi
+                 [ -x "$MK_ROOT/venvs/sglang/bin/python" ] || { SGLANG_VERSION="${SGLANG_VERSION:-0.5.18}" bash baselines/sglang/install.sh > "$MK_ROOT/logs/install-sglang.log" 2>&1 || { tail -n 30 "$MK_ROOT/logs/install-sglang.log" | cut -c1-300; exit 12; }; grep MK_ENV "$MK_ROOT/logs/install-sglang.log"; } ;;
+    sglang) if [ "$images" = 1 ]; then [ -x "$MK_ROOT/img/sglang/bin/bash" ] && [ "${sgl_ready:-0}" = 1 ] || { img_pull sglang "$SGL_IMAGE" > "$MK_ROOT/logs/install-sglang.log" 2>&1 || { tail -n 20 "$MK_ROOT/logs/install-sglang.log"; exit 12; }; grep MK_ENV "$MK_ROOT/logs/install-sglang.log"; }
+              sgl_ready=1; stage "prepare $system" ok $t; continue; fi
             SGLANG_VERSION="${SGLANG_VERSION:-0.5.18}" bash baselines/sglang/install.sh > "$MK_ROOT/logs/install-sglang.log" 2>&1 \
               || { tail -n 30 "$MK_ROOT/logs/install-sglang.log" | cut -c1-300; stage "install sglang" failed; exit 12; }
             grep MK_ENV "$MK_ROOT/logs/install-sglang.log" ;;
-    vllm)   if [ "$images" = 1 ]; then img_pull vllm "$VLLM_IMAGE" > "$MK_ROOT/logs/install-vllm.log" 2>&1 || { tail -n 20 "$MK_ROOT/logs/install-vllm.log"; exit 12; }
-              grep MK_ENV "$MK_ROOT/logs/install-vllm.log"; stage "prepare $system" ok $t; continue; fi
+    vllm|vllm-spec) if [ "$images" = 1 ]; then
+              if [ -x "$MK_ROOT/img/vllm/bin/bash" ] && [ "${vllm_ready:-0}" = 1 ]; then stage "prepare $system" ok $t; continue; fi
+              if [ "${COMPARE_VLLM_WHEEL:-0}" = 1 ]; then  # vLLM PR #69028's wheel (store) over the nightly image
+                VLLM_PR_THEN_MEASURE=0 bash scripts/mini/vllm_pr_build.sh > "$MK_ROOT/logs/install-vllm.log" 2>&1
+                grep -E "MK_ENV|MK_STAGE" "$MK_ROOT/logs/install-vllm.log" | cut -c1-300
+                [ -x "$MK_ROOT/img/vllm/bin/bash" ] || { tail -n 20 "$MK_ROOT/logs/install-vllm.log"; exit 12; }
+                export IMG_EXTRA_ENV="CUDA_HOME=/usr/local/cuda"   # as vllm_pr_build.sh's own measurement: FlashInfer JIT wants nvcc
+              else img_pull vllm "$VLLM_IMAGE" > "$MK_ROOT/logs/install-vllm.log" 2>&1 || { tail -n 20 "$MK_ROOT/logs/install-vllm.log"; exit 12; }
+                grep MK_ENV "$MK_ROOT/logs/install-vllm.log"; fi
+              vllm_ready=1; stage "prepare $system" ok $t; continue; fi
+            [ "$system" = vllm ] || { echo "vllm-spec needs COMPARE_IMAGES=1"; exit 18; }
             bash baselines/vllm/install.sh > "$MK_ROOT/logs/install-vllm.log" 2>&1 \
               || { tail -n 30 "$MK_ROOT/logs/install-vllm.log" | cut -c1-300; stage "install vllm" failed; exit 12; }
             grep MK_ENV "$MK_ROOT/logs/install-vllm.log" ;;
@@ -107,13 +121,22 @@ echo "MK_ENV $picked"; eval "$picked"
 server=""; worker=""
 start_server() {  # $1 = system
   local tag="${1//:/-}"
+  # another job on the same host (shared network) may already serve this port: its server would answer our client
+  if curl -s -m 3 -o /dev/null "http://127.0.0.1:$MK_PORT/v1/models"; then
+    echo "MK_ENV port $MK_PORT is already served by another process on this host: no measurement"; return 1
+  fi
   case "$1" in
     sglang) if [ "$images" = 1 ]; then SGL_IMAGE_ENV="${COMPARE_SG_ENV:-}" taskset -c "$SERVER_CPUS" bash baselines/sglang/serve_image.sh "$model" "${sg_flags[@]}" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$!
             else taskset -c "$SERVER_CPUS" bash baselines/sglang/serve.sh "$model" "${sg_flags[@]}" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$!; fi ;;
     vllm)   if [ "$images" = 1 ]; then taskset -c "$SERVER_CPUS" bash baselines/vllm/serve_image.sh "$model" "${vl_flags[@]}" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$!
             else taskset -c "$SERVER_CPUS" bash baselines/vllm/serve.sh "$model" "${vl_flags[@]}" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$!; fi ;;
     cohere) taskset -c "$SERVER_CPUS" bash baselines/cohere/serve.sh "$model" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$! ;;
-    sglang-spec) taskset -c "$SERVER_CPUS" bash baselines/sglang/serve.sh "$model" "${sg_flags[@]}" "${sg_spec[@]}" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$! ;;
+    sglang-spec) if [ "$images" = 1 ]; then SGL_IMAGE_ENV="${COMPARE_SG_SPEC_ENV:-${COMPARE_SG_ENV:-}}" taskset -c "$SERVER_CPUS" bash baselines/sglang/serve_image.sh "$model" "${sg_flags[@]}" "${sg_spec[@]}" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$!
+                 else taskset -c "$SERVER_CPUS" bash baselines/sglang/serve.sh "$model" "${sg_flags[@]}" "${sg_spec[@]}" > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$!; fi ;;
+    vllm-spec) # COMPARE_VL_SPEC (e.g. --speculative-config {...}): words with a brace are single-quoted, since
+               # serve_image.sh joins its arguments into one shell string (as scripts/mini/mtp_baseline.sh)
+               local q; q="$(python3 -c 'import sys; print(" ".join(chr(39) + a + chr(39) if "{" in a else a for a in sys.argv[1].split()))' "${vl_flags[*]} ${COMPARE_VL_SPEC:-}")"
+               taskset -c "$SERVER_CPUS" bash baselines/vllm/serve_image.sh "$model" $q > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$! ;;
     mkserve:*) taskset -c "$SERVER_CPUS" "$spy" -m mkserve serve "${MK_MODEL:-Qwen/Qwen3-8B}" --engine "${1#mkserve:}" --mode step --model-dir "$model" \
                  --port "$MK_PORT" --workdir "$MK_ROOT/mkserve" ${MKSERVE_CARD:+--card "$MKSERVE_CARD"} > "$MK_ROOT/logs/server-$tag.log" 2>&1 & server=$! ;;
     ours:*) local name="${1#ours:}"; local ws="$MK_ROOT/compare/$name" sock="$MK_ROOT/run/ours-$name.sock"; rm -f "$sock"

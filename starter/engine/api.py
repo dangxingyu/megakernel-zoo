@@ -9,14 +9,21 @@ layer operation, the host in every step). Everything here is yours to replace; o
 """
 
 import torch
-from transformers import AutoModelForCausalLM
+import transformers
 
 
 class Engine:
     def __init__(self, model_dir: str, max_batch: int, max_context: int):
         # straight onto the card (a checkpoint larger than the pod's host memory loads too); MXFP4 experts (gpt-oss)
-        # stay in their format when transformers' MXFP4 kernels are installed
-        self.model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16, device_map={"": "cuda"}).eval()
+        # stay in their format when transformers' MXFP4 kernels are installed. A family with no text-only class for
+        # its checkpoint's configuration (Inkling-2-Mini, `inkling2_loop`) loads as its image-text model, which is
+        # then only ever given token ids (the vision tower just sits in memory)
+        try:
+            self.model = transformers.AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16, device_map={"": "cuda"}).eval()
+        except ValueError as error:
+            if "Unrecognized configuration class" not in str(error):
+                raise
+            self.model = transformers.AutoModelForImageTextToText.from_pretrained(model_dir, dtype=torch.bfloat16, device_map={"": "cuda"}).eval()
         self.past = None
 
     def reset(self) -> None:

@@ -6,6 +6,7 @@
 # MK_REF_DTYPE (auto | float64 | float32) and MK_REF_CARDS (spread the reference over N cards) go to eval/make_reference.py; MK_REF_REMAKE=1 makes the reference
 # again although the store has one; MK_SELFTEST_MODES ("quick full" by default; "none": only the reference) picks
 # the evaluations. A reference is only token ids and logits: it can be made on another card than the run's.
+# MK_REF_IMPL=inkling2: the reference logits from eval/inkling2_ref.py's high mode (Inkling-2-Mini; the BF16 path stays Hugging Face's).
 # MK_SELFTEST_WS (a directory with engine/, default starter) is the engine evaluated; MK_SELFTEST_ARGS are passed on to
 # eval/kernel_eval.py; MK_HTTP_CHECK="TOKENS REPEATS" runs only eval/http_stage.py on that engine (a quick look at the shim).
 set -uo pipefail
@@ -20,7 +21,7 @@ set +e +u; set -o pipefail
 t=$(date +%s)
 py="$MK_ROOT/venvs/eval/bin/python"
 extra_pip=(); case "$(echo "$MK_MODEL" | tr 'A-Z' 'a-z')" in *gpt-oss*) extra_pip=(triton "kernels>=0.18.2,<0.19") ;; esac   # MXFP4 experts in their own format (else transformers dequantizes them to BF16)
-uv venv -q "$MK_ROOT/venvs/eval" --python python3.12 && uv pip install -q --python "$py" torch transformers accelerate numpy tokenizers safetensors nvidia-ml-py "${extra_pip[@]}" --torch-backend=auto
+uv venv -q "$MK_ROOT/venvs/eval" --python python3.12 && uv pip install -q --python "$py" torch "$(mk_tf_spec "$MK_MODEL")" accelerate numpy tokenizers safetensors nvidia-ml-py "${extra_pip[@]}" --torch-backend=auto
 "$py" -c 'import torch, transformers; print(f"MK_ENV eval torch={torch.__version__} cuda={torch.version.cuda} transformers={transformers.__version__} gpu={torch.cuda.get_device_name(0)}")' || exit 12
 stage "eval venv" ok $t
 
@@ -35,7 +36,7 @@ if [ -z "${MK_REF_REMAKE:-}" ] && store has "$key" > /dev/null 2>&1; then
   store get "$key" "$ref" > "$MK_ROOT/logs/ref-get.log" 2>&1 && stage "reference from store" ok $t
 else
   ids=(); [ -f "eval/refs/$name/ids.npy" ] && [ -z "${MK_REF_OWN_SEQUENCES:-}" ] && ids=(--ids "eval/refs/$name/ids.npy")   # the sequences of our own runs
-  "$py" eval/make_reference.py --model-dir "$model" --out "$ref" --dtype "${MK_REF_DTYPE:-auto}" --cards "${MK_REF_CARDS:-1}" "${ids[@]}" 2>&1 | grep -E "MK_REF|Error|error|Traceback" | cut -c1-1200
+  "$py" eval/make_reference.py --model-dir "$model" --out "$ref" --dtype "${MK_REF_DTYPE:-auto}" --cards "${MK_REF_CARDS:-1}" ${MK_REF_IMPL:+--ref-impl "$MK_REF_IMPL"} "${ids[@]}" 2>&1 | grep -E "MK_REF|Error|error|Traceback" | cut -c1-1200
   [ -f "$ref/meta.json" ] || { stage "reference" failed $t; exit 13; }
   store put "$ref" "$key" "$MK_S3" 2>&1 | tail -n 1 | cut -c1-200
   stage "reference made" ok $t
@@ -50,7 +51,7 @@ if [ "${MK_HIDDEN:-1}" != 0 ]; then
     store get "$hkey" "$hidden" > "$MK_ROOT/logs/ref-hidden-get.log" 2>&1 && stage "hidden reference from store" ok $t
   else
     MK_NATURAL_SEED="${MK_HIDDEN_SEED:?MK_HIDDEN_SEED must be set to make a hidden reference}" "$py" eval/natural_prompts.py "$model" "$MK_ROOT/run/hidden-prompts.json" 64 24 2>&1 | grep MK_ENV
-    "$py" eval/make_reference.py --model-dir "$model" --out "$hidden" --dtype "${MK_REF_DTYPE:-auto}" --cards "${MK_REF_CARDS:-1}" \
+    "$py" eval/make_reference.py --model-dir "$model" --out "$hidden" --dtype "${MK_REF_DTYPE:-auto}" --cards "${MK_REF_CARDS:-1}" ${MK_REF_IMPL:+--ref-impl "$MK_REF_IMPL"} \
       --natural "$MK_ROOT/run/hidden-prompts.json" --sequences 8 --prompt-tokens 64 --check-tokens 192 \
       --long-tokens "${MK_HIDDEN_LONG:-2000}" --long-every 16 2>&1 | grep -E "MK_REF|Error|error|Traceback" | cut -c1-600
     rm -f "$MK_ROOT/run/hidden-prompts.json"

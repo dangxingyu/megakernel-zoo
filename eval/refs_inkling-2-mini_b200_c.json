@@ -1,0 +1,56 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 692,
+  "note": "5.54 GB read per step at batch 1 at 8000 GB/s (derived figure for this card, not measured): the layer weights of 48 layer applications (layers 6-17 three times, as the loop runs them), 8 of 128 experts per application in the checkpoint's NVFP4 / MXFP8 bytes incl. scales, the BF16 unembedding, K/V of the 48 cache layers at context 192 (eval/modelinfo.py); at batch 8 between 5.82 GB (all route alike) and 18.69 GB (all apart): 727-2336 us (one model pass; a verification pass over several positions reads the same weights once)"
+ },
+ {
+  "name": "1.10x the fastest general engine with speculative decoding",
+  "metric": "http_step_us_b1",
+  "value": 1404,
+  "note": "1544 / 1.10 (vLLM (inkling-2-mini image) + DSpark); at batch 8: 2465 us per token per stream (2711 / 1.10, vLLM (inkling-2-mini image) + DSpark). Token-based rate"
+ },
+ {
+  "name": "vLLM (inkling-2-mini image) + DSpark (general engine, track C)",
+  "metric": "http_step_us_b1",
+  "value": 1544,
+  "note": "token-based, same client and card type, <job>; batch 8: 2711 us; natural text 871 / 1851 us; acceptance (tokens per verification step) {'synth_b1': 3.48, 'synth_b8': 2.71, 'nat_b1': 5.21, 'nat_b8': 4.34, 'chat_b1': 4.12, 'chat_b8': 3.86}; vllm/vllm-openai:inkling-2-mini (arm64 sha256:ecdf0ccc663d86332459f5a50a38c30861a5079bc3924aa08fdc657ef10dd648); --max-model-len 262144 --speculative-config {\"method\":\"dspark\",\"num_speculative_tokens\":7,\"draft_sample_method\":\"probabilistic\"} (recipe vllm-project/vllm#69027 single_node_tp TP1 with its spec_decoding feature)"
+ },
+ {
+  "name": "vLLM (PR #69028 source build) + DSpark (general engine, track C)",
+  "metric": "http_step_us_b1",
+  "value": 1552,
+  "note": "token-based, same client and card type, <job>; batch 8: 2714 us; natural text 875 / 1851 us; acceptance (tokens per verification step) {'synth_b1': 3.48, 'synth_b8': 2.71, 'nat_b1': 5.21, 'nat_b8': 4.34, 'chat_b1': 4.12, 'chat_b8': 3.86}; vLLM PR #69028 @ b3c0ff75 built from source (store wheels/vllm-pr69028-b3c0ff75424e) over the nightly image; --max-model-len 262144 --speculative-config {\"method\":\"dspark\",\"num_speculative_tokens\":7,\"draft_sample_method\":\"probabilistic\"} (recipe vllm-project/vllm#69027 single_node_tp TP1 with its spec_decoding feature)"
+ },
+ {
+  "name": "SGLang (PR #51926 image, GB300-style settings) + DSpark (general engine, track C)",
+  "metric": "http_step_us_b1",
+  "value": 2347,
+  "note": "token-based, same client and card type, <job>; batch 8: 3289 us; natural text 1157 / 2221 us; acceptance (tokens per verification step) {'synth_b1': 2.81, 'synth_b8': 2.73, 'nat_b1': 4.36, 'nat_b8': 4.35, 'chat_b1': 3.73, 'chat_b8': 3.92}; lmsysorg/sglang:inkling-2-mini = PR #51926 (arm64 sha256:bc811ac7ac68c6fca116a49750baca817b8613a30abface8a347682b55d132e3); --tp 1 --ep 1 --attention-backend fa4 --dtype bfloat16 --page-size 128 --speculative-algorithm DSPARK (the cookbook's GB300 DSpark recipe's speculative settings: default number of draft tokens, no SGLANG_OPT_* environment; at TP1 and without --bf16-gemm-backend torch, which was slower at TP1 in track A)"
+ },
+ {
+  "name": "SGLang (PR #51926 image) + DSpark (general engine, track C)",
+  "metric": "http_step_us_b1",
+  "value": 2828,
+  "note": "token-based, same client and card type, <job>; batch 8: 3339 us; natural text 1122 / 2235 us; acceptance (tokens per verification step) {'synth_b1': 2.5, 'synth_b8': 2.66, 'nat_b1': 4.42, 'nat_b8': 4.09, 'chat_b1': 4.29, 'chat_b8': 3.9}; lmsysorg/sglang:inkling-2-mini = PR #51926 (arm64 sha256:bc811ac7ac68c6fca116a49750baca817b8613a30abface8a347682b55d132e3); --tp 1 --ep 1 --attention-backend fa4 --dtype bfloat16 --page-size 128 --speculative-algorithm DSPARK --speculative-num-draft-tokens 8, env SGLANG_OPT_INKLING2_VERIFY_REL_BIAS_KERNEL=1 SGLANG_OPT_DSV41_DSPARK_MID_FOLD=1 SGLANG_OPT_DSV41_DSPARK_PREPARE_INPUTS_ONCE=1 SGLANG_OPT_DSV41_DSPARK_SKIP_PREFILLED_INPUTS=1 (cookbook sgl-project/sglang#51927, its single-GPU DSpark recipe minus --max-running-requests 4, which is for 32-96 GB cards)"
+ },
+ {
+  "name": "vLLM (inkling-2-mini image) without speculative decoding (track A line, for scale)",
+  "metric": "http_step_us_b1",
+  "value": 3694,
+  "note": "same jobs (<job>), same rate; batch 8: 5074 us; natural text 3694 / 5349 us"
+ },
+ {
+  "name": "SGLang (PR #51926 image) without speculative decoding (track A line, for scale)",
+  "metric": "http_step_us_b1",
+  "value": 4389,
+  "note": "same jobs (<job>), same rate; batch 8: 5949 us; natural text 4391 / 6466 us"
+ },
+ {
+  "name": "vLLM (PR #69028 source build) without speculative decoding (track A line, for scale)",
+  "metric": "http_step_us_b1",
+  "value": 3720,
+  "note": "same jobs (<job>), same rate; batch 8: 5117 us; natural text 3721 / 5394 us"
+ }
+]

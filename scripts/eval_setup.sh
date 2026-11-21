@@ -15,7 +15,7 @@ py="$MK_ROOT/venvs/eval/bin/python"
 if [ ! -x "$py" ]; then
   uv venv -q "$MK_ROOT/venvs/eval" --python python3.12
   extra_pip=(); case "$(echo "$MK_MODEL" | tr 'A-Z' 'a-z')" in *gpt-oss*) extra_pip=(triton "kernels>=0.18.2,<0.19") ;; esac   # MXFP4 experts in their own format
-  uv pip install -q --python "$py" torch transformers accelerate numpy tokenizers safetensors nvidia-ml-py pytest "${extra_pip[@]}" --torch-backend=auto
+  uv pip install -q --python "$py" torch "$(mk_tf_spec "$MK_MODEL")" accelerate numpy tokenizers safetensors nvidia-ml-py pytest "${extra_pip[@]}" --torch-backend=auto
 fi
 # the evaluation's HTTP stage runs the workload client and the front end under the tools Python (aiohttp, tokenizers, NVML)
 uv pip install -q --python "$MK_TOOLS_PY" nvidia-ml-py
@@ -30,7 +30,11 @@ hidden="$MK_ROOT/ref/$name-hidden"   # suite v2: kept out of the run's workspace
 [ -f "$hidden/meta.json" ] || { echo "MK_WARN no hidden reference for $MK_MODEL: the hidden gate is skipped"; hidden=""; }
 short="$(echo "${MK_MODEL##*/}" | tr 'A-Z' 'a-z')"
 hw="$(mk_hw)"
+# MK_TRACK=c (exact draft-and-verify, speculative engines): kernel_eval.py's track-C rules, and the track-C reference
+# lines (the general engines with their own speculative decoding) from eval/baselines_<model>_<card>_c.json
+track="$(echo "${MK_TRACK:-a}" | tr 'A-Z' 'a-z')"
 baselines="$MK_REPO/eval/baselines_${short}_${hw}.json"
+[ "$track" = c ] && baselines="$MK_REPO/eval/baselines_${short}_${hw}_c.json"
 [ -f "$baselines" ] || echo "MK_WARN no $baselines: the result will have no speedup block"
 # The production trace of the online evaluation (Mooncake FAST'25, tool & agent), pinned to a commit.
 trace="$MK_ROOT/ref/toolagent_trace.jsonl"
@@ -38,7 +42,7 @@ trace="$MK_ROOT/ref/toolagent_trace.jsonl"
 [ "$(sha256sum "$trace" | cut -c1-16)" = 48a2db1a13d3bc05 ] || { echo "trace checksum mismatch"; exit 4; }
 cat > "$MK_ROOT/eval_env.json" <<JSON
 {"env": {"MK_PY": "$py", "PATH_PREPEND": "$MK_ROOT/venvs/eval/bin", "MK_TRACE": "$trace", "MK_HW": "$hw", "MK_MODEL": "$MK_MODEL"},
- "private": {"python": "$py", "tools_python": "$MK_TOOLS_PY", "ref": "$ref", "ref_hidden": "$hidden", "baselines": "$baselines", "trace": "$trace", "hw": "$hw",
+ "private": {"python": "$py", "tools_python": "$MK_TOOLS_PY", "ref": "$ref", "ref_hidden": "$hidden", "baselines": "$baselines", "trace": "$trace", "hw": "$hw", "track": "$track",
              "online_baselines": "$MK_REPO/eval/baselines_online_${short}_${hw}.json"}}
 JSON
 echo "MK_ENV eval_env $(tr -d '\n' < "$MK_ROOT/eval_env.json")"

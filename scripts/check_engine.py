@@ -6,8 +6,9 @@
 
 What it checks:
   layout     engine/api.py, engine/build.sh and engine/TRACK exist; no build products or weights are committed
-  TRACK      the first word is A or B; later words name track-B storage options ("B W12U L0T", "A W12"), which make
-             the engine a track-B engine
+  TRACK      the first word is A, B or C; later words name track-B storage options ("B W12U L0T", "A W12"), which make
+             a track-A engine a track-B engine; C is exact speculative decoding (draft and verify; its tokens equal its
+             own step-by-step greedy tokens), whatever options follow
   contract   engine/api.py defines class Engine(model_dir, max_batch, max_context) with reset() and step()
              (offline engines) or submit() and poll() (online engines, the name starts with "online")
   timed path engine/api.py imports no general inference engine (vllm, sglang, ...) and no transformers model code
@@ -72,10 +73,10 @@ def check(path: Path, registry: dict) -> list[tuple[bool, str]]:
     if (eng / "TRACK").is_file():
         words = (eng / "TRACK").read_text().split()
         first = words[0].upper() if words else None
-        ok(first in ("A", "B"), f"engine/TRACK starts with A or B (found {' '.join(words) or 'nothing'})")
+        ok(first in ("A", "B", "C"), f"engine/TRACK starts with A, B or C (found {' '.join(words) or 'nothing'})")
         # option words after the first one (W12, W12U, L0T, ...) are track-B storage formats: "A W12" is the one-token
-        # data flow with 12-bit weights, which the registry reports as track B
-        track = "B" if first == "B" or len(words) > 1 else first
+        # data flow with 12-bit weights, which the registry reports as track B; track C (speculative decoding) stays C
+        track = first if first == "C" else "B" if first == "B" or len(words) > 1 else first
 
     online = path.name.startswith("online")
     if (eng / "api.py").is_file():

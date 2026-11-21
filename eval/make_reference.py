@@ -98,6 +98,9 @@ def main() -> int:
     parser.add_argument("--natural", default=None, help="JSON list of prompt token-id lists (eval/natural_prompts.py): start the sequences "
                         "from these prompts (prose, code, word problems) instead of eval/prompts.py's word lists; --prompt-tokens is their length")
     parser.add_argument("--dtype", choices=["auto", "float64", "float32"], default="auto")
+    parser.add_argument("--ref-impl", choices=["hf", "inkling2"], default="hf", help="who computes the reference logits: the Hugging "
+                        "Face model in --dtype (default), or eval/inkling2_ref.py's high mode (Inkling-2 / Inkling-2-Mini: its weights stay in the "
+                        "checkpoint's formats and are dequantized exactly per expert, so float64 fits one card; the BF16 path is still Hugging Face's)")
     parser.add_argument("--cards", type=int, default=1, help="spread the reference model over this many cards (layer after layer) when "
                         "it fits no single card; the BF16 path always runs on card 0 alone")
     args = parser.parse_args()
@@ -155,17 +158,28 @@ def main() -> int:
     print(f"MK_REF bf16 done in {time.time() - t0:.0f}s ids {tuple(ids.shape)}", flush=True)
 
     t0 = time.time()
-    model64 = hf_text.load(args.model_dir, getattr(torch, ref_dtype), cards=args.cards)
-    loaded64 = hf_text.describe(model64)
+    if args.ref_impl == "inkling2":
+        import inkling2_ref
+        model64 = inkling2_ref.Inkling2(args.model_dir, devices=[torch.device("cuda", i) for i in range(args.cards)], mode="high", dtype=getattr(torch, ref_dtype))
+        model64.p = inkling2_ref.Prec("high", getattr(torch, ref_dtype))
+        params = sum(t.numel() for d in (model64.w, *model64.layers, *model64.experts) for t in d.values())
+        loaded64 = {"class": "eval/inkling2_ref.py Inkling2 (mode high, %s; act_quant=%s)" % (ref_dtype, model64.act_quant), "parameters": params,
+                    "parameter_dtypes": {"stored formats, dequantized exactly per use": params}, "spec": inkling2_ref.SPEC_LOOP if model64.cfg.loop else inkling2_ref.SPEC}
+        forward = lambda x: model64.logits(model64.hidden(x))  # noqa: E731
+    else:
+        model64 = hf_text.load(args.model_dir, getattr(torch, ref_dtype), cards=args.cards)
+        loaded64 = hf_text.describe(model64)
+        forward = lambda x: model64(input_ids=x).logits  # noqa: E731
     print("MK_REF reference model " + json.dumps({**loaded64, "gpu_allocated_gb": [torch.cuda.memory_allocated(i) / 1e9 for i in range(args.cards)]}), flush=True)
     logits64 = torch.empty(R, T, bf16_logits.shape[-1], dtype=torch.float32)
     long64 = torch.empty(R, len(long_positions), bf16_logits.shape[-1], dtype=torch.float32)
     with torch.no_grad():
         for r in range(R):
-            whole = model64(input_ids=ids[r:r + 1]).logits[0]
+            whole = forward(ids[r:r + 1])[0]
             logits64[r] = whole[:T].float().cpu()
             long64[r] = whole[long_positions.to(whole.device)].float().cpu()
             del whole
+            print(f"MK_REF {ref_dtype} sequence {r + 1} of {R} at {time.time() - t0:.0f}s", flush=True)
     del model64
     torch.cuda.empty_cache()
     print(f"MK_REF {ref_dtype} done in {time.time() - t0:.0f}s", flush=True)
@@ -184,7 +198,7 @@ def main() -> int:
     flat = err.flatten().sort().values
     meta = {"model_dir": args.model_dir, "sequences": R, "prompt_tokens": P, "check_tokens": T, "long_tokens": TL,
             "vocab": int(logits64.shape[-1]), "seed": args.seed,
-            "reference_dtype": ref_dtype, "reference_sizing": sizing, "hf_class": loaded["class"], "hf_bf16_parameter_dtypes": loaded["parameter_dtypes"],
+            "reference_dtype": ref_dtype, "reference_sizing": sizing, "reference_impl": args.ref_impl if args.ref_impl == "hf" else loaded64["class"], "hf_class": loaded["class"], "hf_bf16_parameter_dtypes": loaded["parameter_dtypes"],
             "reference_parameter_dtypes": loaded64["parameter_dtypes"], "banned_tokens": banned,
             "hf_bf16_rel_l2": {"median": flat[len(flat) // 2].item(), "p99": flat[int(0.99 * len(flat))].item(), "max": flat[-1].item()},
             "hf_bf16_top1_agreement": agree,

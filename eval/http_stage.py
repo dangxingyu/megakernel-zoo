@@ -86,6 +86,15 @@ def stream_ids(port: int, ids: list[int], n: int, timeout: float) -> list[int]:
     return out
 
 
+def burst_stats(port: int, reset: bool = False) -> dict:
+    """The front end's tokens-per-engine-event counter (eval/serve_engine.py /mk/bursts); {} if unavailable."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/mk/bursts{'?reset=1' if reset else ''}", timeout=5) as resp:
+            return json.loads(resp.read())
+    except (OSError, ValueError):
+        return {}
+
+
 def check_tokens(port: int, prompts: list[list[int]], expect: list[list[int]], timeout: float) -> dict:
     got: list = [None] * len(prompts)
     errors: list[str] = []
@@ -122,7 +131,12 @@ def check_tokens(port: int, prompts: list[list[int]], expect: list[list[int]], t
 def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch: Path, server_cpus: str | None = None,
             client_cpus: str | None = None, batches=(1, 8), max_tokens: int = 1024, repeats: int = 3, warmup: int = 1,
             prompt_tokens: int = 64, startup_s: float = 1800.0, run_s: float = 3600.0, read_s: float = 300.0, prompts: list | None = None,
-            expect: list | None = None, max_batch: int = 8, max_context: int = 2048) -> dict:
+            expect: list | None = None, max_batch: int = 8, max_context: int = 2048, rate: str = "chunks",
+            natural_prompts: str | None = None) -> dict:
+    """rate "chunks": time per step = 1e6 * B / decode_tok_s (one SSE chunk per token, tracks A and B); "tokens" (track
+    C): 1e6 * B / decode_tok_s_by_tokens, every chunk weighted by the tokens it carries (eval/client.py chunk_weights;
+    the same number when every chunk carries one token). natural_prompts: a prompts file (eval/natural_prompts.py)
+    measured as a second workload, reported as natural_b1 / natural_b8."""
     scratch.mkdir(parents=True, exist_ok=True)
     sock, port = scratch / "http.sock", free_port()
     sock.unlink(missing_ok=True)
@@ -167,12 +181,15 @@ def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch
                 out["error"] = "the server died or hung during the token check (the check's eight prompts sent at once)"
                 out["engine_log"], out["frontend_log"] = tail(logs["engine"]), tail(logs["frontend"])
                 return out
-        for batch in batches:
-            result_path = scratch / f"http-b{batch}.json"
+        out["rate"] = rate
+        workloads = [("", None)] + ([("natural_", natural_prompts)] if natural_prompts else [])
+        for (wname, pfile), batch in [(w, b) for w in workloads for b in batches]:
+            result_path = scratch / f"http-{wname}b{batch}.json"
             cmd = pin(client_cpus) + [tools_py, str(HERE / "client.py"), "steady", "--base", f"http://127.0.0.1:{port}", "--model", "m", "--model-dir", model_dir,
                                       "--batch", str(batch), "--prompt-tokens", str(prompt_tokens), "--max-tokens", str(max_tokens), "--repeats", str(repeats),
                                       "--warmup", str(warmup), "--nvml", "--read-timeout", str(read_s), "--extra-body", '{"ignore_eos": true}',
-                                      "--label", "eval-http", "--out", str(result_path)]
+                                      "--label", "eval-http", "--out", str(result_path)] + (["--prompts-file", pfile] if pfile else [])
+            burst_stats(port, reset=True)
             try:
                 done = subprocess.run(cmd, capture_output=True, text=True, timeout=run_s)
                 rc, text = done.returncode, (done.stdout + done.stderr)[-1500:]
@@ -182,14 +199,20 @@ def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch
                 result = json.loads(result_path.read_text())
             except (OSError, ValueError):
                 result = None
-            tok = (result or {}).get("decode_tok_s") or {}
+            tok = (result or {}).get("decode_tok_s_by_tokens" if rate == "tokens" else "decode_tok_s") or {}
+            key = f"{wname}b{batch}"
             if not result or not tok.get("median") or not result.get("clean_repeats"):
-                out[f"b{batch}"] = {"error": f"no clean measurement (client rc {rc})", "client_tail": text}
-                out["error"] = f"no clean HTTP measurement at batch {batch} (a server that sends nothing for {read_s:.0f} s counts as hung)"
+                out[key] = {"error": f"no clean measurement (client rc {rc})", "client_tail": text}
+                out["error"] = f"no clean HTTP measurement at batch {batch}{' (natural text)' if wname else ''} (a server that sends nothing for {read_s:.0f} s counts as hung)"
                 out["engine_log"], out["frontend_log"] = tail(logs["engine"]), tail(logs["frontend"])
                 return out
-            out[f"b{batch}"] = {"step_us": 1e6 * batch / tok["median"], "step_us_min": 1e6 * batch / tok["max"], "step_us_max": 1e6 * batch / tok["min"],
-                                "decode_tok_s": tok, "e2e_tok_s": result.get("e2e_tok_s"), "repeats": result.get("repeats"),
+            chunk_tok = result.get("decode_tok_s") or {}
+            out[key] = {"step_us": 1e6 * batch / tok["median"], "step_us_min": 1e6 * batch / tok["max"], "step_us_max": 1e6 * batch / tok["min"],
+                                "rate": rate, "decode_tok_s": tok, "decode_tok_s_chunks": chunk_tok,
+                                "step_us_chunks": 1e6 * batch / chunk_tok["median"] if chunk_tok.get("median") else None,
+                                "tokens_per_chunk": result.get("tokens_per_chunk"), "engine_tokens_per_event": burst_stats(port).get("tokens_per_event"),
+                                "engine_events": burst_stats(port).get("hist"),
+                                "e2e_tok_s": result.get("e2e_tok_s"), "repeats": result.get("repeats"),
                                 "clean_repeats": result.get("clean_repeats"), "tokens_per_stream": result.get("tokens_per_stream"),
                                 "one_chunk_per_token": result.get("one_chunk_per_token"), "tpot_p50_ms": result.get("tpot_p50_ms"),
                                 "tpot_p99_ms": result.get("tpot_p99_ms"), "ttft_median_s": result.get("ttft_median_s"),
@@ -199,7 +222,7 @@ def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch
                 out["error"] = f"the server died during the batch-{batch} measurement"
                 out["engine_log"] = tail(logs["engine"])
                 return out
-        out["ok"] = all(f"b{b}" in out and "step_us" in out[f"b{b}"] for b in batches) and (not (prompts and expect) or out["tokens"]["pass"])
+        out["ok"] = all(f"{w}b{b}" in out and "step_us" in out[f"{w}b{b}"] for w, _ in workloads for b in batches) and (not (prompts and expect) or out["tokens"]["pass"])
         return out
     finally:
         kill(frontend)

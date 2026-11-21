@@ -6,7 +6,7 @@
     mkserve pull Qwen/Qwen3-8B        build the engine and fetch the weights ahead of time
     mkserve chat                      chat with a running server in the terminal
     mkserve bench [--url URL]         time any OpenAI-compatible server on the project's workload
-    mkserve serve Qwen/Qwen3-8B [--engine NAME | --track A|B] [--port 8000] [--host 127.0.0.1]
+    mkserve serve Qwen/Qwen3-8B [--engine NAME | --track A|B|C] [--port 8000] [--host 127.0.0.1]
                                           [--model-dir DIR] [--mode auto|native|step] [--workdir DIR]
                                           [--served-model-name NAME] [--api-key KEY]
 
@@ -155,8 +155,9 @@ def cmd_serve(args) -> int:
     sock = Path(tempfile.mkdtemp(prefix="mkserve-")) / "engine.sock"
     common = ["--model-dir", str(model_dir), "--sock", str(sock)]
     # An offline engine is driven step by step (its own request path batches only equal prompt lengths and was built
-    # for the benchmark's short prompts); an online engine through its own submit/poll.
-    mode = args.mode if args.mode != "auto" else ("native" if eng["kind"] == "online" else "step")
+    # for the benchmark's short prompts); an online engine through its own submit/poll, and so is a track-C engine,
+    # whose drafting and verifying happen only there (greedy; --mode step serves it one token per step, with sampling).
+    mode = args.mode if args.mode != "auto" else ("native" if eng["kind"] == "online" or eng["track"] == "C" else "step")
     worker = subprocess.Popen([sys.executable, "-m", "mkserve.server", "engine", "--workspace", str(work), "--mode", mode,
                                "--max-batch", str(args.max_batch or eng["max_batch"]), "--max-context", str(args.max_context or eng["max_context"]), *common],
                               cwd=HERE.parent, env=dict(os.environ, PYTHONPATH=f"{HERE.parent}:{os.environ.get('PYTHONPATH', '')}"))
@@ -215,7 +216,8 @@ def main(argv=None) -> int:
     for q in (pl, s):
         q.add_argument("model", help="the model id, e.g. Qwen/Qwen3-8B")
         q.add_argument("--engine", default=None, help="an engine name from `list` (default: the model's default engine)")
-        q.add_argument("--track", default=None, choices=["A", "B", "a", "b"], help="A: the general engines' number formats; B: lossless model-specific formats")
+        q.add_argument("--track", default=None, choices=["A", "B", "C", "a", "b", "c"],
+                       help="A: the general engines' number formats; B: lossless model-specific formats; C: exact speculative decoding (greedy, --mode native)")
         q.add_argument("--card", default=None, help="registry key of the card (default: detected with nvidia-smi)")
         q.add_argument("--model-dir", default=None, help="a local Hugging Face snapshot of the model (default: download)")
         q.add_argument("--workdir", default=None, help="where engines are unpacked and built (default ~/.cache/mkserve)")

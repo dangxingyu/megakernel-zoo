@@ -1,0 +1,188 @@
+{
+ "model": "thinkingmachines/Inkling-2-Mini",
+ "gpu": "NVIDIA B200 (one card of a GB200 node)",
+ "hw": "b200",
+ "provisional": false,
+ "calibre": "server end to end: 1e6 * B / decode tok/s (client clock over HTTP, prompt 64, 1024 new tokens, greedy, ignore_eos, one SSE chunk per token; 1 warm-up + 3 repeats per server start, eval/client.py through scripts/compare.sh). The evaluator's headline http_step_us_b1 is measured by the same client and workload.",
+ "source": "sglang B=1 231.0 tok/s, B=8 1348.2 tok/s (<job>); sglang_gb300_flags B=1 219.5 tok/s, B=8 1290.1 tok/s (<job>); sglang_megamoe B=1 227.8 tok/s, B=8 1346.4 tok/s (<job>); vllm_o3 B=1 270.9 tok/s, B=8 1575.4 tok/s (<job>); vllm_noprefix B=1 268.5 tok/s, B=8 1563.7 tok/s (<job>); vllm B=1 269.8 tok/s, B=8 1567.1 tok/s (<job>); vllm_source B=1 270.8 tok/s, B=8 1575.7 tok/s (<job>)",
+ "systems": {
+  "sglang": {
+   "version": "SGLang PR sgl-project/sglang#51926 (head 92e894ef, open) as its image lmsysorg/sglang:inkling-2-mini (arm64 sha256:bc811ac7ac68c6fca116a49750baca817b8613a30abface8a347682b55d132e3), run in the pod from the unpacked image",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "sglang.launch_server --model-path MODEL_DIR --served-model-name m --tp 1 --ep 1 --attention-backend fa4 --dtype bfloat16 --page-size 128 (the cookbook's single-GPU recipe, RTX PRO 6000 / RTX 5090 / DGX Spark; the cookbook has no B200 cell; --enable-multimodal and the parsers left out: text only, completions API); CUDA graphs on (default)",
+   "decode_tok_s": {
+    "b1": 231.0,
+    "b8": 1348.2
+   },
+   "per_round_tok_s": {
+    "b1": [
+     231.1,
+     230.4,
+     231.5
+    ],
+    "b8": [
+     1345.7,
+     1347.9,
+     1351.0
+    ]
+   },
+   "b1": 4329,
+   "b8": 5934,
+   "note": "speed line only, not a numerics reference: expert inputs quantized to NVFP4 / MXFP8 as hf_quant_config.json asks (no option to turn it off). Agent A (<job>): SGLang's final hidden states through the unembedding in float64 vs the evaluator's reference: rel. L2 median 0.0646, p99 0.180, top-1 0.939 (the BF16 yardstick 0.0272; gate limit 0.054): it would fail the numeric gate. 17.83 GB of weights as stored, BF16 K/V",
+   "short": "SGLang (PR #51926 image)"
+  },
+  "sglang_gb300_flags": {
+   "version": "same image",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "as sglang plus --bf16-gemm-backend torch (the cookbook's GB300 recipe, there at TP4 / EP4)",
+   "decode_tok_s": {
+    "b1": 219.5,
+    "b8": 1290.1
+   },
+   "per_round_tok_s": {
+    "b1": [
+     219.5,
+     219.5,
+     219.4
+    ],
+    "b8": [
+     1291.8,
+     1291.8,
+     1286.7
+    ]
+   },
+   "b1": 4557,
+   "b8": 6201,
+   "short": "SGLang, GB300 recipe flags at TP1"
+  },
+  "sglang_megamoe": {
+   "version": "same image",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "as sglang plus --moe-a2a-backend megamoe, env SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=4096 (Inkling-2-Small's GB200 recipe); one server start x 3 repeats (screen)",
+   "decode_tok_s": {
+    "b1": 227.8,
+    "b8": 1346.4
+   },
+   "per_round_tok_s": {
+    "b1": [
+     227.8
+    ],
+    "b8": [
+     1346.4
+    ]
+   },
+   "b1": 4390,
+   "b8": 5942,
+   "short": "SGLang + MegaMoE",
+   "screen": true
+  },
+  "vllm_o3": {
+   "version": "same build",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "as vllm plus -O3; one server start x 3 repeats (screen)",
+   "decode_tok_s": {
+    "b1": 270.9,
+    "b8": 1575.4
+   },
+   "per_round_tok_s": {
+    "b1": [
+     270.9
+    ],
+    "b8": [
+     1575.4
+    ]
+   },
+   "b1": 3691,
+   "b8": 5078,
+   "short": "vLLM -O3",
+   "screen": true
+  },
+  "vllm_noprefix": {
+   "version": "same build",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "as vllm plus --no-enable-prefix-caching --max-num-seqs 16; one server start x 3 repeats (screen)",
+   "decode_tok_s": {
+    "b1": 268.5,
+    "b8": 1563.7
+   },
+   "per_round_tok_s": {
+    "b1": [
+     268.5
+    ],
+    "b8": [
+     1563.7
+    ]
+   },
+   "b1": 3724,
+   "b8": 5116,
+   "short": "vLLM, no prefix caching",
+   "screen": true
+  },
+  "vllm": {
+   "version": "vLLM's day-0 image vllm/vllm-openai:inkling-2-mini (pushed 2026-11-20 21:36 UTC; index sha256:c2dc759f5984, arm64 sha256:ecdf0ccc663d86332459f5a50a38c30861a5079bc3924aa08fdc657ef10dd648), the image the recipe (vllm-project/vllm#69027) names; model support = open PR vllm-project/vllm#69028; run in the pod from the unpacked image",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "vllm serve MODEL_DIR --served-model-name m --max-model-len 262144 (recipe single_node_tp at TP1 on Blackwell, minus its DSpark speculative decoding and reasoning parser: one token per step, completions API); CUDA graphs, torch.compile and prefix caching at their defaults (-O3 and prefix caching off were screened on the source build: no gain)",
+   "decode_tok_s": {
+    "b1": 269.8,
+    "b8": 1567.1
+   },
+   "per_round_tok_s": {
+    "b1": [
+     269.8,
+     269.8,
+     269.7
+    ],
+    "b8": [
+     1567.3,
+     1567.3,
+     1566.6
+    ]
+   },
+   "b1": 3707,
+   "b8": 5105,
+   "note": "speed line only, not a numerics reference: its Inkling2 MoE quantizes the expert inputs (NVFP4 / MXFP8; the recipe: 'activations quantized to the same format'), as SGLang does; its distance from the evaluator's reference was not measured",
+   "short": "vLLM (inkling-2-mini image)"
+  },
+  "vllm_source": {
+   "version": "vLLM pull request vllm-project/vllm#69028 (open; head b3c0ff75424e, model files unchanged at the later head b426b46e) built from source in the pod for sm_100 (scripts/mini/vllm_pr_build.sh; wheel vllm-0.35.0.dev0+pr69028.gb3c0ff754, sha256 7fb2002dd9f3, stored as wheels/vllm-pr69028-b3c0ff75424e) and installed over the vllm/vllm-openai nightly arm64 image (sha256:2d900bd38113, commit 8586ccbc; Python 3.14, torch 2.14.0+cu130); the image tag the recipe names, vllm/vllm-openai:inkling-2-mini, did not exist",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "vllm serve MODEL_DIR --served-model-name m --max-model-len 262144 (recipe vllm-project/vllm#69027, single_node_tp at TP1 on Blackwell, minus its DSpark speculative decoding and reasoning parser: one token per step, completions API); CUDA graphs and prefix caching at their defaults",
+   "decode_tok_s": {
+    "b1": 270.8,
+    "b8": 1575.7
+   },
+   "per_round_tok_s": {
+    "b1": [
+     270.9,
+     270.7,
+     270.9
+    ],
+    "b8": [
+     1575.6,
+     1575.7,
+     1575.8
+    ]
+   },
+   "b1": 3692,
+   "b8": 5077,
+   "note": "our own build of the same pull request, before the image existed; within 0.5% of the image: recorded, not the baseline line",
+   "short": "vLLM, PR #69028 built from source (cross-check)",
+   "screen": true
+  }
+ },
+ "eval_timeout_scale": 4,
+ "numerics": "No general engine computes the evaluator's function: SGLang (and vLLM's recipe, 'activations quantized to the same format') quantize the expert inputs as the checkpoint's hf_quant_config.json requires; the evaluator's specification (transformers#51050) and reference do not. Agent A measured SGLang itself at rel. L2 median 0.0646 against the reference (2.4x the BF16 yardstick 0.0272; the gate allows 2x). The general engines' times are the speed bar only.",
+ "not_running": {
+  "sglang_torch_compile": "SGLang image as above + --enable-torch-compile: the server does not start (Triton CompilationError, KeyError triton.language.bfloat16, after 756 s); <job>",
+  "tokenspeed": "lightseekorg/tokenspeed: Mini support only in open PR #3682 (head bd507147, 'day-0 gfx950', AMD); newest arm64 image rc-377b78 (sha256:5da3f005abe8, commit 377b7828, 2026-11-16) predates it. PR head's Python packages over the image: the gateway starts, the worker fails (needs a newer compiled tokenspeed_engine: no module tokenspeed_engine.scheduler; <job>). Only the PR's diff (base 0803925e -> head) patched onto the image: 7 hunks fail, ImportError in tokenspeed_kernel.ops.sampling (<job>). A source build (Rust engine, C++ scheduler, kernels) was not attempted for an AMD-only pull request.",
+  "vllm": "vLLM: the recipe's image vllm/vllm-openai:inkling-2-mini did not exist at 12:20 and 13:10 and appeared at 13:36 (measured: systems.vllm). Before it, the model PR #69028 @ b3c0ff75 was built from source in a pod (systems.vllm_source; scripts/mini/vllm_pr_build.sh; wheel in store wheels/vllm-pr69028-b3c0ff75424e).",
+  "tensorrt_llm_dynamo": "No Inkling2Loop / inkling2_loop code in TensorRT-LLM (GitHub code search, 2026-11-20); NVIDIA Dynamo serves through vLLM / SGLang / TensorRT-LLM, so it has no path of its own"
+ }
+}

@@ -173,6 +173,17 @@ def analyse_trace(sqlite_path: Path, steps: int, name: str = "mk_timed") -> dict
             "timing": "CUPTI activity inside the timed NVTX range, traced run (slower than the timed run)"}
 
 
+def lossless(gate: dict, shapes_ok: bool) -> dict:
+    """Track C: a speculative engine's tokens must equal its own step-by-step greedy tokens exactly (every sequence,
+    full length); the lenient rule of tracks A and B (mean matching prefix >= 0.75, half identical: exact ties) does
+    not apply. The gate's other fields are kept; `pass` is replaced."""
+    out = dict(gate)
+    out["pass_lenient"] = gate.get("pass")
+    out["pass"] = bool(shapes_ok and gate.get("of") and gate.get("sequences_identical") == gate.get("of"))
+    out["rule"] = "track C: every sequence identical to the step-by-step greedy tokens"
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", required=True)
@@ -189,6 +200,10 @@ def main() -> int:
     parser.add_argument("--baselines", default=os.environ.get("MK_BASELINES") or _SETUP.get("baselines"))
     parser.add_argument("--python", default=os.environ.get("MK_EVAL_PY") or _SETUP.get("python") or sys.executable)
     parser.add_argument("--scratch", default=os.environ.get("MK_EVAL_SCRATCH", "/dev/shm"))
+    parser.add_argument("--track", choices=["a", "b", "c"], default=(_SETUP.get("track") or os.environ.get("MK_TRACK") or "a").lower(),
+                        help="c: exact draft-and-verify (speculative) engines: the generate and http_tokens gates require "
+                             "the engine's step-by-step greedy tokens exactly, the HTTP rate is token-based, and a "
+                             "natural-text workload is measured next to the synthetic one (TRACK_C below)")
     args = parser.parse_args()
     t_begin = time.time()
     workspace = str(Path(args.workspace).resolve())
@@ -198,7 +213,8 @@ def main() -> int:
     global HBM_GB_S
     on = card(args.baselines, _SETUP)
     HBM_GB_S = on["hbm_gb_s"]
-    result: dict = {"status": "error", "quick": args.quick, "build": {}, "gates": {}, "perf": {}, "trace": {},
+    track_c = args.track == "c"
+    result: dict = {"status": "error", "quick": args.quick, "track": args.track, "build": {}, "gates": {}, "perf": {}, "trace": {},
                     "milestones_passed": [], "reference": {"hf_bf16_rel_l2": meta["hf_bf16_rel_l2"],
                                                            "hf_bf16_top1_agreement": meta["hf_bf16_top1_agreement"],
                                                            "tolerance_factor": TOLERANCE, "hbm_gb_s": HBM_GB_S,
@@ -285,6 +301,8 @@ def main() -> int:
                                  "mean_matching_prefix": float(gen_prefix.mean() / same.shape[1]),
                                  "sequences_identical": int(same.all(1).sum()), "of": int(same.shape[0]),
                                  "note": "the engine's own greedy loop against its step-by-step greedy; they differ only at exact ties"}
+            if track_c:
+                gates["generate"] = lossless(gates["generate"], gen.shape == free.shape)
     if not finite:
         http_prompts = http_expect = None
     has_generate = bool(report.get("has_generate"))
@@ -441,14 +459,26 @@ def main() -> int:
     http = None
     if use_http and correct:
         tools_py = args.tools_python or args.python
+        natural = None
+        if track_c:  # the natural-text workload of track C (eval/natural_prompts.py, its public seed)
+            natural = str(scratch / "natural-p64.json")
+            made = run([tools_py, str(HERE / "natural_prompts.py"), args.model_dir, natural, "64", "48"], 600,
+                       env={k: v for k, v in os.environ.items() if k != "MK_NATURAL_SEED"})
+            result["natural_prompts"] = {"rc": made["rc"], "source": made["tail"][-400:]}
+            if made["rc"] != 0:
+                natural = None
         http = http_stage.measure(workspace, args.model_dir, args.python, tools_py, scratch / "http",
                                   os.environ.get("MK_SERVER_CPUS"), os.environ.get("MK_CLIENT_CPUS"),
                                   startup_s=1800 * on["timeout_scale"], run_s=2400 * on["timeout_scale"], read_s=120 * on["timeout_scale"],
-                                  prompts=http_prompts, expect=http_expect)
+                                  prompts=http_prompts, expect=http_expect, rate="tokens" if track_c else "chunks",
+                                  natural_prompts=natural)
         result["http"] = http
         if http.get("tokens") is not None:
-            gates["http_tokens"] = http["tokens"]
-            correct = correct and bool(http["tokens"].get("pass"))
+            gates["http_tokens"] = lossless(http["tokens"], http["tokens"].get("lengths_ok", False)) if track_c else http["tokens"]
+            correct = correct and bool(gates["http_tokens"].get("pass"))
+        if track_c and natural is None and correct:
+            result["status"] = "error"
+            return finish("track C: the natural-text prompts could not be made (eval/natural_prompts.py failed)")
         if correct and not http.get("ok"):
             result["status"] = "error"
             return finish("the engine passed the gates but could not be measured over HTTP: " + str(http.get("error")))
@@ -472,6 +502,12 @@ def main() -> int:
         if use_http:
             result["headline"] = {"metric": "http_step_us_b1", "value": http["b1"]["step_us"], "lower_is_better": True,
                                   "path": http.get("contract"), "b8": http["b8"]["step_us"]}
+            if track_c:
+                # time per token of one stream, counted in tokens; natural text next to the synthetic prompts, and the
+                # engine's tokens per event (per verification step for an engine that hands each step's tokens over at once)
+                result["headline"].update(rate="tokens", track="c",
+                                          natural_b1=http["natural_b1"]["step_us"], natural_b8=http["natural_b8"]["step_us"],
+                                          tokens_per_event={k: http[k].get("engine_tokens_per_event") for k in ("b1", "b8", "natural_b1", "natural_b8")})
         else:
             result["headline"] = {"metric": "step_us_b1", "value": best, "lower_is_better": True, "path": path}
         if gates.get("generate", {}).get("pass"):

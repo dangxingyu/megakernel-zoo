@@ -1,0 +1,462 @@
+{
+ "model": "thinkingmachines/Inkling-2-Mini",
+ "gpu": "NVIDIA B200 (one card of a GB200 node)",
+ "hw": "b200",
+ "track": "c",
+ "provisional": false,
+ "eval_timeout_scale": 4,
+ "calibre": "server end to end, TOKEN-BASED: 1e6 * B / decode tokens per second, every SSE chunk weighted by the tokens it carries (eval/client.py decode_tok_s_by_tokens; a speculative server sends several tokens per chunk, which the chunk rate undercounts), client clock over HTTP, prompt 64, 1024 new tokens, greedy, ignore_eos; 1 warm-up + 3 repeats per server start, 3 server starts (scripts/mini/mtp_baseline.sh). b1/b8: the evaluator's synthetic prompts; *_natural: eval/natural_prompts.py (64 tokens); *_chat: GSM8K questions through the chat template, 256 new tokens. The evaluator's track-C headline uses the same rate and workloads.",
+ "systems": {
+  "vllm_dspark": {
+   "version": "vllm/vllm-openai:inkling-2-mini (arm64 sha256:ecdf0ccc663d86332459f5a50a38c30861a5079bc3924aa08fdc657ef10dd648)",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "--max-model-len 262144 --speculative-config {\"method\":\"dspark\",\"num_speculative_tokens\":7,\"draft_sample_method\":\"probabilistic\"} (recipe vllm-project/vllm#69027 single_node_tp TP1 with its spec_decoding feature)",
+   "b1": 1544,
+   "b8": 2711,
+   "b1_natural": 871,
+   "b8_natural": 1851,
+   "b1_chat": 1300,
+   "b8_chat": 2041,
+   "accept_len": {
+    "synth_b1": 3.48,
+    "synth_b8": 2.71,
+    "nat_b1": 5.21,
+    "nat_b8": 4.34,
+    "chat_b1": 4.12,
+    "chat_b8": 3.86
+   },
+   "tok_s_by_tokens": {
+    "synth_b1": 647.5,
+    "synth_b8": 2951.4,
+    "nat_b1": 1147.8,
+    "nat_b8": 4322.5,
+    "chat_b1": 769.1,
+    "chat_b8": 3920.2
+   },
+   "per_start_tok_s": {
+    "synth_b1": [
+     647.5,
+     647.5,
+     647.7
+    ],
+    "synth_b8": [
+     2951.4,
+     2951.4,
+     2951.2
+    ],
+    "nat_b1": [
+     1147.8,
+     1147.7,
+     1148.2
+    ],
+    "nat_b8": [
+     4324.4,
+     4322.5,
+     4321.2
+    ],
+    "chat_b1": [
+     769.0,
+     769.1,
+     770.0
+    ],
+    "chat_b8": [
+     3920.2,
+     3919.3,
+     3921.0
+    ]
+   },
+   "tokens_per_chunk": {
+    "synth_b1": 3.38,
+    "synth_b8": 2.75,
+    "nat_b1": 6.1,
+    "nat_b8": 4.24,
+    "chat_b1": 3.94,
+    "chat_b8": 3.72
+   },
+   "chunk_rate_tok_s": {
+    "synth_b1": 191.2,
+    "synth_b8": 1042.8,
+    "nat_b1": 188.1,
+    "nat_b8": 932.3,
+    "chat_b1": 191.9,
+    "chat_b8": 1025.5
+   },
+   "lossless_vs_own_plain": {
+    "identical_streams": 12,
+    "streams": 243,
+    "by_workload": {
+     "chat/b1": "0/9",
+     "chat/b8": "9/72",
+     "nat/b1": "0/9",
+     "nat/b8": "3/72",
+     "synth/b1": "0/9",
+     "synth/b8": "0/72"
+    },
+    "determinism": [
+     {
+      "pool": "plain",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 75
+     },
+     {
+      "pool": "spec",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 75
+     }
+    ]
+   },
+   "short": "vLLM (inkling-2-mini image) + DSpark",
+   "note": "speed line only, not a numerics reference: the target quantizes expert inputs (track-A notes); greedy, ignore_eos; rate token-based (decode window, chunks weighted by their tokens)"
+  },
+  "sglang_dspark": {
+   "version": "lmsysorg/sglang:inkling-2-mini = PR #51926 (arm64 sha256:bc811ac7ac68c6fca116a49750baca817b8613a30abface8a347682b55d132e3)",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "--tp 1 --ep 1 --attention-backend fa4 --dtype bfloat16 --page-size 128 --speculative-algorithm DSPARK --speculative-num-draft-tokens 8, env SGLANG_OPT_INKLING2_VERIFY_REL_BIAS_KERNEL=1 SGLANG_OPT_DSV41_DSPARK_MID_FOLD=1 SGLANG_OPT_DSV41_DSPARK_PREPARE_INPUTS_ONCE=1 SGLANG_OPT_DSV41_DSPARK_SKIP_PREFILLED_INPUTS=1 (cookbook sgl-project/sglang#51927, its single-GPU DSpark recipe minus --max-running-requests 4, which is for 32-96 GB cards)",
+   "b1": 2828,
+   "b8": 3339,
+   "b1_natural": 1122,
+   "b8_natural": 2235,
+   "b1_chat": 1626,
+   "b8_chat": 2587,
+   "accept_len": {
+    "synth_b1": 2.5,
+    "synth_b8": 2.66,
+    "nat_b1": 4.42,
+    "nat_b8": 4.09,
+    "chat_b1": 4.29,
+    "chat_b8": 3.9
+   },
+   "tok_s_by_tokens": {
+    "synth_b1": 353.6,
+    "synth_b8": 2396.0,
+    "nat_b1": 891.3,
+    "nat_b8": 3579.3,
+    "chat_b1": 614.8,
+    "chat_b8": 3092.6
+   },
+   "per_start_tok_s": {
+    "synth_b1": [
+     353.6,
+     353.5,
+     353.6
+    ],
+    "synth_b8": [
+     2396.0,
+     2395.5,
+     2407.7
+    ],
+    "nat_b1": [
+     891.3,
+     891.2,
+     891.5
+    ],
+    "nat_b8": [
+     3578.5,
+     3651.6,
+     3579.3
+    ],
+    "chat_b1": [
+     615.3,
+     614.5,
+     614.8
+    ],
+    "chat_b8": [
+     3074.6,
+     3092.6,
+     3093.6
+    ]
+   },
+   "tokens_per_chunk": {
+    "synth_b1": 2.43,
+    "synth_b8": 2.74,
+    "nat_b1": 6.28,
+    "nat_b8": 4.31,
+    "chat_b1": 4.2,
+    "chat_b8": 3.8
+   },
+   "chunk_rate_tok_s": {
+    "synth_b1": 145.3,
+    "synth_b8": 803.6,
+    "nat_b1": 141.1,
+    "nat_b8": 730.0,
+    "chat_b1": 145.0,
+    "chat_b8": 796.6
+   },
+   "lossless_vs_own_plain": {
+    "identical_streams": 3,
+    "streams": 243,
+    "by_workload": {
+     "chat/b1": "0/9",
+     "chat/b8": "3/72",
+     "nat/b1": "0/9",
+     "nat/b8": "0/72",
+     "synth/b1": "0/9",
+     "synth/b8": "0/72"
+    },
+    "determinism": [
+     {
+      "pool": "plain",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 69
+     },
+     {
+      "pool": "spec",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 54
+     }
+    ]
+   },
+   "short": "SGLang (PR #51926 image) + DSpark",
+   "note": "speed line only, not a numerics reference: the target quantizes expert inputs (track-A notes); greedy, ignore_eos; rate token-based (decode window, chunks weighted by their tokens)"
+  },
+  "vllm_source_dspark": {
+   "version": "vLLM PR #69028 @ b3c0ff75 built from source (store wheels/vllm-pr69028-b3c0ff75424e) over the nightly image",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "--max-model-len 262144 --speculative-config {\"method\":\"dspark\",\"num_speculative_tokens\":7,\"draft_sample_method\":\"probabilistic\"} (recipe vllm-project/vllm#69027 single_node_tp TP1 with its spec_decoding feature)",
+   "b1": 1552,
+   "b8": 2714,
+   "b1_natural": 875,
+   "b8_natural": 1851,
+   "b1_chat": 1307,
+   "b8_chat": 2044,
+   "accept_len": {
+    "synth_b1": 3.48,
+    "synth_b8": 2.71,
+    "nat_b1": 5.21,
+    "nat_b8": 4.34,
+    "chat_b1": 4.12,
+    "chat_b8": 3.86
+   },
+   "tok_s_by_tokens": {
+    "synth_b1": 644.4,
+    "synth_b8": 2947.3,
+    "nat_b1": 1142.2,
+    "nat_b8": 4321.1,
+    "chat_b1": 764.9,
+    "chat_b8": 3914.8
+   },
+   "per_start_tok_s": {
+    "synth_b1": [
+     644.3,
+     644.4,
+     644.4
+    ],
+    "synth_b8": [
+     2947.8,
+     2947.3,
+     2947.1
+    ],
+    "nat_b1": [
+     1142.2,
+     1142.2,
+     1142.2
+    ],
+    "nat_b8": [
+     4321.1,
+     4321.6,
+     4321.1
+    ],
+    "chat_b1": [
+     764.9,
+     764.8,
+     765.2
+    ],
+    "chat_b8": [
+     3914.8,
+     3914.8,
+     3914.7
+    ]
+   },
+   "tokens_per_chunk": {
+    "synth_b1": 3.38,
+    "synth_b8": 2.75,
+    "nat_b1": 6.1,
+    "nat_b8": 4.24,
+    "chat_b1": 3.94,
+    "chat_b8": 3.72
+   },
+   "chunk_rate_tok_s": {
+    "synth_b1": 190.3,
+    "synth_b8": 1041.6,
+    "nat_b1": 187.1,
+    "nat_b8": 931.4,
+    "chat_b1": 190.9,
+    "chat_b8": 1023.4
+   },
+   "lossless_vs_own_plain": {
+    "identical_streams": 12,
+    "streams": 243,
+    "by_workload": {
+     "chat/b1": "0/9",
+     "chat/b8": "9/72",
+     "nat/b1": "0/9",
+     "nat/b8": "3/72",
+     "synth/b1": "0/9",
+     "synth/b8": "0/72"
+    },
+    "determinism": [
+     {
+      "pool": "plain",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 75
+     },
+     {
+      "pool": "spec",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 75
+     }
+    ]
+   },
+   "short": "vLLM (PR #69028 source build) + DSpark",
+   "note": "speed line only, not a numerics reference: the target quantizes expert inputs (track-A notes); greedy, ignore_eos; rate token-based (decode window, chunks weighted by their tokens)"
+  },
+  "sglang_gb300_dspark": {
+   "version": "lmsysorg/sglang:inkling-2-mini = PR #51926 (arm64 sha256:bc811ac7ac68c6fca116a49750baca817b8613a30abface8a347682b55d132e3)",
+   "general_engine": true,
+   "job": "<job>",
+   "flags": "--tp 1 --ep 1 --attention-backend fa4 --dtype bfloat16 --page-size 128 --speculative-algorithm DSPARK (the cookbook's GB300 DSpark recipe's speculative settings: default number of draft tokens, no SGLANG_OPT_* environment; at TP1 and without --bf16-gemm-backend torch, which was slower at TP1 in track A)",
+   "b1": 2347,
+   "b8": 3289,
+   "b1_natural": 1157,
+   "b8_natural": 2221,
+   "b1_chat": 1764,
+   "b8_chat": 2602,
+   "accept_len": {
+    "synth_b1": 2.81,
+    "synth_b8": 2.73,
+    "nat_b1": 4.36,
+    "nat_b8": 4.35,
+    "chat_b1": 3.73,
+    "chat_b8": 3.92
+   },
+   "tok_s_by_tokens": {
+    "synth_b1": 426.1,
+    "synth_b8": 2432.3,
+    "nat_b1": 864.4,
+    "nat_b8": 3602.7,
+    "chat_b1": 566.9,
+    "chat_b8": 3074.7
+   },
+   "per_start_tok_s": {
+    "synth_b1": [
+     426.2,
+     426.1,
+     425.9
+    ],
+    "synth_b8": [
+     2432.6,
+     2351.3,
+     2432.3
+    ],
+    "nat_b1": [
+     864.5,
+     864.2,
+     864.4
+    ],
+    "nat_b8": [
+     3602.1,
+     3602.7,
+     3606.5
+    ],
+    "chat_b1": [
+     567.0,
+     566.9,
+     566.8
+    ],
+    "chat_b8": [
+     3074.7,
+     3071.7,
+     3097.9
+    ]
+   },
+   "tokens_per_chunk": {
+    "synth_b1": 2.92,
+    "synth_b8": 2.8,
+    "nat_b1": 6.06,
+    "nat_b8": 4.41,
+    "chat_b1": 3.88,
+    "chat_b8": 3.79
+   },
+   "chunk_rate_tok_s": {
+    "synth_b1": 145.7,
+    "synth_b8": 803.7,
+    "nat_b1": 142.0,
+    "nat_b8": 730.3,
+    "chat_b1": 144.5,
+    "chat_b8": 797.3
+   },
+   "lossless_vs_own_plain": {
+    "identical_streams": 6,
+    "streams": 243,
+    "by_workload": {
+     "chat/b1": "0/9",
+     "chat/b8": "3/72",
+     "nat/b1": "3/9",
+     "nat/b8": "0/72",
+     "synth/b1": "0/9",
+     "synth/b8": "0/72"
+    },
+    "determinism": [
+     {
+      "pool": "plain",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 67
+     },
+     {
+      "pool": "spec",
+      "prompts_seen_more_than_once": 78,
+      "all_identical": 65
+     }
+    ]
+   },
+   "short": "SGLang (PR #51926 image, GB300-style settings) + DSpark",
+   "note": "speed line only, not a numerics reference: the target quantizes expert inputs (track-A notes); greedy, ignore_eos; rate token-based (decode window, chunks weighted by their tokens)"
+  }
+ },
+ "without_speculation": {
+  "vllm": {
+   "b1": 3694,
+   "b8": 5074,
+   "b1_natural": 3694,
+   "b8_natural": 5349,
+   "b1_chat": 3691,
+   "b8_chat": 4950,
+   "job": "<job>",
+   "short": "vLLM (inkling-2-mini image)"
+  },
+  "sglang": {
+   "b1": 4389,
+   "b8": 5949,
+   "b1_natural": 4391,
+   "b8_natural": 6466,
+   "b1_chat": 4380,
+   "b8_chat": 5910,
+   "job": "<job>",
+   "short": "SGLang (PR #51926 image)"
+  },
+  "vllm_source": {
+   "b1": 3720,
+   "b8": 5117,
+   "b1_natural": 3721,
+   "b8_natural": 5394,
+   "b1_chat": 3717,
+   "b8_chat": 4994,
+   "job": "<job>",
+   "short": "vLLM (PR #69028 source build)"
+  },
+  "sglang_gb300": {
+   "b1": 4319,
+   "b8": 5914,
+   "b1_natural": 4320,
+   "b8_natural": 6400,
+   "b1_chat": 4315,
+   "b8_chat": 5840,
+   "job": "<job>",
+   "short": "SGLang (PR #51926 image, GB300-style settings)"
+  }
+ },
+ "source": "vllm_dspark: <job>; sglang_dspark: <job>; vllm_source_dspark: <job>; sglang_gb300_dspark: <job>"
+}

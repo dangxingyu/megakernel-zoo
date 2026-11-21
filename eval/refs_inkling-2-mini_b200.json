@@ -1,0 +1,32 @@
+[
+ {
+  "name": "bandwidth bound (100% MBU)",
+  "metric": "http_step_us_b1",
+  "value": 692,
+  "note": "5.54 GB read per step at batch 1 at 8000 GB/s (derived figure for this card, not measured): the layer weights of 48 layer applications (layers 6-17 three times, as the loop runs them), 8 of 128 experts per application in the checkpoint's NVFP4 / MXFP8 bytes incl. scales, the BF16 unembedding, K/V of the 48 cache layers at context 192 (eval/modelinfo.py); at batch 8 between 5.82 GB (all route alike) and 18.69 GB (all apart): 727-2336 us"
+ },
+ {
+  "name": "1.10x the fastest general engine",
+  "metric": "http_step_us_b1",
+  "value": 3370,
+  "note": "3707 / 1.10 (vllm); at batch 8: 4641 us per step (5105 / 1.10, vllm). The project's claim is at least this, at both batch sizes"
+ },
+ {
+  "name": "SGLang (PR #51926 image) (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 4329,
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 5934 us per step. SGLang PR sgl-project/sglang#51926 (head 92e894ef, open) as its image lmsysorg/sglang:inkling-2-mini (arm64 sha256:bc811ac7ac68c6fca116a49750baca817b8613a30abface8a347682b55d132e3), run in the pod from the unpacked image; sglang.launch_server --model-path MODEL_DIR --served-model-name m --tp 1 --ep 1 --attention-backend fa4 --dtype bfloat16 --page-size 128 (the cookbook's single-GPU recipe, RTX PRO 6000 / RTX 5090 / DGX Spark; the cookbook has no B200 cell; --enable-multimodal and the parsers left out: text only, completions API); CUDA graphs on (default). speed line only, not a numerics reference: expert inputs quantized to NVFP4 / MXFP8 as hf_quant_config.json asks (no option to turn it off). Agent A (<job>): SGLang's final hidden states through the unembedding in float64 vs the evaluator's reference: rel. L2 median 0.0646, p99 0.180, top-1 0.939 (the BF16 yardstick 0.0272; gate limit 0.054): it would fail the numeric gate. 17.83 GB of weights as stored, BF16 K/V"
+ },
+ {
+  "name": "SGLang, GB300 recipe flags at TP1 (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 4557,
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 6201 us per step. same image; as sglang plus --bf16-gemm-backend torch (the cookbook's GB300 recipe, there at TP4 / EP4)"
+ },
+ {
+  "name": "vLLM (inkling-2-mini image) (general engine)",
+  "metric": "http_step_us_b1",
+  "value": 3707,
+  "note": "server end to end over HTTP, same client and card type, <job>; batch 8: 5105 us per step. vLLM's day-0 image vllm/vllm-openai:inkling-2-mini (pushed 2026-11-20 21:36 UTC; index sha256:c2dc759f5984, arm64 sha256:ecdf0ccc663d86332459f5a50a38c30861a5079bc3924aa08fdc657ef10dd648), the image the recipe (vllm-project/vllm#69027) names; model support = open PR vllm-project/vllm#69028; run in the pod from the unpacked image; vllm serve MODEL_DIR --served-model-name m --max-model-len 262144 (recipe single_node_tp at TP1 on Blackwell, minus its DSpark speculative decoding and reasoning parser: one token per step, completions API); CUDA graphs, torch.compile and prefix caching at their defaults (-O3 and prefix caching off were screened on the source build: no gain). speed line only, not a numerics reference: its Inkling2 MoE quantizes the expert inputs (NVFP4 / MXFP8; the recipe: 'activations quantized to the same format'), as SGLang does; its distance from the evaluator's reference was not measured"
+ }
+]

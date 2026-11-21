@@ -24,12 +24,19 @@ Bytes one decode step has to read (`decode_bytes`). The count follows the model'
              head dim x value head dim, plus the short convolution state; Inkling 2's short convolutions keep
              the last kernel-1 inputs of four convolutions per layer
 
+A looped model (Inkling-2-Mini, `loop_config`: layers core_start..core_end-1 run num_passes times with shared
+weights, transformers#51050) is counted per layer APPLICATION: a looped layer's weights are read once per pass
+(they do not fit any cache), its experts are chosen anew in every pass (k of N per application), and every pass
+has its own K/V and short-convolution caches. The message gates of a looped layer (`controllers.*`) are used only
+in the passes after the first. `applications` in the result says how many layer applications one token makes.
+
 Activations are not counted.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import struct
 from pathlib import Path
 
@@ -54,11 +61,18 @@ DTYPE_BYTES = {"BF16": 2, "F16": 2, "F32": 4, "F64": 8, "I64": 8, "I32": 4, "I16
 def parameter_count(name: str, dtype: str, nbytes: int) -> int:
     """Parameters a stored tensor holds. MXFP4 (gpt-oss): `*_blocks` are U8 bytes with two 4-bit codes each (two
     parameters per byte) and `*_scales` one shared power-of-two exponent per 32 codes (no parameters of their own);
-    their bytes are counted as stored either way."""
+    their bytes are counted as stored either way. ModelOpt NVFP4 / MXFP8 experts (Inkling 2): a U8 `*_weight` holds
+    two E2M1 codes per byte; `*_weight_scale` (E4M3 per 16 codes, or U8 = UE8M0 per 32 for MXFP8), `*_amax` and
+    `*_outer_scale_denominator` are scales, not parameters."""
     if name.endswith("_blocks") and dtype == "U8":
         return 2 * nbytes
     if name.endswith("_scales") and dtype in ("U8", "F8_E8M0"):
         return 0
+    if ".experts." in name:
+        if name.endswith(("_weight_scale", "_amax", "_outer_scale_denominator")):
+            return 0
+        if name.endswith("_weight") and dtype == "U8":
+            return 2 * nbytes
     return nbytes // DTYPE_BYTES.get(dtype, 2)
 
 
@@ -113,6 +127,24 @@ def text_config(model_dir: str | Path) -> dict:
     return config.get("text_config", config)
 
 
+def layer_applications(config: dict) -> list[int]:
+    """How often one token applies each decoder layer: 1, or `num_passes` for the layers of a loop (`loop_config`
+    of Inkling-2-Mini: core_start..core_end-1)."""
+    n = config["num_hidden_layers"]
+    loop = config.get("loop_config") or {}
+    passes = int(loop.get("num_passes") or 1)
+    start, end = int(loop.get("core_start", 0)), int(loop.get("core_end", 0))
+    return [passes if start <= i < end else 1 for i in range(n)]
+
+
+_LAYER = re.compile(r"(?:^|\.)layers\.(\d+)\.")
+
+
+def layer_of(name: str) -> int | None:
+    match = _LAYER.search(name)
+    return int(match.group(1)) if match else None
+
+
 def weights(model_dir: str | Path) -> dict:
     """Bytes and parameter counts per group, and what the text decoder holds in total."""
     size = {k: 0 for k in ("rest", "head", "experts", "input_embedding", "vision", "aux")}
@@ -134,15 +166,37 @@ def decode_bytes(model_dir: str | Path, batch: int, context: float) -> dict:
     config = text_config(model_dir)
     hidden = config["hidden_size"]
     head = size["head"] if info["stored_head"] else size["input_embedding"]
+    apps = layer_applications(config)
+    looped = any(a > 1 for a in apps)
+    expert_reads = float(size["experts"])  # expert bytes times the applications of their layer
+    if looped:  # extra reads of the looped layers' weights: once more per pass after the first
+        extra_rest = 0
+        expert_reads = 0.0
+        for name, _, _, nbytes in tensors(model_dir):
+            group, layer = category(name), layer_of(name)
+            reads = apps[layer] if group in ("rest", "experts") and layer is not None else 1
+            if group == "rest" and ".controllers." in name:
+                reads = max(reads - 1, 0)  # message gates: passes after the first only (stored once, read P-1 times)
+            if group == "rest":
+                extra_rest += (reads - 1) * nbytes
+            elif group == "experts":
+                expert_reads += reads * nbytes
+        size = {**size, "rest": size["rest"] + extra_rest}
     fixed = size["rest"] + head
     n_experts = config.get("num_experts") or config.get("n_routed_experts") or config.get("num_local_experts")  # gpt-oss: num_local_experts
     k_experts = config.get("num_experts_per_tok") or config.get("experts_per_token")
     how = ["every text-decoder weight outside the input embedding table once"
            + ("" if info["stored_head"] else " (the table is counted: it is the tied output head)")]
     experts_low = experts_high = 0.0
+    if looped:
+        loop = config["loop_config"]
+        how.append(f"loop: layers {loop['core_start']}-{loop['core_end'] - 1} run {loop['num_passes']} passes with shared weights, "
+                   f"{sum(apps)} layer applications per token from {len(apps)} layers: their weights are counted once per pass "
+                   "(message gates once per pass after the first), their experts chosen anew in each pass, their K/V and "
+                   "convolution state kept per pass")
     if size["experts"] and n_experts and k_experts:
         share = k_experts / n_experts
-        experts_low, experts_high = size["experts"] * share, size["experts"] * min(1.0, batch * share)
+        experts_low, experts_high = expert_reads * share, expert_reads * min(1.0, batch * share)
         how.append(f"experts: {k_experts} of {n_experts} per layer and token, so {share:.4f} of the expert weights when all {batch} "
                    f"sequences route alike (low) and {min(1.0, batch * share):.4f} when they all route apart (high); equal expert "
                    "sizes assumed, real routing not measured")
@@ -159,7 +213,7 @@ def decode_bytes(model_dir: str | Path, batch: int, context: float) -> dict:
     types = types or ["full_attention"] * layers
     window = config.get("sliding_window") or config.get("sliding_window_size") or 0
     kv = state = 0.0
-    for kind in types:
+    for kind in [t for t, reads in zip(types, apps) for _ in range(reads)]:  # a looped layer has one cache per pass
         if kind == "linear_attention":
             v_heads, k_dim, v_dim = (config.get(k, 0) for k in ("linear_num_value_heads", "linear_key_head_dim", "linear_value_head_dim"))
             conv = (2 * config.get("linear_num_key_heads", 0) * k_dim + v_heads * v_dim) * max(config.get("linear_conv_kernel_dim", 1) - 1, 0)
@@ -171,18 +225,18 @@ def decode_bytes(model_dir: str | Path, batch: int, context: float) -> dict:
     if config.get("sconv_kernel_size"):  # Inkling 2: short convolutions on K, V, attention output and MoE output
         lags = config["sconv_kernel_size"] - 1
         kv_dim = config["num_key_value_heads"] * head_dim
-        state += layers * lags * (2 * kv_dim + 2 * hidden) * 2
+        state += sum(apps) * lags * (2 * kv_dim + 2 * hidden) * 2
         how.append(f"short-convolution state: the last {lags} inputs of the K, V, attention-output and MoE-output "
                    "convolutions per layer (BF16)")
-    counts = {k: types.count(k) for k in sorted(set(types))}
+    counts = {k: sum(a for t, a in zip(types, apps) if t == k) for k in sorted(set(types))}
     if len(counts) > 1 or "full_attention" not in counts:
         how.append("K and V per layer type " + json.dumps(counts) + (f", sliding window {window}" if window else "")
-                   + ("; linear-attention layers have a float32 recurrent state instead of K/V" if state else ""))
+                   + ("; linear-attention layers have a float32 recurrent state instead of K/V" if "linear_attention" in counts else ""))
     embedding_rows = batch * hidden * 2
     total = fixed + experts_low + embedding_rows + batch * (kv + state)
     return {"weights": fixed + experts_low, "weights_fixed": fixed, "experts_low": experts_low, "experts_high": experts_high,
             "embedding_rows": embedding_rows, "kv": batch * kv, "state": batch * state,
-            "total": total, "total_high": total + experts_high - experts_low, "how": "; ".join(how)}
+            "total": total, "total_high": total + experts_high - experts_low, "applications": sum(apps), "how": "; ".join(how)}
 
 
 def describe(model_dir: str | Path, hw: str | None = None, batches=(1, 8), context: float = 192.0) -> dict:
