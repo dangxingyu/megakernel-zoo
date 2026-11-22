@@ -1,0 +1,11 @@
+# per row count K: extra compile switches of the specialized verify kernel libmkv<K>.so (tests/c/abk.sh sweeps,
+# natural text ctx 600, deltas vs no flags in us per pass: BF_UNR=2 -19..-31 at K>=2; W13X2 K1 -53 / K5 -28;
+# OP_UNR_V=2 K3 -23)
+1 -DBF_UNR=2 -DW13X2=1
+2 -DBF_UNR=2
+3 -DBF_UNR=2 -DOP_UNR_V=2
+4 -DBF_UNR=2
+5 -DBF_UNR=2 -DW13X2=1
+6 -DBF_UNR=2 -DW13X2=1
+7 -DBF_UNR=2
+8 -DBF_UNR=2

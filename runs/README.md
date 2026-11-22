@@ -32,3 +32,6 @@ results are in the top-level README.
 | [`s16-mini-b200-c1`](s16-mini-b200-c1/progress.md) | Inkling-2-Mini on GB200 | Score: `http_step_us_b1` (lower is better). Budget 10.0 agent-hours. 22 submissions so far, 22 valid. |
 | [`s17-mini-b200-ma`](s17-mini-b200-ma/progress.md) | Inkling-2-Mini on GB200 | Score: `http_step_us_b1` (lower is better). Budget 5.0 agent-hours. 14 submissions so far, 14 valid. |
 | [`s17-mini-b200-mb`](s17-mini-b200-mb/progress.md) | Inkling-2-Mini on GB200 | Score: `http_step_us_b1` (lower is better). Budget 5.0 agent-hours. 21 submissions so far, 21 valid. |
+| [`s18-mini-b200-c2`](s18-mini-b200-c2/progress.md) | Inkling-2-Mini on GB200 | Score: `step_us_b1` (lower is better). Budget 12.0 agent-hours. 15 submissions so far, 14 valid. |
+| [`s18-mini-b200-c3`](s18-mini-b200-c3/progress.md) | Inkling-2-Mini on GB200 | Score: `http_step_us_b1` (lower is better). Budget 12.0 agent-hours. 15 submissions so far, 15 valid. |
+| [`s18-mini-b200-c4`](s18-mini-b200-c4/progress.md) | Inkling-2-Mini on GB200 | Score: `http_step_us_b1` (lower is better). Budget 12.0 agent-hours. 13 submissions so far, 13 valid. |

@@ -23,7 +23,8 @@ import torch
 import torch.nn.functional as F
 
 BF16 = torch.bfloat16
-NB = 8          # block rows = verify rows
+NB = 8          # block rows (the draft's block; verify rows of the 8-row kernel)
+VR = 16         # verify rows of the 16-row library (engine/mk16.cu)
 
 
 class TorchDraft:
@@ -92,7 +93,7 @@ class TorchDraft:
         self.vtok = torch.zeros(NB, dtype=torch.int32, device=dev)     # verify input: anchor, 7 drafts
         self.vpos = torch.tensor([0, NB], dtype=torch.int32, device=dev)   # [c, rows K of the next verify pass]
         self.pconf = torch.zeros(NB - 1, dtype=torch.float32, device=dev)  # the draft's top-1 probability per step
-        self.theta = float(os.environ.get("MK_CUM_TH", "0.4"))
+        self.theta = float(os.environ.get("MK_CUM_TH", "0.3"))   # rule 1: Markov early exit only (draftk.cu DK_RULE)
         self.ar7 = torch.arange(NB - 1, device=dev)
         self.c_new = torch.zeros(1, dtype=torch.long, device=dev)
         self.anchor = torch.zeros(1, dtype=torch.long, device=dev)
@@ -295,7 +296,8 @@ class _DkL(ctypes.Structure):
 class _Dk(ctypes.Structure):
     _fields_ = [("L", _DkL * 3)] + [(n, _P) for n in _D_FIELDS] + [(n, ctypes.c_longlong) for n in ("T", "mode", "nrows", "pad")] + \
                [(n, _P) for n in ("un8", "fold8", "un_s", "fold_s", "hist")] + \
-               [(n, ctypes.c_longlong) for n in ("f8", "ngmin", "hT")] + [("theta", ctypes.c_double)]
+               [(n, ctypes.c_longlong) for n in ("f8", "ngmin", "hT")] + [("theta", ctypes.c_double)] + \
+               [(n, _P) for n in ("tgt16", "pbt16", "fout16")] + [(n, ctypes.c_longlong) for n in ("lim16", "ng16min", "ng16acc")]
 
 
 class _Launch:
@@ -318,7 +320,7 @@ class FusedDraft:
         assert mc["markov_head_type"] == "rnn_hidden" and mc["block_size"] == NB and mc["num_hidden_layers"] == 3
         assert mc["hidden_size"] == 2304 and mc["intermediate_size"] == 9216 and mc["markov_rank"] == 256
         assert mc["local_layer_ids"] == [0, 2] and mc["sliding_window_size"] == 1024 and mc["target_layer_ids"] == [5, 23, 41, 48]
-        self.lib = ctypes.CDLL(os.environ.get("MK_DKLIB") or str(HERE / "build" / "libdk.so"))
+        self.lib = ctypes.CDLL(os.environ.get("MK_DKLIB") or str(HERE.parent / "build" / "libdk.so"))
         assert self.lib.dk_struct_bytes() == ctypes.sizeof(_Dk), (self.lib.dk_struct_bytes(), ctypes.sizeof(_Dk))
         assert self.lib.dk_setup() == 0
         self.dev, self.maxctx, self.L, self.H = dev, maxctx, 3, 2304
@@ -332,12 +334,12 @@ class FusedDraft:
         w = load_file(str(Path(model_dir) / "mtp.safetensors"), device=str(dev))
         d = self.d = _Dk()
         self.kc, self.vc = [], []
-        T = maxctx + NB
+        T = maxctx + NB      # context positions < maxctx, then the block's own 8 rows
         for l in range(3):
             p = f"layers.{l}."
             g = lambda n: w[p + n]  # noqa: E731
             Lw = _DkL()
-            f8l = {"0": 0, "": 0, "base": 1, "fold": 2, "layers": 4, "all": 7}.get(os.environ.get("MK_DK_FP8", "1").lower(), 3) & 4
+            f8l = {"0": 0, "": 0, "base": 1, "fold": 2, "layers": 4, "all": 7}.get(os.environ.get("MK_DK_FP8", "all").lower(), 3) & 4
             mats = {"qkv": torch.cat([g("self_attn.q_proj.weight"), g("self_attn.k_proj.weight"), g("self_attn.v_proj.weight")]),
                     "kvc": torch.cat([g("self_attn.k_proj_ctx.weight"), g("self_attn.v_proj_ctx.weight")]),
                     "o": g("self_attn.o_proj.weight"),
@@ -372,7 +374,7 @@ class FusedDraft:
             fw[s:s + 8192] = (head @ ho_w).to(BF16)
             fb[s:s + 8192] = (head @ ho_b).to(BF16)
         d.fold = kp(frag_bf16(pad(fw, self.VP)))
-        f8 = os.environ.get("MK_DK_FP8", "1").lower()   # default: FP8 base + fold copies (measured: tokens/cycle within 0.3%, -55..-68 us per cycle)
+        f8 = os.environ.get("MK_DK_FP8", "all").lower()   # default: FP8 base + fold copies (measured: tokens/cycle within 0.3%, -55..-68 us per cycle)
         self.f8 = {"0": 0, "": 0, "base": 1, "fold": 2, "layers": 4, "all": 7}.get(f8, 3)
         d.f8 = self.f8
         if self.f8 & 2:
@@ -394,10 +396,10 @@ class FusedDraft:
         d.inv_freq = kp(1.0 / (mc["rope_theta"] ** (torch.arange(0, 128, 2, dtype=torch.float32, device=dev) / 128)))
         del w
         z = lambda *s_, dt=BF16: torch.zeros(*s_, dtype=dt, device=dev)  # noqa: E731
-        self.vtok = z(NB, dt=torch.int32)
+        self.vtok = z(VR, dt=torch.int32)
         self.vpos = torch.tensor([0, NB], dtype=torch.int32, device=dev)   # [c, rows K of the next verify pass]
         self.pconf = z(NB - 1, dt=torch.float32)
-        self.theta = float(os.environ.get("MK_CUM_TH", "0.4"))
+        self.theta = float(os.environ.get("MK_CUM_TH", "0.3"))   # rule 1: Markov early exit only (draftk.cu DK_RULE)
         d.pconf, d.theta = self.pconf.data_ptr(), self.theta
         d.cum = kp(z(NB, dt=torch.float32))
         d.acnt = kp(z(NB, dt=torch.int32))
@@ -405,12 +407,12 @@ class FusedDraft:
         self.c_new = z(1, dt=torch.long); self.anchor = z(1, dt=torch.long); self.frow = z(1, dt=torch.long)
         self.pos64 = z(NB, dt=torch.long)
         self.feats = z(NB, 4, H)
-        self.emit = z(NB + 1, dt=torch.int32)
+        self.emit = z(VR + 1, dt=torch.int32)
         d.vtok, d.vpos, d.c_new, d.anchor, d.frow = (t.data_ptr() for t in (self.vtok, self.vpos, self.c_new, self.anchor, self.frow))
         d.pos64, d.feats, d.emit = self.pos64.data_ptr(), self.feats.data_ptr(), self.emit.data_ptr()
         d.tgt = 0
-        for n, shape, dt in (("st", (16,), torch.int32), ("u", (3, NB, H), BF16), ("f", (H,), BF16), ("xres", (NB, H), BF16),
-                             ("h", (NB, H), BF16), ("kvraw", (3, NB, 2048), BF16), ("qkv", (NB, 5120), BF16), ("q", (NB, 3072), BF16),
+        for n, shape, dt in (("st", (32,), torch.int32), ("u", (3, VR, H), BF16), ("f", (H,), BF16), ("xres", (NB, H), BF16),
+                             ("h", (NB, H), BF16), ("kvraw", (3, VR, 2048), BF16), ("qkv", (NB, 5120), BF16), ("q", (NB, 3072), BF16),
                              ("att", (NB, 3072), BF16), ("act", (NB, 9216), BF16), ("xm", (NB, 2 * H), BF16),
                              ("base", (NB, self.VP), BF16), ("state", (2, 256), BF16), ("part", (8 * 32 * 24 * 132,), torch.float32),
                              ("opart", (4, NB, H), torch.float32), ("ctxo", (2, NB, 768), torch.float32), ("raw", (768,), torch.float32),
@@ -418,11 +420,13 @@ class FusedDraft:
             setattr(d, n, kp(z(*shape, dt=dt)))
         d.T = maxctx
         # n-gram drafts inside the cycle (the rule of engine/ngram.py; the engine skips its own n-gram step)
-        self.hist = torch.full((maxctx + 2 * NB,), -1, dtype=torch.int32, device=dev)
+        self.hist = torch.full((maxctx + 2 * VR,), -1, dtype=torch.int32, device=dev)
         d.hist, d.hT = self.hist.data_ptr(), self.hist.numel()
         ng_on = os.environ.get("MK_NGRAM", "1") == "1" and os.environ.get("MK_DK_NGRAM", "1") == "1"
         self.handles_ngram = ng_on
-        d.ngmin = int(os.environ.get("MK_NGRAM_MIN", "5")) if ng_on else 99
+        d.ngmin = int(os.environ.get("MK_NGRAM_MIN", "7")) if ng_on else 99   # 7 since s0013 (5-6-token matches go to DSpark or the short-copy rule)
+        d.tgt16 = d.pbt16 = d.fout16 = None
+        d.lim16, d.ng16min, d.ng16acc = -1, 99, 99      # 16-row passes off until capture() gets the 16-row library's buffers
         self.g_cyc = self.g_prop = None
         torch.cuda.synchronize()
 
@@ -447,7 +451,7 @@ class FusedDraft:
     def propose(self):
         self._run(2)
 
-    def capture(self, tgt_fn, feats_fn, pbt=None, fout=None):
+    def capture(self, tgt_fn, feats_fn, pbt=None, fout=None, tgt16=None, pbt16=None, fout16=None, lim16=-1, pre_fn=None):
         """pbt / fout (the engine's tagged partials [49][8][H/2][2] int32 and final-norm rows [8][H] bf16): when given,
         the cycle reads the features straight from them (no copy into feats)."""
         tgt = tgt_fn()
@@ -458,6 +462,12 @@ class FusedDraft:
             assert pbt.dtype == torch.int32 and tuple(pbt.shape[1:]) == (NB, 1152, 2) and fout.dtype == BF16
             self.d.pbt, self.d.fout = pbt.data_ptr(), fout.data_ptr()
             feats_fn = None
+            if tgt16 is not None:   # the 16-row library's outputs (engine/mk16.cu): n-gram copies of 15 tokens
+                assert tgt16.dtype == torch.int32 and tgt16.numel() >= VR and tuple(pbt16.shape[1:]) == (VR, 1152, 2)
+                self.d.tgt16, self.d.pbt16, self.d.fout16 = tgt16.data_ptr(), pbt16.data_ptr(), fout16.data_ptr()
+                self.d.lim16 = int(lim16)
+                self.d.ng16min = int(os.environ.get("MK_NG16_MIN", "5"))
+                self.d.ng16acc = int(os.environ.get("MK_NG16_ACC", "7"))   # simulated: natural (12 prompts) -1.9%, headline prompts =; served: natural -1.5%
         self._feats_fn = feats_fn
         save = [t.clone() for t in (self.vtok, self.vpos, self.c_new, self.anchor, self.frow)]
         s = torch.cuda.Stream()
@@ -475,6 +485,7 @@ class FusedDraft:
         else:
             self.g_cyc = torch.cuda.CUDAGraph()
             with torch.cuda.graph(self.g_cyc):
+                if pre_fn: pre_fn()   # the cycle's verify pass (engine: SWITCH node over the specialized kernels)
                 if feats_fn: self.feats.copy_(feats_fn())
                 self._run(0)
             self.g_prop = torch.cuda.CUDAGraph()

@@ -8,6 +8,12 @@
 #include <cstdio>
 #include <cstring>
 #include "mkprof.cuh"
+#ifndef W13_UNR16
+#define W13_UNR16 12   // s18-c4: w13 NVFP4 units per warp batch (12 with W2V16 0: V(16) -2.2%; 9 worse)
+#endif
+#ifndef W2S_RS
+#define W2S_RS (IE + 8)
+#endif
 
 typedef __nv_bfloat16 bf16;
 
@@ -24,6 +30,7 @@ typedef __nv_bfloat16 bf16;
 #define NLW 24
 #define NAPP 48
 #define MAXB 8
+#define MAXR 16   // rows of the global per-row buffers (verify passes up to 16 rows; step kernels use <= 8)
 #ifndef NTH
 #define NTH 768
 #endif
@@ -35,7 +42,7 @@ typedef __nv_bfloat16 bf16;
 #define CH 128           // attention positions per item (at most)
 #define MAXCH_S MAXCH
 #define MAXCH 64         // chunks per (token, kv head)
-#define MAXU 64          // union experts per layer
+#define MAXU 160         // union entries per layer (16-row passes: an expert with > 8 of the rows' tokens takes two entries)
 #define VOCAB_REAL 200058
 #define VOCAB_ROWS 201024
 #define UN_STRIPS 12504  // 200064 rows
@@ -88,22 +95,12 @@ struct Ctx {
   long long* prof;
   bf16* fout;                              // [MAXB][H] final-norm output per row (verify passes: draft features)
   uint2* xft;                              // [MAXB][NPAIR] verify passes: final-norm rows published by designated blocks
-  const uint8_t* un8;                      // verify passes: INT8 copy of the unembedding (per-row scale), fragment order
-  const float* un8s; const float* un8m;    // per row: scale, error coefficient (max |w - s q| + 6e-4 max |w|) * (1 + 1e-3)
-  float* zhi; unsigned* zlo;               // [MAXB][UN_STRIPS * 16] upper bounds of z; per row max lower bound (ordered)
 };
 struct Hdr { int B, pos, flags, nsteps; const int* tokens; float* logits; int* out_tok; int out_stride; unsigned tag0;
              const int* prompt; int plen; unsigned tok_tag;
-             const int* vpos; };   // vpos != null: verify pass, rows b < vpos[1] = one sequence (cache slot 0) at positions vpos[0] + b
-#ifndef QSEQ
-#define QSEQ 0   // (1 measured +5..15 us) shared attention (verify): q polls one at a time per lane
-#endif
-#ifndef LS_SEQ_S
-#define LS_SEQ_S 0   // step kernels: mix sources polled one source at a time
-#endif
-#ifndef LS_SEQ
-#define LS_SEQ 0   // (1 measured +10..25 us) verify kernel: mix sources polled one source at a time
-#endif
+             const int* vpos; int ro;
+             const int* mt; };   // mt != null (verify passes): rows of several sequences, mt[0] = rows, mt[1 + b] = sequence (cache slot), mt[17 + b] = position, mt[33 + b] = earlier rows of its sequence in this pass (rows of a sequence consecutive)   // ro: verify passes of > 8 rows: first row of the half a phase works on   // vpos != null: verify pass, rows b < vpos[1] = one sequence (cache slot 0) at positions vpos[0] + b
+#ifndef RING
 #ifndef SHARED_ATTR
 #define SHARED_ATTR
 #endif
@@ -119,14 +116,34 @@ struct Hdr { int B, pos, flags, nsteps; const int* tokens; float* logits; int* o
 #ifndef KV4_STEP
 #define KV4_STEP 0   // ... also in the step kernel (a track-A change)
 #endif
-#ifndef RING
-#define RING 16   // short-convolution history: raw inputs of the last positions, slot = position % RING
+#define RING 32   // short-convolution history: raw inputs of the last positions, slot = position % RING
 #endif
 // row b of a step: position, cache slot (sequence) and how many earlier rows of the same pass precede it in its sequence
 // (V: the verify kernel; the step kernel is compiled with V = false, so its code is the plain one-position code)
+#define MT_SEQ 1
+#define MT_POS 17
+#define MT_NIN 33
+#ifndef MSEQ
+#define MSEQ 0   // multi-sequence passes (Hdr.mt row tables): built and bit-identical (tests/c3/vmulti.py), unused; the
+                 // table checks in the row accessors cost ~70 us per 16-row pass, so they are compiled only with MSEQ 1
+#endif
+#if MSEQ
+template <bool V> __device__ __forceinline__ int row_t(const Hdr& hd, int b) { return V ? (hd.mt ? __ldg(hd.mt + MT_POS + b) : hd.pos + b) : hd.pos; }
+template <bool V> __device__ __forceinline__ int row_seq(const Hdr& hd, int b) { return V ? (hd.mt ? __ldg(hd.mt + MT_SEQ + b) : 0) : b; }
+template <bool V> __device__ __forceinline__ int row_nin(const Hdr& hd, int b) { return V ? (hd.mt ? __ldg(hd.mt + MT_NIN + b) : b) : 0; }
+#define HD_MT(hd) ((hd).mt)
+#else
 template <bool V> __device__ __forceinline__ int row_t(const Hdr& hd, int b) { return hd.pos + (V ? b : 0); }
 template <bool V> __device__ __forceinline__ int row_seq(const Hdr& hd, int b) { return V ? 0 : b; }
-template <bool V> __device__ __forceinline__ int row_nin(const Hdr& hd, int b) { return V ? b : 0; }   // nsteps > 0: device loop over nsteps steps
+template <bool V> __device__ __forceinline__ int row_nin(const Hdr& hd, int b) { return V ? b : 0; }
+#define HD_MT(hd) ((const int*)nullptr)
+#endif
+template <bool V> __device__ __forceinline__ int row_tmax(const Hdr& hd) {   // the largest position of the pass's rows
+  if (!(V && HD_MT(hd))) return row_t<V>(hd, hd.B - 1);
+  int m = 0;
+  for (int b = 0; b < hd.B; b++) m = max(m, row_t<V>(hd, b));
+  return m;
+}   // nsteps > 0: device loop over nsteps steps
 #define F_LOGITS 1
 
 // counter regions
@@ -192,20 +209,27 @@ __device__ __forceinline__ unsigned long long gtime() { unsigned long long t; as
 __device__ __forceinline__ int lane_id() { int l; asm("mov.u32 %0, %%laneid;" : "=r"(l)); return l; }
 
 // ------------------------------------------------------------------------------------------------ shared memory
+// the router input of 8 rows (bf16) lives on x16 rows 12..15 (written last: a 16-row pass converts row 8 + b after the
+// router, element by element in place, in row order, every element by the same thread: tests/c3/vcheck16.py)
+#define EXR(smm, b) (reinterpret_cast<bf16*>(&(smm).u.e.x16[12][0][0]) + (long)(b) * HP)
+// ROUT1: the router input of all 16 rows on x16 rows 8..15 (converted in place after the router, rows in order)
+#define EXR16(smm, b) (reinterpret_cast<bf16*>(&(smm).u.e.x16[8][0][0]) + (long)(b) * HP)
 struct Smem {
   union {
     bf16 xs[3][SMB][HP];                 // B operands (bf16), streams q / k / v (router, unembed: stream 0)
     bf16 xo[SMB][QWP];                   // o_proj input
-    struct { bf16 xr[SMB][HP]; __half x16[SMB][2][HP]; } e;   // router input + expert input (f16 hi / lo)
+    bf16 xs16[2][MAXR][HP];               // 16-row qkv in one pass: stream 0 and the block's other stream (QKV1)
+    struct { __half x16[MAXR][2][HP]; } e;   // expert inputs of all 16 rows (f16 hi / lo); the router input of 8 rows: EXR
+   // router input + expert input (f16 hi / lo)
     struct {                               // attention item
       bf16 kk[CH][HD + 8]; bf16 vv[CH][HD + 8]; bf16 qb[8][HD + 8]; bf16 ph[16][CH + 8]; bf16 pl[16][CH + 8];
       float sc[3][CH]; float pr[16][CH]; float rr[3][16];
       float kt[MAXB][HD]; float vt[MAXB][HD]; float ml[2][3][2]; float po[3][HD]; float raw[2][HD];
     } at;
     struct {                               // verify passes: attention record item shared by all rows (64 keys)
-      bf16 kk[64][HD + 8]; bf16 vv[64][HD + 8]; bf16 qb[3 * MAXB][HD + 8]; bf16 ph[32][64 + 8]; bf16 pl[32][64 + 8];
-      float sc[3 * MAXB][64]; float prw[16][64 + MAXB]; float rr[3 * MAXB][16];
-      float kt[MAXB][HD]; float vt[MAXB][HD]; float ml[3 * MAXB][2]; float raw[2][MAXB][HD];
+      bf16 kk[64][HD + 8]; bf16 vv[64][HD + 8]; bf16 qb[3 * MAXR][HD + 8]; bf16 ph[3 * MAXR][64 + 8]; bf16 pl[3 * MAXR][64 + 8];
+      float sc[3 * MAXR][64]; float prw[16][64 + MAXR]; float rr[3 * MAXR][16];
+      bf16 kt[MAXR][HD]; bf16 vt[MAXR][HD]; float ml[3 * MAXR][2]; bf16 raw[2][MAXR][HD];   // kt / vt / raw: bf16-exact values
     } as;
     float mrg[MAXCH_S * 3 * 130 + 3 * MAXCH];      // attention merge staging
     __half w2s[24][2][IE];                       // w2 inputs (expert, token) pairs of a round, hi / lo
@@ -214,10 +238,11 @@ struct Smem {
   float w2o[MAXB][TOPK][16];               // w2: per (token, expert rank) output strip
   float red[NWARP][32];
   float bcast[64];
-  float sc16[MAXB];                        // 2^-s of the expert input f16 scaling per token
+  float sc16[MAXR];                        // 2^-s of the expert input f16 scaling per token
   // routing tables (identical in every block)
   int nU; int uexp[MAXU]; int uncnt[MAXU]; int utok[MAXU][MAXB];
-  int tex[MAXB][TOPK]; float twt[MAXB][TOPK];   // per token: experts sorted by id, weights
+  int ue0[NE]; int uc0[NE];               // 16-row routing: experts and their token counts before the split
+  int tex[MAXR][TOPK]; float twt[MAXR][TOPK];   // per token: experts sorted by id, weights
   unsigned umask[4];
   int flag;
   unsigned subn;
@@ -544,23 +569,20 @@ __device__ __forceinline__ void rmsnorm_store(const float* x, const bf16* w, bf1
 
 __device__ __forceinline__ float ldcg_bf(const bf16* p) { return bf(__ushort_as_bfloat16(__ldcg(reinterpret_cast<const unsigned short*>(p)))); }
 // rows of pbt (polled): idx[s] for s < ns, token b
-template <int NS, bool SEQ = false>
+template <int NS>
 __device__ __forceinline__ void load_srcs(const Ctx& c, const Hdr& hd, const int* idx, unsigned msk, int b, float (*v)[EPT]) {
   // loads issued unconditionally (clamped addresses): arrays assigned under a condition would live in local memory
   const int p1 = EV(2) ? threadIdx.x + NTH : threadIdx.x;
   uint2 r[NS][2];
-  if (!SEQ) {
 #pragma unroll
-    for (int s = 0; s < NS; s++) {
-      const uint2* base = c.pbt + ((long)idx[s] * MAXB + b) * NPAIR;
-      r[s][0] = ld_tag(base + threadIdx.x);
-      r[s][1] = ld_tag(base + p1);
-    }
+  for (int s = 0; s < NS; s++) {
+    const uint2* base = c.pbt + ((long)idx[s] * MAXR + b) * NPAIR;
+    r[s][0] = ld_tag(base + threadIdx.x);
+    r[s][1] = ld_tag(base + p1);
   }
 #pragma unroll
   for (int s = 0; s < NS; s++) {
-    const uint2* base = c.pbt + ((long)idx[s] * MAXB + b) * NPAIR;
-    if (SEQ) { r[s][0] = ld_tag(base + threadIdx.x); r[s][1] = ld_tag(base + p1); }
+    const uint2* base = c.pbt + ((long)idx[s] * MAXR + b) * NPAIR;
     const unsigned tg = TAGP(idx[s]);
     const uint32_t x0 = ((msk >> s) & 1u) ? wait_tag(base + threadIdx.x, r[s][0], tg) : 0u;
     const uint32_t x1 = (((msk >> s) & 1u) && EV(2)) ? wait_tag(base + p1, r[s][1], tg) : 0u;
@@ -606,7 +628,7 @@ struct BTag {   // tagged bf16 pair rows in global memory (polled): element pair
 };
 
 #ifndef BF_UNR
-#define BF_UNR 3   // bf16 GEMV: units of loads in flight per warp (3: step B=1 -30 us, B=8 -26..-115, verify -20..-45 vs 2)
+#define BF_UNR 2
 #endif
 template <class BL>
 __device__ __forceinline__ void piece_bf16(const uint8_t* wst, int u0, int nu, const BL& bl, float* acc) {
@@ -631,6 +653,38 @@ __device__ __forceinline__ void piece_bf16(const uint8_t* wst, int u0, int nu, c
     for (int q = 0; q < 4; q++) {
       uint2 b = bl.get(u * 64 + q * 16);
       mma_bf16(acc, w[q].x, w[q].y, w[q].z, w[q].w, b.x, b.y);
+    }
+  }
+}
+
+// piece_bf16 for two column groups (rows 0..7 and 8..15 of a 16-row pass): each weight fragment feeds two MMAs; per
+// column the same units in the same order as piece_bf16 (columns of an mma are independent): bit-identical
+template <class BL>
+__device__ __forceinline__ void piece_bf16_2(const uint8_t* wst, int u0, int nu, const BL& b0, const BL& b1, float (*acc)[4]) {
+  const int lane = lane_id();
+  int u = u0;
+  const int ue = u0 + nu;
+  for (; u + BF_UNR <= ue; u += BF_UNR) {
+    uint4 w[4 * BF_UNR];
+#pragma unroll
+    for (int q = 0; q < 4 * BF_UNR; q++) w[q] = ldg_nc(wst + ((long)(u + (q >> 2)) * 4 + (q & 3)) * 512 + lane * 16);
+#pragma unroll
+    for (int q = 0; q < 4 * BF_UNR; q++) {
+      const int k = (u + (q >> 2)) * 64 + (q & 3) * 16;
+      const uint2 x0 = b0.get(k), x1 = b1.get(k);
+      mma_bf16(acc[0], w[q].x, w[q].y, w[q].z, w[q].w, x0.x, x0.y);
+      mma_bf16(acc[1], w[q].x, w[q].y, w[q].z, w[q].w, x1.x, x1.y);
+    }
+  }
+  for (; u < ue; u++) {
+    uint4 w[4];
+#pragma unroll
+    for (int q = 0; q < 4; q++) w[q] = ldg_nc(wst + ((long)u * 4 + q) * 512 + lane * 16);
+#pragma unroll
+    for (int q = 0; q < 4; q++) {
+      const uint2 x0 = b0.get(u * 64 + q * 16), x1 = b1.get(u * 64 + q * 16);
+      mma_bf16(acc[0], w[q].x, w[q].y, w[q].z, w[q].w, x0.x, x0.y);
+      mma_bf16(acc[1], w[q].x, w[q].y, w[q].z, w[q].w, x1.x, x1.y);
     }
   }
 }
@@ -681,32 +735,6 @@ __device__ __forceinline__ void w12_bases(const W12M& M, long strip, uint32_t& E
   const int g = lane_id() >> 2;
   const uint32_t e0 = (uint32_t)__ldg(M.base + strip * 16 + g), e8 = (uint32_t)__ldg(M.base + strip * 16 + g + 8);
   E0 = (e0 | (e0 << 16)) << 7; E8 = (e8 | (e8 << 16)) << 7;
-}
-// INT8 unembedding strip (per lane 32 B per unit: tiles 0..3 x 8 int8 in the bf16 fragment's element order), exact
-// int8 -> bf16, products with the bf16 rows exact, fp32 sums
-__device__ __forceinline__ uint32_t i8x2_bf16(uint32_t w, int sh) {
-  const float a = (float)(signed char)((w >> sh) & 0xff), b = (float)(signed char)((w >> (sh + 8)) & 0xff);
-  const __nv_bfloat162 v = __floats2bfloat162_rn(a, b);
-  return *reinterpret_cast<const uint32_t*>(&v);
-}
-template <class BL>
-__device__ __forceinline__ void piece_i8(const uint8_t* wst, const BL& bl, float* acc) {
-  const int lane = lane_id();
-#pragma unroll 1
-  for (int u = 0; u < 36; u += 6) {
-    uint4 w[12];
-#pragma unroll
-    for (int q = 0; q < 12; q++) w[q] = ldg_nc(wst + (long)(u + (q >> 1)) * 1024 + lane * 32 + (q & 1) * 16);
-#pragma unroll
-    for (int q = 0; q < 12; q++) {
-#pragma unroll
-      for (int tt = 0; tt < 2; tt++) {
-        const uint32_t lo = tt ? w[q].z : w[q].x, hi = tt ? w[q].w : w[q].y;
-        const uint2 b = bl.get((u + (q >> 1)) * 64 + (2 * (q & 1) + tt) * 16);
-        mma_bf16(acc, i8x2_bf16(lo, 0), i8x2_bf16(lo, 16), i8x2_bf16(hi, 0), i8x2_bf16(hi, 16), b.x, b.y);
-      }
-    }
-  }
 }
 template <class BL>
 __device__ __forceinline__ void w12_mma(const W12M& M, const W12Pre& w, uint32_t E0, uint32_t E8, int u, const BL& bl, float* acc) {
@@ -807,13 +835,13 @@ __device__ __forceinline__ void unit_fp4(const uint4& cw, const uint2& sw, const
     }
   }
 }
-template <int NG, bool GL>
+template <int NG, bool GL, int UNR_ = 0>
 __device__ __forceinline__ void piece_fp4(const uint8_t* wst, int u0, int nu, const __half* const* colp, float (*acc)[4], unsigned tag = 0) {
   const int lane = lane_id(), g = lane >> 2;
 #ifndef FP4_UNR
 #define FP4_UNR 6
 #endif
-  constexpr int UNR = FP4_UNR;
+  constexpr int UNR = UNR_ ? UNR_ : FP4_UNR;   // s18-c4: per call (W13_UNR16 for w13)
   int u = u0;
   const int ue = u0 + nu;
   for (; u + UNR <= ue; u += UNR) {
@@ -1065,39 +1093,18 @@ __device__ __forceinline__ void norm_publish(const float (*x)[EPT], const float 
   }
 }
 // poll nrows published rows (row r at src + r * NPAIR) into smem rows dst(r) (bf16, pairs)
-#ifndef MG_UNR
-#define MG_UNR 1     // verify kernel: shared-attention merge record polls in flight per thread
+template <class DST>
+#ifndef PR16_UNR
+#define PR16_UNR 8   // tagged row polls in flight per thread
 #endif
-#ifndef OP_UNR_S
-#define OP_UNR_S 4   // step kernels: o_proj input polls in flight per thread
-#endif
-#ifndef OP_UNR_V
-#define OP_UNR_V 4   // verify kernel: o_proj input polls in flight per thread
-#endif
-#ifndef W2S_UNR_V
-#define W2S_UNR_V 2  // verify kernel: w2a input staging polls in flight per thread
-#endif
-#ifndef W2B_UNR_V
-#define W2B_UNR_V 8   // verify kernel: w2b expert-contribution polls per batch (1, 2, 4, 8)
-#endif
-#ifndef PR_UNR_S
-#define PR_UNR_S 2   // step kernels (B >= 2): tagged row polls in flight per thread
-#endif
-#ifndef W2S_UNR_S
-#define W2S_UNR_S 2  // step kernels: w2a input staging polls in flight per thread
-#endif
-#ifndef PR_UNR_V
-#define PR_UNR_V 2   // verify kernel: tagged row polls in flight per thread (8 / 4 / 3 / 2: K=8 5640 / 5598 / 5494 / 5486 us)
-#endif
-template <int PRU = 8, class DST>
 __device__ __forceinline__ void poll_rows(const uint2* src, int nrows, DST dst, unsigned tag) {
   const int n = nrows * NPAIR;   // words, two per load
-  for (int i0 = 2 * threadIdx.x; i0 < n; i0 += 2 * NTH * PRU) {
-    uint2 r[PRU][2];
+  for (int i0 = 2 * threadIdx.x; i0 < n; i0 += 2 * NTH * PR16_UNR) {
+    uint2 r[PR16_UNR][2];
 #pragma unroll
-    for (int q = 0; q < PRU; q++) ld_tag2(src + min(i0 + q * 2 * NTH, n - 2), r[q][0], r[q][1]);
+    for (int q = 0; q < PR16_UNR; q++) ld_tag2(src + min(i0 + q * 2 * NTH, n - 2), r[q][0], r[q][1]);
 #pragma unroll
-    for (int q = 0; q < PRU; q++) {
+    for (int q = 0; q < PR16_UNR; q++) {
       const int i = i0 + q * 2 * NTH;
       if (i >= n) continue;
       const int row = i / NPAIR, w = i % NPAIR;
@@ -1106,17 +1113,6 @@ __device__ __forceinline__ void poll_rows(const uint2* src, int nrows, DST dst, 
       d[1] = wait_tag(src + i + 1, r[q][1], tag);
     }
   }
-}
-#ifndef PR1_MIN
-#define PR1_MIN 3
-#endif
-#ifndef PR1_MAX
-#define PR1_MAX 4   // verify passes of at most this many rows poll published rows 1 deep (else PR_UNR_V)
-#endif
-template <bool V, class DST>
-__device__ __forceinline__ void pollr(int B, const uint2* src, int nrows, DST dst, unsigned tag) {
-  if (V && B >= PR1_MIN && B <= PR1_MAX) poll_rows<1>(src, nrows, dst, tag);
-  else poll_rows<V ? PR_UNR_V : PR_UNR_S>(src, nrows, dst, tag);
 }
 
 #ifndef VDES_MIN
@@ -1153,6 +1149,8 @@ template <bool V> __device__ __forceinline__ bool hyb2(const Hdr& hd) { return V
 #define DREV_MAX 4   // ... for passes of at most this many rows (K=8: +220 us on the last blocks)
 #endif
 template <bool V> __device__ __forceinline__ int dsel(const Hdr& hd) { return (V && DREV && hd.B <= DREV_MAX) ? (int)(gridDim.x - 1 - blockIdx.x) : (int)blockIdx.x; }
+// verify passes of more than 8 rows: the smem-row phases (qkv, router .. w2a, final unembedding) run per 8-row half
+template <bool V> __device__ __forceinline__ bool big16(const Hdr& hd) { return V && hd.B > SMB; }
 template <bool V> __device__ __forceinline__ bool desig(const Hdr& hd) { return hd.B >= (V ? VDES_MIN : 2) && !hyb2<V>(hd); }
 // The attention input streams of application a -> normalized bf16 smem streams (returns their number), or for the
 // gated applications (loop passes 2 and 3) G1: blocks (token, controller) write x, m and [unit(x), unit(m)] (returns -1)
@@ -1161,13 +1159,10 @@ template <bool V> __device__ int ph_attn_in(PH_ARGS, int a) {
   const LayerW& L = c.L[ap.layer];
   const int B = hd.B;
   const bool dz = desig<V>(hd);
-#ifndef PF_MIN_S
-#define PF_MIN_S 2   // step kernels: L2 prefetch of the qkv / router strips from this many rows
-#endif
 #ifndef PF_MIN
-#define PF_MIN 9   // L2 prefetch of the qkv / router strips from this many rows (the step kernel: from 2)
+#define PF_MIN 3   // L2 prefetch of the qkv / router strips from this many rows (the step kernel: from 2)
 #endif
-  const bool pfq = B >= (V ? PF_MIN : PF_MIN_S);
+  const bool pfq = B >= (V ? PF_MIN : 2);
   if (pfq && threadIdx.x < 4) {   // this block's qkv strips into L2 while the mix waits for its sources (B >= 2: the mix is long enough)
     const int strip = blockIdx.x + threadIdx.x * gridDim.x;
     if (strip < QG_STRIPS + 2 * L.nsk) pf_l2(L.wqkv + (long)strip * 36 * 2048, 36 * 2048);
@@ -1176,7 +1171,7 @@ template <bool V> __device__ int ph_attn_in(PH_ARGS, int a) {
   const int par = a & 1;
   const bool hy = hyb2<V>(hd);
   if (ap.nmsg == 0 && (dz || hy)) {
-    uint2* xs_pub = c.xst + (long)par * 3 * MAXB * NPAIR;   // [3][MAXB][NPAIR]
+    uint2* xs_pub = c.xst + (long)par * 3 * MAXR * NPAIR;   // [3][MAXR][NPAIR]
     // hybrid (2 rows): jobs of row 1 on the last blocks; row 0 below in every block
     for (int job = hy ? nq + (int)(gridDim.x - 1 - blockIdx.x) : dsel<V>(hd); job < B * nq; job += gridDim.x) {
       const int b = job / nq, q = job % nq;
@@ -1210,18 +1205,19 @@ template <bool V> __device__ int ph_attn_in(PH_ARGS, int a) {
         const float* qs[1] = {L.aq + q * H};
         float qv[1][EPT];
         load_queries<1>(qs, 1, qv);
-        load_srcs<5, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, idx, msk, b, v);
+        load_srcs<5>(c, hd, idx, msk, b, v);
         depth_mix_q<5, 1>(v, msk, qv, 1, x, sm);
       }
       float wv[1][EPT];
       load_w(L.norm[q], wv[0]);
-      uint2* dst[1] = {xs_pub + ((long)q * MAXB + b) * NPAIR};
+      uint2* dst[1] = {xs_pub + ((long)q * MAXR + b) * NPAIR};
       norm_publish<1>(x, wv, 1, dst, TAGA(a), sm);
     }
     if (!hy) {
+      if (big16<V>(hd)) return nq;   // rows polled per half in the qkv phase
       const unsigned need = ((V || POLL_STEP) && POLL_NEEDED) ? qkv_streams(L, nq) : 7u;
       for (int q = 0; q < nq; q++)
-        if ((need >> q) & 1u) pollr<V>(hd.B, xs_pub + (long)q * MAXB * NPAIR, B, [&](int r) { return &sm.u.xs[q][r][0]; }, TAGA(a));
+        if ((need >> q) & 1u) poll_rows(xs_pub + (long)q * MAXR * NPAIR, B, [&](int r) { return &sm.u.xs[q][r][0]; }, TAGA(a));
       __syncthreads();
       return nq;
     }
@@ -1260,7 +1256,7 @@ template <bool V> __device__ int ph_attn_in(PH_ARGS, int a) {
         float qv[3][EPT];
         SUBMARK(30);
         load_queries<3>(qs, nq, qv);                 // weights first: independent of the polled sources
-        load_srcs<5, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, idx, msk, b, v);
+        load_srcs<5>(c, hd, idx, msk, b, v);
         SUBMARK(31);
         if (nq == 1) depth_mix_q<5, 1>(v, msk, qv, 1, x, sm); else depth_mix_q<5, 3>(v, msk, qv, 3, x, sm);
         SUBMARK(32);
@@ -1272,10 +1268,10 @@ template <bool V> __device__ int ph_attn_in(PH_ARGS, int a) {
       SUBMARK(33);
     }
     if (hy) {   // row 1 from the last blocks
-      const uint2* xs_pub = c.xst + (long)par * 3 * MAXB * NPAIR;
+      const uint2* xs_pub = c.xst + (long)par * 3 * MAXR * NPAIR;
       const unsigned need = (POLL_NEEDED) ? qkv_streams(L, nq) : 7u;
       for (int q = 0; q < nq; q++)
-        if ((need >> q) & 1u) pollr<V>(hd.B, xs_pub + ((long)q * MAXB + 1) * NPAIR, B - 1, [&](int r) { return &sm.u.xs[q][1 + r][0]; }, TAGA(a));
+        if ((need >> q) & 1u) poll_rows(xs_pub + ((long)q * MAXR + 1) * NPAIR, B - 1, [&](int r) { return &sm.u.xs[q][1 + r][0]; }, TAGA(a));
     }
     __syncthreads();
     return nq;
@@ -1283,14 +1279,14 @@ template <bool V> __device__ int ph_attn_in(PH_ARGS, int a) {
   return -1;
 }
 // mlp-gate G1: block per token (controller 3)
-template <bool V> __device__ void mlp_mix(PH_ARGS, int a, int b, float (*x)[EPT]);
-template <bool V> __device__ void ph_mlp_g1(PH_ARGS, int a) {   // (unused)
+__device__ void mlp_mix(PH_ARGS, int a, int b, float (*x)[EPT]);
+__device__ void ph_mlp_g1(PH_ARGS, int a) {
   const App& ap = c.A[a];
   const int B = hd.B, par = a & 1;
   for (int b = blockIdx.x; b < B; b += gridDim.x) {
     float x[1][EPT], m[1][EPT], ms[2][EPT];
-    mlp_mix<V>(c, hd, sm, a, b, x);
-    load_srcs<2, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, ap.msg, 3u, b, ms);
+    mlp_mix(c, hd, sm, a, b, x);
+    load_srcs<2>(c, hd, ap.msg, 3u, b, ms);
     const float* mq[1] = {c.loopq + ((long)ap.loopl * 4 + 3) * H};
     depth_mix<2, 1>(ms, 3u, mq, 1, m, sm);
     float s2[2] = {0.f, 0.f};
@@ -1298,7 +1294,7 @@ template <bool V> __device__ void ph_mlp_g1(PH_ARGS, int a) {   // (unused)
     for (int k = 0; k < EPT; k++) { s2[0] += x[0][k] * x[0][k]; s2[1] += m[0][k] * m[0][k]; }
     block_sum<2>(s2, sm);
     const float rx = rsqrtf(s2[0] / (float)H + 1e-6f), rm = rsqrtf(s2[1] / (float)H + 1e-6f);
-    const long o = ((long)(par * MAXB + b) * 4 + 3) * H;
+    const long o = ((long)(par * MAXR + b) * 4 + 3) * H;
 #pragma unroll
     for (int j = 0; j < 2; j++) {
       if (!EV(2 * j)) continue;
@@ -1321,15 +1317,21 @@ template <bool V> __device__ void ph_mlp_g1(PH_ARGS, int a) {   // (unused)
 #ifndef GATE_MFIRST
 #define GATE_MFIRST 1   // gate D items: the loop-message mix (ready since the previous pass) before the x mix
 #endif
+#ifndef GD2
+#define GD2 0   // (measured slower: 8620 vs 8548 us at K=16; V(12) +240 us from code generation)
+#endif
 template <bool V> __device__ void ph_gate_d(PH_ARGS, int a, int c0, int nc) {
   const App& ap = c.A[a];
   const LayerW& L = c.L[ap.layer];
   const int B = hd.B, par = a & 1;
-  const int N = nc * 4 * B;
+  // GD2 (16-row passes with more D jobs than blocks): a job does JP of its row's four D strips in turn after one mix
+  const int JP = (GD2 && V && B > SMB && nc * 4 * B > (int)gridDim.x) ? 2 : 1, NQ = 4 / JP;
+  const int N = nc * NQ * B;
   constexpr int ST = 2 * H + 8;
   bf16* xb = &sm.u.xs[0][0][0];                                   // [1][ST]
   for (int it = blockIdx.x; it < N; it += gridDim.x) {
-    const int b = it % B, sj = it / B, ctrl = c0 + sj / 4, j = sj % 4, strip = ctrl * 4 + j;
+    const int b = it % B, sj = it / B, ctrl = c0 + sj / NQ, jq = sj % NQ;
+    const int j0 = jq * JP;
     float x[1][EPT], m[1][EPT], ms[2][EPT];
     {
       const float* mq[1] = {c.loopq + ((long)ap.loopl * 4 + ctrl) * H};
@@ -1337,7 +1339,7 @@ template <bool V> __device__ void ph_gate_d(PH_ARGS, int a, int c0, int nc) {
       load_queries<1>(mq, 1, mqv);
       const bool mfirst = (V || GATE_MFIRST_STEP) && GATE_MFIRST;
       if (mfirst) {
-        load_srcs<2, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, ap.msg, 3u, b, ms);
+        load_srcs<2>(c, hd, ap.msg, 3u, b, ms);
         depth_mix_q<2, 1>(ms, 3u, mqv, 1, m, sm);
       }
       if (ctrl < 3) {
@@ -1347,13 +1349,13 @@ template <bool V> __device__ void ph_gate_d(PH_ARGS, int a, int c0, int nc) {
         const float* qs[1] = {L.aq + (L.glob ? ctrl : 0) * H};
         float qv[1][EPT];
         load_queries<1>(qs, 1, qv);
-        load_srcs<5, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, idx, msk, b, v);
+        load_srcs<5>(c, hd, idx, msk, b, v);
         depth_mix_q<5, 1>(v, msk, qv, 1, x, sm);
       } else {
-        mlp_mix<V>(c, hd, sm, a, b, x);
+        mlp_mix(c, hd, sm, a, b, x);
       }
       if (!mfirst) {
-        load_srcs<2, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, ap.msg, 3u, b, ms);
+        load_srcs<2>(c, hd, ap.msg, 3u, b, ms);
         depth_mix_q<2, 1>(ms, 3u, mqv, 1, m, sm);
       }
     }
@@ -1362,41 +1364,44 @@ template <bool V> __device__ void ph_gate_d(PH_ARGS, int a, int c0, int nc) {
     for (int k = 0; k < EPT; k++) { s2[0] += x[0][k] * x[0][k]; s2[1] += m[0][k] * m[0][k]; }
     block_sum<2>(s2, sm);
     const float rx = rsqrtf(s2[0] / (float)H + 1e-6f), rm = rsqrtf(s2[1] / (float)H + 1e-6f);
-    const long o = ((long)(par * MAXB + b) * 4 + ctrl) * H;
+    const long o = ((long)(par * MAXR + b) * 4 + ctrl) * H;
 #pragma unroll
     for (int jj = 0; jj < 2; jj++) {
       if (!EV(2 * jj)) continue;
       const int el = EL(2 * jj);
       *reinterpret_cast<uint32_t*>(&xb[el]) = pack_bf2(x[0][2 * jj] * rx, x[0][2 * jj + 1] * rx);
       *reinterpret_cast<uint32_t*>(&xb[H + el]) = pack_bf2(m[0][2 * jj] * rm, m[0][2 * jj + 1] * rm);
-      if (j == 0) {
+      if (j0 == 0) {
         st_tagf(c.xgt + o + el, x[0][2 * jj], TAGA(a)); st_tagf(c.xgt + o + el + 1, x[0][2 * jj + 1], TAGA(a));
         st_tagf(c.mgt + o + el, m[0][2 * jj], TAGA(a)); st_tagf(c.mgt + o + el + 1, m[0][2 * jj + 1], TAGA(a));
       }
     }
     __syncthreads();
     BSm bl{xb, ST, 1};
+    for (int j = j0; j < j0 + JP; j++) {
+    const int strip = ctrl * 4 + j;
     block_strips<NWARP, 1>(sm, 1, 72,
       [&](int, int u0, int nu, float (*acc)[4]) { piece_bf16(L.cD + (long)strip * 72 * 2048, u0, nu, bl, acc[0]); },
       [&](int, float (*acc)[4]) {
         const int lane = lane_id(), g = lane >> 2, t = lane & 3;
         if (t == 0) {   // column 0 = this token
-          st_tagf(c.gvt + ((long)(par * MAXB + b) * 4 + ctrl) * 64 + j * 16 + g, rbf(acc[0][0]), TAGA(a));
-          st_tagf(c.gvt + ((long)(par * MAXB + b) * 4 + ctrl) * 64 + j * 16 + g + 8, rbf(acc[0][2]), TAGA(a));
+          st_tagf(c.gvt + ((long)(par * MAXR + b) * 4 + ctrl) * 64 + j * 16 + g, rbf(acc[0][0]), TAGA(a));
+          st_tagf(c.gvt + ((long)(par * MAXR + b) * 4 + ctrl) * 64 + j * 16 + g + 8, rbf(acc[0][2]), TAGA(a));
         }
       });
+    }
     __syncthreads();
   }
 }
 // F / G elementwise for controllers [c0, c0 + nc): xpt[b][ctrl][i]; one thread per (ctrl, b, i)
-#ifndef FG_ROWS
-#define FG_ROWS 0   // verify passes: one F/G task per (controller, channel) for all rows (weight row loaded once)
+#ifndef FG16
+#define FG16 0
 #endif
-template <bool V> __device__ void ph_gate_fg(PH_ARGS, int a, int c0, int nc) {
+__device__ void ph_gate_fg(PH_ARGS, int a, int c0, int nc) {
   const LayerW& L = c.L[c.A[a].layer];
   const int B = hd.B, par = a & 1;
-  if (V && FG_ROWS && B >= 2) {
-    constexpr int RB = FG_ROWS > 0 ? FG_ROWS : 1;   // rows per task
+  if (FG16 > 0 && B > SMB) {   // 16-row passes: one task per (controller, channel, RB rows): the weight row loaded once (mk.cu FG_ROWS)
+    constexpr int RB = FG16 > 0 ? FG16 : 1;   // rows per task
     const int NG_ = (B + RB - 1) / RB;
     const int N = nc * H * NG_;
     const int nd = nc * 4 * B;
@@ -1410,7 +1415,7 @@ template <bool V> __device__ void ph_gate_fg(PH_ARGS, int a, int c0, int nc) {
     const int tsk0 = (threadIdx.x >> 1) * nf + fb, odd = threadIdx.x & 1;
     for (int k = threadIdx.x; k < B * nc * 64; k += NTH) {
       const int r = k % 64, bc = k / 64, bb = bc / nc, cc = c0 + bc % nc;
-      gs[(bb * 4 + cc) * 64 + r] = pollf(c.gvt + ((long)(par * MAXB + bb) * 4 + cc) * 64 + r, TAGA(a));
+      gs[(bb * 4 + cc) * 64 + r] = pollf(c.gvt + ((long)(par * MAXR + bb) * 4 + cc) * 64 + r, TAGA(a));
     }
     __syncthreads();
     for (int it0 = 0; it0 < N; it0 += nf * (NTH / 2)) {
@@ -1426,14 +1431,14 @@ template <bool V> __device__ void ph_gate_fg(PH_ARGS, int a, int c0, int nc) {
       uint2 rx[RB];
 #pragma unroll
       for (int j = 0; j < RB; j++) {
-        const long o = ((long)(par * MAXB + min(bb0 + j, bb1 - 1)) * 4 + ctrl) * H + i;
+        const long o = ((long)(par * MAXR + min(bb0 + j, bb1 - 1)) * 4 + ctrl) * H + i;
         rx[j] = ld_tag(odd ? c.mgt + o : c.xgt + o);
       }
 #pragma unroll
       for (int j = 0; j < RB; j++) {
         const int b = min(bb0 + j, bb1 - 1);
         const bool okj = ok && bb0 + j < bb1;   // warp-uniform loop: no early exit around the shuffle
-        const long o = ((long)(par * MAXB + b) * 4 + ctrl) * H + i;
+        const long o = ((long)(par * MAXR + b) * 4 + ctrl) * H + i;
         const float* gvv = gs + (b * 4 + ctrl) * 64;
         float f = 0.f;
 #pragma unroll
@@ -1473,12 +1478,12 @@ template <bool V> __device__ void ph_gate_fg(PH_ARGS, int a, int c0, int nc) {
     uint4 fw[8];
 #pragma unroll
     for (int q = 0; q < 8; q++) fw[q] = ldg_nc(R + q);
-    const long o = ((long)(par * MAXB + b) * 4 + ctrl) * H + i;
+    const long o = ((long)(par * MAXR + b) * 4 + ctrl) * H + i;
     const uint2 rx = ld_tag(odd ? c.mgt + o : c.xgt + o);
     if (it0 == 0) {
       for (int k = threadIdx.x; k < B * nc * 64; k += NTH) {
         const int r = k % 64, bc = k / 64, bb = bc / nc, cc = c0 + bc % nc;
-        gs[(bb * 4 + cc) * 64 + r] = pollf(c.gvt + ((long)(par * MAXB + bb) * 4 + cc) * 64 + r, TAGA(a));
+        gs[(bb * 4 + cc) * 64 + r] = pollf(c.gvt + ((long)(par * MAXR + bb) * 4 + cc) * 64 + r, TAGA(a));
       }
       __syncthreads();
     }
@@ -1499,7 +1504,8 @@ template <bool V> __device__ void ph_gate_fg(PH_ARGS, int a, int c0, int nc) {
 }
 
 // QKV GEMV + epilogue: qkvt[par][b][row] (bf16-rounded f32). Block b: strips b, b + G, b + 2G, b + 3G; 6 warps per strip.
-__device__ void ph_qkv(PH_ARGS, int a, int nstreams) {
+template <bool V> __device__ void ph_qkv(PH_ARGS, int a, int nstreams) {
+  const int ro = V ? hd.ro : 0;
   const LayerW& L = c.L[c.A[a].layer];
   const int B = hd.B, par = a & 1;
   const int nsk = L.nsk;
@@ -1526,9 +1532,46 @@ __device__ void ph_qkv(PH_ARGS, int a, int nstreams) {
       for (int h = 0; h < 2; h++)
         for (int cc = 0; cc < 2; cc++) {
           const int tok = 2 * t + cc;
-          if (tok < B) st_tagf(c.qkvt + (long)(par * MAXB + tok) * QKVR + orow + g + 8 * h, rbf(acc[0][2 * h + cc]), TAGA(a));
+          if (tok < B) st_tagf(c.qkvt + (long)(par * MAXR + ro + tok) * QKVR + orow + g + 8 * h, rbf(acc[0][2 * h + cc]), TAGA(a));
         }
     });
+}
+
+#ifndef QKV1
+#define QKV1 0   // 16-row passes: qkv strips in one pass (both 8-row column groups per weight fragment): measured no gain (8786 vs 8772 us), off
+#endif
+__device__ __forceinline__ int qkv_stream_of(int strip, int nsk, int nstreams) {
+  const int st = strip < QG_STRIPS ? 0 : (strip < QG_STRIPS + nsk ? 1 : 2);
+  return st >= nstreams ? 0 : st;
+}
+// one block's qkv strips of a 16-row pass in one pass: inputs xs16[0] = stream 0, xs16[1] = the block's other stream
+__device__ void ph_qkv16(PH_ARGS, int a, int nstreams, int other) {
+  const LayerW& L = c.L[c.A[a].layer];
+  const int B = hd.B, par = a & 1;
+  const int nsk = L.nsk;
+  const int strips = QG_STRIPS + 2 * nsk;
+  const int G = gridDim.x;
+  const int ns = (strips - (int)blockIdx.x + G - 1) / G;
+  block_strips<6, 2>(sm, ns, 36,
+    [&](int q, int u0, int nu, float (*acc)[4]) {
+      const int strip = blockIdx.x + q * G;
+      const int slot = qkv_stream_of(strip, nsk, nstreams) == 0 ? 0 : 1;
+      BSm b0{&sm.u.xs16[slot][0][0], HP, SMB}, b1{&sm.u.xs16[slot][SMB][0], HP, B - SMB};
+      piece_bf16_2(L.wqkv + (long)strip * 36 * 2048, u0, nu, b0, b1, acc);
+    },
+    [&](int q, float (*acc)[4]) {
+      const int strip = blockIdx.x + q * G;
+      const int st = strip < QG_STRIPS ? 0 : (strip < QG_STRIPS + nsk ? 1 : 2);
+      const int orow = st == 0 ? strip * 16 : (st == 1 ? K0 + (strip - QG_STRIPS) * 16 : V0 + (strip - QG_STRIPS - nsk) * 16);
+      const int lane = lane_id(), g = lane >> 2, t = lane & 3;
+      for (int ng = 0; ng < 2; ng++)
+        for (int h = 0; h < 2; h++)
+          for (int cc = 0; cc < 2; cc++) {
+            const int tok = SMB * ng + 2 * t + cc;
+            if (tok < B) st_tagf(c.qkvt + (long)(par * MAXR + tok) * QKVR + orow + g + 8 * h, rbf(acc[ng][2 * h + cc]), TAGA(a));
+          }
+    });
+  (void)other;
 }
 
 // attention: items (b, kv head g, chunk of csz positions); the last chunk of (b, g) to finish merges
@@ -1646,11 +1689,11 @@ template <bool V> __device__ void ph_attn(PH_ARGS, int a) {
 #ifndef SHARED_MIN
 #define SHARED_MIN 2   // verify passes of at least this many rows use the shared-record attention
 #endif
-  if (V && B >= SHARED_MIN && (L.glob || row_t<V>(hd, B - 1) + 1 <= 1024)) { ph_attn_shared(c, hd, sm, a); return; }
+  if (V && !HD_MT(hd) && B >= SHARED_MIN && (L.glob || row_t<V>(hd, B - 1) + 1 <= 1024)) { ph_attn_shared(c, hd, sm, a); return; }
   // records (online-softmax partials) always cover 64 keys, so that the merge is the same for every batch size;
   // for B >= 3 an item loads two records' keys (fewer items) and computes the two records separately
   const int sub = B <= 2 ? 1 : 2, csz = 64 * sub;
-  const int tmax = row_t<V>(hd, B - 1);          // rows' positions grow with b (verify passes) or are equal
+  const int tmax = row_tmax<V>(hd);              // the largest row position (multi-sequence passes: any order)
   const int lomax = L.glob ? 0 : max(0, tmax + 1 - 1024);
   const int nchmax = (tmax - lomax + csz) / csz;
   const int N = B * NKV * nchmax;
@@ -1673,7 +1716,7 @@ template <bool V> __device__ void ph_attn(PH_ARGS, int a) {
     const bool cur = (j1 == t + 1);
     // positions >= tp0 belong to rows of this pass: their k / v are computed here from the tagged qkv outputs
     const int tp0 = t - nin, P0 = V ? min(max(j0, tp0), j1) : (cur ? t : j1), np = V ? j1 - P0 : (cur ? 1 : 0);
-    const uint2* qkvp = c.qkvt + (long)(par * MAXB) * QKVR;
+    const uint2* qkvp = c.qkvt + (long)(par * MAXR) * QKVR;
     const uint2* qr = qkvp + (long)b * QKVR;
     SUBMARK(20);
     // ---- one wave of loads: K / V chunk (async), relative-bias rows, q / r, current k / v
@@ -1900,17 +1943,16 @@ template <bool V> __device__ void ph_attn(PH_ARGS, int a) {
       }
       __syncthreads();
       const int nrec = 3 * (nrc - 1) * 130;
-      constexpr int MGR = 8;   // (MG_UNR here measured slower at ctx 1100)
-      for (int i0 = tid; i0 < nrec; i0 += NTH * MGR) {
-        uint2 v[MGR];
+      for (int i0 = tid; i0 < nrec; i0 += NTH * 8) {
+        uint2 v[8];
 #pragma unroll
-        for (int q = 0; q < MGR; q++) {
+        for (int q = 0; q < 8; q++) {
           const int i = min(i0 + q * NTH, nrec - 1);
           const int hh = i / ((nrc - 1) * 130), rest = i % ((nrc - 1) * 130);
           v[q] = ld_tag(c.arec + ((long)(b * NQH + 3 * g + hh) * MAXCH + 1) * 130 + rest);
         }
 #pragma unroll
-        for (int q = 0; q < MGR; q++) {
+        for (int q = 0; q < 8; q++) {
           const int i = i0 + q * NTH;
           if (i < nrec) {
             const int hh = i / ((nrc - 1) * 130), rest = i % ((nrc - 1) * 130);
@@ -1948,7 +1990,7 @@ template <bool V> __device__ void ph_attn(PH_ARGS, int a) {
         const float lse = sm.bcast[2 * hh] + logf(S);
         const float out = (O / S) * sigm(gate) * sigm(lse - sink);
         const float o1 = __shfl_down_sync(0xffffffff, out, 1);
-        if ((d & 1) == 0) st_tag(c.aoutt + (long)(par * MAXB + b) * (QW / 2) + ((3 * g + hh) * HD + d) / 2, pack_bf2(out, o1), tag);
+        if ((d & 1) == 0) st_tag(c.aoutt + (long)(par * MAXR + b) * (QW / 2) + ((3 * g + hh) * HD + d) / 2, pack_bf2(out, o1), tag);
       }
       SUBMARK(26);
     }
@@ -1969,18 +2011,39 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
   const int B = hd.B, t0 = hd.pos, nq = 3 * B;
   const int tmax = t0 + B - 1;
   const int nrcmax = (tmax + 64) / 64;
-  const int NR = NKV * nrcmax, NM = NKV * B;
+#ifndef Q2
+#define Q2 1
+#endif
+#ifndef MG16_UNR
+#define MG16_UNR 8   // merge record polls in flight per thread
+#endif
+#ifndef MRG2
+#define MRG2 0   // (measured slower: 8852 vs 8612 us at K=16)
+#endif
+  const int mslot = 3 * nrcmax * 130 + 3 * MAXCH;   // merge staging per row slot (floats)
+  const bool pair = MRG2 && B > SMB && 2 * mslot <= (int)(sizeof(sm.u.mrg) / sizeof(float));
+  const int nb2 = pair ? (B + 1) / 2 : B;
+#ifndef REC2
+#define REC2 0   // (measured slower: 8980 vs 8592 us at K=16, ctx 600)
+#endif
+  const bool rec2 = REC2 && B > SMB;
+  const int NR = NKV * (rec2 ? (nrcmax + 1) / 2 : nrcmax), NM = NKV * nb2;
   const unsigned tag = TAGA(a);
   const int par = a & 1;
   const int tid = threadIdx.x, w = tid >> 5, lane = tid & 31, g8 = lane >> 2, t4 = lane & 3;
   auto& at = sm.u.as;
   const long cstride = (long)c.maxctx * HD;
-  const uint2* qkvp = c.qkvt + (long)(par * MAXB) * QKVR;
+  const uint2* qkvp = c.qkvt + (long)(par * MAXR) * QKVR;
   for (int it = blockIdx.x; it < NR + NM; it += gridDim.x) {
     if (it < NR) {
       // ---------------------------------------------------------------- record item (g, ch)
       SUBMARK(60);
-      const int ch = nrcmax - 1 - it / NKV, g = it % NKV;
+      const int g = it % NKV;
+      // REC2 (16-row passes): an item computes two records of the kv head in turn (ch, ch - 1); the q / r of every
+      // (row, head) once for both; each record's arithmetic as before
+      for (int rk = 0; rk < (rec2 ? 2 : 1); rk++) {
+      const int ch = rec2 ? nrcmax - 1 - 2 * (it / NKV) - rk : nrcmax - 1 - it / NKV;
+      if (ch < 0) break;
       const int j0 = 64 * ch;
       const int b0 = max(0, j0 - t0);                       // rows b >= b0 have this record (t_b >= j0)
       const int jend = min(j0 + 64, tmax + 1), njm = jend - j0;
@@ -2000,17 +2063,19 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
         const int r = i / (63 + B), x = i % (63 + B), dist = t0 - j0 - 63 + x;
         at.prw[r][x] = (dist >= 0 && dist < 1024) ? bf(L.relp[r * 1024 + dist]) : 0.f;
       }
-      for (int i = tid; i < 32 * (64 + 8) / 2; i += NTH) {
+      for (int i = tid; i < 3 * MAXR * (64 + 8) / 2; i += NTH) {
         reinterpret_cast<uint32_t*>(&at.ph[0][0])[i] = 0u;
         reinterpret_cast<uint32_t*>(&at.pl[0][0])[i] = 0u;
       }
-      for (int i = tid; i < (3 * MAXB - nq) * (HD + 8) / 2; i += NTH) reinterpret_cast<uint32_t*>(&at.qb[nq][0])[i] = 0u;
+      if (rk == 0) for (int i = tid; i < (3 * MAXR - nq) * (HD + 8) / 2; i += NTH) reinterpret_cast<uint32_t*>(&at.qb[nq][0])[i] = 0u;
       {
         const int nj16 = (njm + 15) & ~15;
         for (int i = tid; i < (nj16 - njm) * (HD / 2); i += NTH) reinterpret_cast<uint32_t*>(&at.vv[njm + i / (HD / 2)][0])[i % (HD / 2)] = 0u;
       }
       // warp tasks: k / v of the pass's positions in the record, then q and r of every (row, head)
-      for (int task = w; task < 2 * np + nq; task += NWARP) {
+      const bool q2 = Q2 && B > SMB;   // two (row, head) queries per warp task (16 lanes each), the same sums
+      const int nqt = q2 ? (nq + 1) / 2 : nq;
+      for (int task = w; task < 2 * np + (rk == 0 ? nqt : 0); task += NWARP) {
         if (task < 2 * np) {
           const bool isv = task & 1;
           const int i = task >> 1, p = P0 + i, r = p - t0;
@@ -2024,16 +2089,64 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
 #pragma unroll
           for (int k = 0; k < 4; k++) {
             const int ch2 = g * HD + lane * 4 + k;
-            kv[k] = kv_conv(L, qkvp, r, tag, hist, isv ? L.vsc : L.ksc, isv ? V0 : K0, ch2, g, p, r, &at.raw[isv][i][lane * 4 + k]);
+            float xr_;
+            kv[k] = kv_conv(L, qkvp, r, tag, hist, isv ? L.vsc : L.ksc, isv ? V0 : K0, ch2, g, p, r, &xr_);
+            at.raw[isv][i][lane * 4 + k] = tobf(xr_);
             ss += kv[k] * kv[k];
           }
 #endif
 #pragma unroll
           for (int o = 16; o; o >>= 1) ss += __shfl_xor_sync(0xffffffff, ss, o);
           const float f = isv ? rsqrtf(ss / 128.f + 1e-6f) : fminf(22.627416997969522f / (sqrtf(ss) + 1e-6f), 1.0f);
-          float* dst = isv ? at.vt[i] : at.kt[i];
+          bf16* dst = isv ? at.vt[i] : at.kt[i];
 #pragma unroll
-          for (int k = 0; k < 4; k++) dst[lane * 4 + k] = rbf(kv[k] * f);
+          for (int k = 0; k < 4; k++) dst[lane * 4 + k] = tobf(kv[k] * f);
+        } else if (q2) {
+          // two queries per warp: lanes 16 x + l hold query 2 (task - 2 np) + x; lane l carries the 4-element sums
+          // of the original lanes l and l + 16 (the same order), whose level-16 shuffle add is s_l + s_(l+16);
+          // levels 8 .. 1 stay within the half: the clip factors are the original ones bit for bit
+          const int half = lane >> 4, l16 = lane & 15;
+          const int qi0 = 2 * (task - 2 * np) + half, okq = qi0 < nq, qi = okq ? qi0 : nq - 1;
+          const int b = qi / 3, hh = qi % 3, h = 3 * g + hh;
+          const uint2* qr = qkvp + (long)b * QKVR;
+          const int t = t0 + b;
+          const float tau = (L.glob && t + 1 > 8192) ? (1.0f + 0.1f * logf((float)(t + 1) / 8192.0f)) : 1.0f;
+          float qv[2][4], sa = 0.f, sb = 0.f;
+          uint2 rq[2][4];
+#pragma unroll
+          for (int u = 0; u < 2; u++)
+#pragma unroll
+            for (int k = 0; k < 4; k++) rq[u][k] = ld_tag(qr + h * HD + (l16 + 16 * u) * 4 + k);
+          const uint2 rrv = ld_tag(qr + R_R + h * 16 + l16);
+#pragma unroll
+          for (int u = 0; u < 2; u++)
+#pragma unroll
+            for (int k = 0; k < 4; k++) {
+              const int d = (l16 + 16 * u) * 4 + k;
+              qv[u][k] = __uint_as_float(wait_tag(qr + h * HD + d, rq[u][k], tag)) * bf(L.qscale[h * HD + d]);
+              if (u == 0) sa += qv[u][k] * qv[u][k]; else sb += qv[u][k] * qv[u][k];
+            }
+          const float rv = __uint_as_float(wait_tag(qr + R_R + h * 16 + l16, rrv, tag)) * bf(L.rscale[h * 16 + l16]);
+          float ss = sa + sb, sr = rv * rv;
+#pragma unroll
+          for (int o = 8; o; o >>= 1) ss += __shfl_xor_sync(0xffffffff, ss, o);
+#pragma unroll
+          for (int o = 8; o; o >>= 1) sr += __shfl_xor_sync(0xffffffff, sr, o);
+          const float f = fminf(22.627416997969522f / (sqrtf(ss) + 1e-6f), 1.0f);
+          const float fr = fminf(8.0f / (sqrtf(sr) + 1e-6f), 1.0f);
+          if (okq) {
+#pragma unroll
+            for (int u = 0; u < 2; u++)
+#pragma unroll
+              for (int k = 0; k < 4; k++) {
+                float y = rbf(qv[u][k] * f);
+                if (L.glob) y = rbf(y * tau);
+                at.qb[qi][(l16 + 16 * u) * 4 + k] = tobf(y);
+              }
+            float y = rbf(rv * fr);
+            if (L.glob) y = rbf(y * tau);
+            at.rr[qi][l16] = y;
+          }
         } else {
           // q (all lanes, 4 dims each) and r (lanes < 16) of (row b, head hh): loads first, then the waits
           const int qi = task - 2 * np, b = qi / 3, hh = qi % 3, h = 3 * g + hh;
@@ -2042,15 +2155,12 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
           const float tau = (L.glob && t + 1 > 8192) ? (1.0f + 0.1f * logf((float)(t + 1) / 8192.0f)) : 1.0f;
           float qv[4], ss = 0.f;
           uint2 rq[4];
-          if (!QSEQ) {
 #pragma unroll
-            for (int k = 0; k < 4; k++) rq[k] = ld_tag(qr + h * HD + lane * 4 + k);
-          }
+          for (int k = 0; k < 4; k++) rq[k] = ld_tag(qr + h * HD + lane * 4 + k);
           const uint2 rrv = ld_tag(qr + R_R + h * 16 + (lane & 15));
 #pragma unroll
           for (int k = 0; k < 4; k++) {
             const int d = lane * 4 + k;
-            if (QSEQ) rq[k] = ld_tag(qr + h * HD + d);
             qv[k] = __uint_as_float(wait_tag(qr + h * HD + d, rq[k], tag)) * bf(L.qscale[h * HD + d]);
             ss += qv[k] * qv[k];
           }
@@ -2130,8 +2240,8 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
       __syncthreads();
       SUBMARK(64);
       // softmax of the record per (row, head): keys [j0, min(j0 + 64, t_b + 1))
-      if (w < nq) {
-        const int qi = w, b = qi / 3, t = t0 + b;
+      for (int qi = w; qi < nq; qi += NWARP) {
+        const int b = qi / 3, t = t0 + b;
         if (t >= j0) {
           const int k1 = min(64, t + 1 - j0);
           float m = -1e30f;
@@ -2148,7 +2258,12 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
           }
 #pragma unroll
           for (int o = 16; o; o >>= 1) l += __shfl_xor_sync(0xffffffff, l, o);
-          if (lane == 0) { at.ml[qi][0] = m; at.ml[qi][1] = l; }
+          if (lane == 0) {
+            at.ml[qi][0] = m; at.ml[qi][1] = l;
+            uint2* rec = c.arec + ((long)(b * NQH + 3 * g + qi % 3) * MAXCH + ch) * 130;   // the record's (m, l)
+            st_tagf(rec, m, tag);
+            st_tagf(rec + 1, l, tag);
+          }
         }
       }
       __syncthreads();
@@ -2180,42 +2295,44 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
                 for (int q = 0; q < 2; q++) st_tagf(rec + 2 + 16 * wd + 8 * nt + 2 * t4 + q, acc[nt][2 * hr + q], tag);
             }
           }
-        } else if (w == 8 * nmt && lane < nq) {
-          const int qi = lane, b = qi / 3, hh = qi % 3;
-          if (t0 + b >= j0) {
-            uint2* rec = c.arec + ((long)(b * NQH + 3 * g + hh) * MAXCH + ch) * 130;
-            st_tagf(rec, at.ml[qi][0], tag);
-            st_tagf(rec + 1, at.ml[qi][1], tag);
-          }
         }
       }
       (void)b0;
       SUBMARK(66);
+      if (rec2) __syncthreads();   // smem of the record is reused by the next one
+      }
     } else {
       // ---------------------------------------------------------------- merge item (b, g)
+      // 16-row passes (MRG2): one item merges rows p and p + nb2 (threads 0..383 and 384..767: 3 x 128 each, as
+      // the single-row item uses), so that record and merge items fit one round of the grid; per row the same code
       SUBMARK(70);
-      const int mi = it - NR, b = mi / NKV, g = mi % NKV, t = t0 + b;
+      const int sub = pair ? (tid >= 3 * HD) : 0, ltid = pair ? tid - sub * 3 * HD : tid, lw = ltid >> 5;
+      const int mi = it - NR, bp = mi / NKV, g = mi % NKV;
+      const int b = pair ? bp + sub * nb2 : bp;
+      const bool rv = b < B;
+      const int t = t0 + (rv ? b : 0);
       const int nrc = (t + 64) / 64;
-      const uint2* qr = qkvp + (long)b * QKVR;
+      const uint2* qr = qkvp + (long)(rv ? b : 0) * QKVR;
       float gate = 0.f, sink = 0.f;
       uint2 rg = make_uint2(0u, 0u), rs = make_uint2(0u, 0u);
-      if (tid < 3 * HD) {
-        const int hh = tid / HD, d = tid % HD, h = 3 * g + hh;
+      if (rv && ltid < 3 * HD) {
+        const int hh = ltid / HD, d = ltid % HD, h = 3 * g + hh;
         rg = ld_tag(qr + R_G + h * HD + d); rs = ld_tag(qr + R_S + h);
       }
-      float* st = sm.u.mrg;   // [3][nrc][130]
-      const int nrec = 3 * nrc * 130;
-      for (int i0 = tid; i0 < nrec; i0 += NTH * MG_UNR) {
-        uint2 v[MG_UNR];
+      float* st = sm.u.mrg + (long)sub * mslot;   // [3][nrc][130]
+      const int nrec = rv ? 3 * nrc * 130 : 0;
+      const int nth = pair ? 3 * HD : NTH;
+      for (int i0 = ltid; i0 < nrec; i0 += nth * MG16_UNR) {
+        uint2 v[MG16_UNR];
 #pragma unroll
-        for (int q = 0; q < MG_UNR; q++) {
-          const int i = min(i0 + q * NTH, nrec - 1);
+        for (int q = 0; q < MG16_UNR; q++) {
+          const int i = min(i0 + q * nth, nrec - 1);
           const int hh = i / (nrc * 130), rest = i % (nrc * 130);
           v[q] = ld_tag(c.arec + ((long)(b * NQH + 3 * g + hh) * MAXCH) * 130 + rest);
         }
 #pragma unroll
-        for (int q = 0; q < MG_UNR; q++) {
-          const int i = i0 + q * NTH;
+        for (int q = 0; q < MG16_UNR; q++) {
+          const int i = i0 + q * nth;
           if (i < nrec) {
             const int hh = i / (nrc * 130), rest = i % (nrc * 130);
             const uint2* p = c.arec + ((long)(b * NQH + 3 * g + hh) * MAXCH) * 130 + rest;
@@ -2224,16 +2341,16 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
           }
         }
       }
-      if (tid < 3 * HD) {
-        const int hh = tid / HD, d = tid % HD, h = 3 * g + hh;
+      if (rv && ltid < 3 * HD) {
+        const int hh = ltid / HD, d = ltid % HD, h = 3 * g + hh;
         gate = __uint_as_float(wait_tag(qr + R_G + h * HD + d, rg, tag));
         sink = __uint_as_float(wait_tag(qr + R_S + h, rs, tag));
       }
       const int ewt = 3 * nrc * 130;
       __syncthreads();
       SUBMARK(71);
-      if (w < 3) {
-        const float* r0 = st + w * nrc * 130;
+      if (rv && lw < 3) {
+        const float* r0 = st + lw * nrc * 130;
         float M = -1e30f;
         for (int k = lane; k < nrc; k += 32) M = fmaxf(M, r0[k * 130]);
 #pragma unroll
@@ -2241,24 +2358,24 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
         float S = 0.f;
         for (int k = lane; k < nrc; k += 32) {
           const float e = expf(r0[k * 130] - M);
-          st[ewt + w * MAXCH + k] = e;
+          st[ewt + lw * MAXCH + k] = e;
           S += r0[k * 130 + 1] * e;
         }
 #pragma unroll
         for (int o = 16; o; o >>= 1) S += __shfl_xor_sync(0xffffffff, S, o);
-        if (lane == 0) { sm.bcast[2 * w] = M; sm.bcast[2 * w + 1] = S; }
+        if (lane == 0) { sm.bcast[6 * sub + 2 * lw] = M; sm.bcast[6 * sub + 2 * lw + 1] = S; }
       }
       __syncthreads();
-      if (tid < 3 * HD) {
-        const int hh = tid / HD, d = tid % HD;
+      if (rv && ltid < 3 * HD) {
+        const int hh = ltid / HD, d = ltid % HD;
         const float* r0 = st + hh * nrc * 130;
         float O = 0.f;
         for (int k = 0; k < nrc; k++) O += r0[k * 130 + 2 + d] * st[ewt + hh * MAXCH + k];
-        const float S = sm.bcast[2 * hh + 1];
-        const float lse = sm.bcast[2 * hh] + logf(S);
+        const float S = sm.bcast[6 * sub + 2 * hh + 1];
+        const float lse = sm.bcast[6 * sub + 2 * hh] + logf(S);
         const float out = (O / S) * sigm(gate) * sigm(lse - sink);
         const float o1 = __shfl_down_sync(0xffffffff, out, 1);
-        if ((d & 1) == 0) st_tag(c.aoutt + (long)(par * MAXB + b) * (QW / 2) + ((3 * g + hh) * HD + d) / 2, pack_bf2(out, o1), tag);
+        if ((d & 1) == 0) st_tag(c.aoutt + (long)(par * MAXR + b) * (QW / 2) + ((3 * g + hh) * HD + d) / 2, pack_bf2(out, o1), tag);
       }
       SUBMARK(72);
     }
@@ -2267,6 +2384,99 @@ SHARED_ATTR __device__ void ph_attn_shared(PH_ARGS, int a) {
 }
 
 // o_proj + epilogue: attn_raw -> sconv -> attst
+// verify passes of > 8 rows: o_proj in halves of 8 rows; the preloaded weights serve both halves; the conv lags of the
+// second half's first rows come from the first half's raw values (kept by the epilogue warp)
+__device__ void ph_oproj16(PH_ARGS, int a) {
+  const App& ap = c.A[a];
+  const LayerW& L = c.L[ap.layer];
+  const int par = a & 1;
+  if (blockIdx.x >= 144) return;
+  const int wq = threadIdx.x >> 5, lq = lane_id();
+  uint4 wpre[8];
+  {
+    const uint8_t* wst = L.wo + (long)blockIdx.x * 48 * 2048;
+#pragma unroll
+    for (int q = 0; q < 8; q++) wpre[q] = ldg_nc(wst + ((long)(2 * wq + (q >> 2)) * 4 + (q & 3)) * 512 + lq * 16);
+  }
+  float xrp[4] = {0.f, 0.f, 0.f, 0.f};
+  for (int ro = 0; ro < hd.B; ro += SMB) {
+    const int B = min(SMB, hd.B - ro);
+    {
+      const int n = B * QW / 2;
+      const uint2* src = c.aoutt + ((long)par * MAXR + ro) * (QW / 2);
+      for (int i0 = threadIdx.x; i0 < n; i0 += NTH * 4) {
+        uint2 r[4];
+#pragma unroll
+        for (int q = 0; q < 4; q++) r[q] = ld_tag(src + min(i0 + q * NTH, n - 1));
+#pragma unroll
+        for (int q = 0; q < 4; q++) {
+          const int i = i0 + q * NTH;
+          if (i < n) {
+            const int b = i / (QW / 2), k = (i % (QW / 2)) * 2;
+            *reinterpret_cast<uint32_t*>(&sm.u.xo[b][k]) = wait_tag(src + i, r[q], TAGA(a));
+          }
+        }
+      }
+    }
+    __syncthreads();
+    for (int strip = blockIdx.x; strip < 144; strip += gridDim.x) {
+      BSm bl{&sm.u.xo[0][0], QWP, B};
+      block_strips<NWARP, 1>(sm, 1, 48,
+        [&](int, int u0, int nu, float (*acc)[4]) {
+#pragma unroll
+          for (int q = 0; q < 8; q++) {
+            const uint2 b = bl.get((u0 + (q >> 2)) * 64 + (q & 3) * 16);
+            mma_bf16(acc[0], wpre[q].x, wpre[q].y, wpre[q].z, wpre[q].w, b.x, b.y);
+          }
+        },
+        [&](int, float (*acc4)[4]) {
+        const float* acc = acc4[0];
+        const int lane = lane_id(), g = lane >> 2, tt = lane & 3;
+        float y[4], xr[4], xin[3][4], xinp[3][4];
+#pragma unroll
+        for (int q = 0; q < 4; q++) xr[q] = rbf(acc[q]);
+#pragma unroll
+        for (int l = 1; l <= 3; l++)
+#pragma unroll
+          for (int q = 0; q < 4; q++) {
+            const int cc = q & 1, st = 2 * tt + cc - l, src = max(st, 0) >> 1, srcp = min((SMB + st) >> 1, 3);
+            xin[l - 1][q] = __shfl_sync(0xffffffffu, xr[(q & 2) | ((cc - l) & 1)], (lane & ~3) | src);
+            xinp[l - 1][q] = __shfl_sync(0xffffffffu, xrp[(q & 2) | ((cc - l) & 1)], (lane & ~3) | srcp);
+          }
+        for (int h = 0; h < 2; h++)
+          for (int cc = 0; cc < 2; cc++) {
+            const int tok = 2 * tt + cc;
+            y[2 * h + cc] = 0.f;
+            if (tok >= B) continue;
+            const int row = strip * 16 + g + 8 * h;
+            const float x = xr[2 * h + cc];
+            const int t = row_t<true>(hd, ro + tok), nin = row_nin<true>(hd, ro + tok), sq = row_seq<true>(hd, ro + tok);
+            bf16* hb = c.ha + ((long)ap.slot * MAXB + sq) * RING * H + row;
+            float xl[3];
+#pragma unroll
+            for (int l = 1; l <= 3; l++)
+              xl[l - 1] = l <= nin ? (tok - l >= 0 ? xin[l - 1][2 * h + cc] : xinp[l - 1][2 * h + cc]) : ldcg_bf(hb + ((t - l) & (RING - 1)) * H);
+            y[2 * h + cc] = sconv_static(x, xl[0], xl[1], xl[2], L.attn_sc + row * 4);
+            hb[(t & (RING - 1)) * H] = tobf(x);
+          }
+#pragma unroll
+        for (int q = 0; q < 4; q++) xrp[q] = xr[q];
+        float yo[4];
+#pragma unroll
+        for (int q = 0; q < 4; q++) yo[q] = __shfl_down_sync(0xffffffff, y[q], 4);
+        if ((g & 1) == 0)
+          for (int h = 0; h < 2; h++)
+            for (int cc = 0; cc < 2; cc++) {
+              const int tok = 2 * tt + cc;
+              if (tok >= B) continue;
+              const int row = strip * 16 + g + 8 * h;
+              st_tag(c.attst + (long)(par * MAXR + ro + tok) * NPAIR + row / 2, pack_bf2(y[2 * h + cc], yo[2 * h + cc]), TAGA(a));
+            }
+        });
+    }
+    __syncthreads();
+  }
+}
 template <bool V> __device__ void ph_oproj(PH_ARGS, int a) {
   const App& ap = c.A[a];
   const LayerW& L = c.L[ap.layer];
@@ -2290,14 +2500,13 @@ template <bool V> __device__ void ph_oproj(PH_ARGS, int a) {
 #endif
   {
     const int n = B * QW / 2;
-    const uint2* src = c.aoutt + (long)par * MAXB * (QW / 2);
-    constexpr int OPU = V ? OP_UNR_V : OP_UNR_S;
-    for (int i0 = threadIdx.x; i0 < n; i0 += NTH * OPU) {
-      uint2 r[OPU];
+    const uint2* src = c.aoutt + (long)par * MAXR * (QW / 2);
+    for (int i0 = threadIdx.x; i0 < n; i0 += NTH * 4) {
+      uint2 r[4];
 #pragma unroll
-      for (int q = 0; q < OPU; q++) r[q] = ld_tag(src + min(i0 + q * NTH, n - 1));
+      for (int q = 0; q < 4; q++) r[q] = ld_tag(src + min(i0 + q * NTH, n - 1));
 #pragma unroll
-      for (int q = 0; q < OPU; q++) {
+      for (int q = 0; q < 4; q++) {
         const int i = i0 + q * NTH;
         if (i < n) {
           const int b = i / (QW / 2), k = (i % (QW / 2)) * 2;
@@ -2362,7 +2571,7 @@ template <bool V> __device__ void ph_oproj(PH_ARGS, int a) {
             const int tok = 2 * tt + cc;
             if (tok >= B) continue;
             const int row = strip * 16 + g + 8 * h;
-            st_tag(c.attst + (long)(par * MAXB + tok) * NPAIR + row / 2, pack_bf2(y[2 * h + cc], yo[2 * h + cc]), TAGA(a));
+            st_tag(c.attst + (long)(par * MAXR + tok) * NPAIR + row / 2, pack_bf2(y[2 * h + cc], yo[2 * h + cc]), TAGA(a));
           }
       });
   }
@@ -2370,7 +2579,7 @@ template <bool V> __device__ void ph_oproj(PH_ARGS, int a) {
 
 // mlp mix of application a, token b -> x (f32). Sources: blocks in slots 0..3, the boundary layer's old partial in
 // slot 4, the partial (partial + attention output in f32, or the attention output alone) in slot 5.
-template <bool V> __device__ void mlp_mix(PH_ARGS, int a, int b, float (*x)[EPT]) {
+__device__ void mlp_mix(PH_ARGS, int a, int b, float (*x)[EPT]) {
   const App& ap = c.A[a];
   const LayerW& L = c.L[ap.layer];
   float v[6][EPT];
@@ -2380,9 +2589,9 @@ template <bool V> __device__ void mlp_mix(PH_ARGS, int a, int b, float (*x)[EPT]
   const float* qs[1] = {L.mq};
   float qv[1][EPT];
   load_queries<1>(qs, 1, qv);
-  load_srcs<6, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, idx, msk | (add_pin ? 32u : 0u), b, v);
+  load_srcs<6>(c, hd, idx, msk | (add_pin ? 32u : 0u), b, v);
   float as[EPT];
-  load_vec_bf(c.attst + (long)((a & 1) * MAXB + b) * NPAIR, TAGA(a), as);
+  load_vec_bf(c.attst + (long)((a & 1) * MAXR + b) * NPAIR, TAGA(a), as);
 #pragma unroll
   for (int k = 0; k < EPT; k++) v[5][k] = add_pin ? v[5][k] + as[k] : as[k];
   depth_mix_q<6, 1>(v, msk | 32u, qv, 1, x, sm);
@@ -2409,7 +2618,7 @@ __device__ void mlp_in_x(PH_ARGS, int a, float (*xin)[EPT], int b) {
     if (!EV(2 * j)) continue;
     const int el = EL(2 * j);
     const uint32_t yb = pack_bf2(xin[0][2 * j] * r * wv[2 * j], xin[0][2 * j + 1] * r * wv[2 * j + 1]);
-    *reinterpret_cast<uint32_t*>(&sm.u.e.xr[b][el]) = yb;
+    *reinterpret_cast<uint32_t*>((EXR(sm, b) + el)) = yb;
     const float y0 = bf_lo(yb) * scl, y1 = bf_hi(yb) * scl;
     const __half h0 = __float2half_rn(y0), h1 = __float2half_rn(y1);
     sm.u.e.x16[b][0][el] = h0; sm.u.e.x16[b][0][el + 1] = h1;
@@ -2434,18 +2643,18 @@ __device__ void mlp_publish(PH_ARGS, int a, float (*xin)[EPT], int b) {
   const float bound = mx[0] * r;
   frexpf(bound, &e2);
   const int sh = (bound > 0.f) ? 15 - e2 : 0;
-  uint2* dst = c.xrt + (long)(par * MAXB + b) * NPAIR;
+  uint2* dst = c.xrt + (long)(par * MAXR + b) * NPAIR;
 #pragma unroll
   for (int j = 0; j < 2; j++)
     if (EV(2 * j)) st_tag(dst + threadIdx.x + j * NTH, pack_bf2(xin[0][2 * j] * r * wv[2 * j], xin[0][2 * j + 1] * r * wv[2 * j + 1]), TAGA(a));
-  if (threadIdx.x == 0) st_tag(c.sht + par * MAXB + b, (uint32_t)sh, TAGA(a));
+  if (threadIdx.x == 0) st_tag(c.sht + par * MAXR + b, (uint32_t)sh, TAGA(a));
 }
 // every block: router input rows + the expert input (f16 hi / lo, the same arithmetic as mlp_in_x)
-template <bool VV> __device__ void mlp_poll(PH_ARGS, int a, int r0 = 0) {
+__device__ void mlp_poll(PH_ARGS, int a, int r0 = 0) {
   const int B = hd.B, par = a & 1;
-  pollr<VV>(hd.B, c.xrt + ((long)par * MAXB + r0) * NPAIR, B - r0, [&](int r) { return &sm.u.e.xr[r0 + r][0]; }, TAGA(a));
+  poll_rows(c.xrt + ((long)par * MAXR + r0) * NPAIR, B - r0, [&](int r) { return EXR(sm, r0 + r); }, TAGA(a));
   if (threadIdx.x >= r0 && threadIdx.x < B) {
-    const int sh = (int)poll(c.sht + par * MAXB + threadIdx.x, TAGA(a));
+    const int sh = (int)poll(c.sht + par * MAXR + threadIdx.x, TAGA(a));
     sm.bcast[32 + threadIdx.x] = (float)sh;
     sm.sc16[threadIdx.x] = ldexpf(1.0f, -sh);
   }
@@ -2456,7 +2665,94 @@ template <bool VV> __device__ void mlp_poll(PH_ARGS, int a, int r0 = 0) {
     for (int j = 0; j < 2; j++) {
       if (!EV(2 * j)) continue;
       const int el = EL(2 * j);
-      const uint32_t yb = *reinterpret_cast<const uint32_t*>(&sm.u.e.xr[b][el]);
+      const uint32_t yb = *reinterpret_cast<const uint32_t*>((EXR(sm, b) + el));
+      const float y0 = bf_lo(yb) * scl, y1 = bf_hi(yb) * scl;
+      const __half h0 = __float2half_rn(y0), h1 = __float2half_rn(y1);
+      sm.u.e.x16[b][0][el] = h0; sm.u.e.x16[b][0][el + 1] = h1;
+      sm.u.e.x16[b][1][el] = __float2half_rn((y0 - __half2float(h0)) * 16777216.0f);
+      sm.u.e.x16[b][1][el + 1] = __float2half_rn((y1 - __half2float(h1)) * 16777216.0f);
+    }
+  }
+  __syncthreads();
+}
+// verify passes of > 8 rows: rows [hd.ro, hd.ro + hd.B) of the published router inputs into smem slots 0 .. hd.B - 1
+// (the same arithmetic as mlp_poll per row)
+#ifndef MOE1
+#define MOE1 1   // 16-row passes: one MoE over all rows (router per 8-row half, then one routing / w13 / w2a), not per half
+#endif
+__device__ void mlp_conv_half(PH_ARGS, int a);
+__device__ void mlp_poll_half(PH_ARGS, int a, bool conv = true) {
+  const int B = hd.B, par = a & 1, ro = hd.ro;
+  poll_rows(c.xrt + ((long)par * MAXR + ro) * NPAIR, B, [&](int r) { return EXR(sm, r); }, TAGA(a));
+  if (threadIdx.x < B) {
+    const int sh = (int)poll(c.sht + par * MAXR + ro + threadIdx.x, TAGA(a));
+    sm.bcast[32 + threadIdx.x] = (float)sh;
+    sm.sc16[MOE1 ? ro + threadIdx.x : threadIdx.x] = ldexpf(1.0f, -sh);
+  }
+  __syncthreads();
+  if (conv) mlp_conv_half(c, hd, sm, a);
+}
+// router input rows (EXR) -> expert input rows ro + b (one-pass MoE) or b, f16 hi / lo with the row's 2^sh scaling
+__device__ void mlp_conv_half(PH_ARGS, int a) {
+  const int B = hd.B, ro = hd.ro;
+  for (int b = 0; b < B; b++) {
+    const float scl = ldexpf(1.0f, (int)sm.bcast[32 + b]);
+    const int xb = MOE1 ? ro + b : b;   // one-pass MoE: the expert inputs of all 16 rows stay in smem
+#pragma unroll
+    for (int j = 0; j < 2; j++) {
+      if (!EV(2 * j)) continue;
+      const int el = EL(2 * j);
+      const uint32_t yb = *reinterpret_cast<const uint32_t*>((EXR(sm, b) + el));
+      const float y0 = bf_lo(yb) * scl, y1 = bf_hi(yb) * scl;
+      const __half h0 = __float2half_rn(y0), h1 = __float2half_rn(y1);
+      sm.u.e.x16[xb][0][el] = h0; sm.u.e.x16[xb][0][el + 1] = h1;
+      sm.u.e.x16[xb][1][el] = __float2half_rn((y0 - __half2float(h0)) * 16777216.0f);
+      sm.u.e.x16[xb][1][el + 1] = __float2half_rn((y1 - __half2float(h1)) * 16777216.0f);
+    }
+  }
+  __syncthreads();
+}
+
+#ifndef RTR2
+#define RTR2 1
+#endif
+#ifndef ROUT1
+#define ROUT1 0   // (measured slower: 8635 vs 8603 us; the per-half polls pipeline) 16-row passes: one poll of the 16 router-input rows, one router GEMV (two column groups), then x16
+#endif
+// 16-row passes: the router inputs of all rows -> smem (EXR16), the router logits of the 16 rows (blocks 0..7), then
+// the expert inputs x16[b] (in place, rows in order; every element by the same thread: see EXR16)
+__device__ void moe_in16(PH_ARGS, int a) {
+  const LayerW& L = c.L[c.A[a].layer];
+  const int B = hd.B, par = a & 1;
+  poll_rows(c.xrt + ((long)par * MAXR) * NPAIR, B, [&](int r) { return EXR16(sm, r); }, TAGA(a));
+  if (threadIdx.x < B) {
+    const int sh = (int)poll(c.sht + par * MAXR + threadIdx.x, TAGA(a));
+    sm.bcast[32 + threadIdx.x] = (float)sh;
+    sm.sc16[threadIdx.x] = ldexpf(1.0f, -sh);
+  }
+  __syncthreads();
+  for (int strip = blockIdx.x; strip < 8; strip += gridDim.x) {
+    BSm b0{EXR16(sm, 0), HP, SMB}, b1{EXR16(sm, SMB), HP, B - SMB};
+    block_strips<NWARP, 2>(sm, 1, 36,
+      [&](int, int u0, int nu, float (*acc)[4]) { piece_bf16_2(L.wr + (long)strip * 36 * 2048, u0, nu, b0, b1, acc); },
+      [&](int, float (*acc)[4]) {
+        const int lane = lane_id(), g = lane >> 2, t = lane & 3;
+        for (int ng = 0; ng < 2; ng++)
+          for (int h = 0; h < 2; h++)
+            for (int cc = 0; cc < 2; cc++) {
+              const int tok = SMB * ng + 2 * t + cc;
+              if (tok < B) st_tagf(c.rlogt + (par * MAXR + tok) * NE + strip * 16 + g + 8 * h, acc[ng][2 * h + cc], TAGA(a));
+            }
+      });
+  }
+  __syncthreads();
+  for (int b = 0; b < B; b++) {
+    const float scl = ldexpf(1.0f, (int)sm.bcast[32 + b]);
+#pragma unroll
+    for (int j = 0; j < 2; j++) {
+      if (!EV(2 * j)) continue;
+      const int el = EL(2 * j);
+      const uint32_t yb = *reinterpret_cast<const uint32_t*>(EXR16(sm, b) + el);
       const float y0 = bf_lo(yb) * scl, y1 = bf_hi(yb) * scl;
       const __half h0 = __float2half_rn(y0), h1 = __float2half_rn(y1);
       sm.u.e.x16[b][0][el] = h0; sm.u.e.x16[b][0][el + 1] = h1;
@@ -2473,40 +2769,42 @@ template <bool V> __device__ int ph_mlp_in(PH_ARGS, int a) {
   if (hyb2<V>(hd)) {
     for (int b = 1 + (int)(gridDim.x - 1 - blockIdx.x); b < hd.B; b += gridDim.x) {
       float x[1][EPT];
-      mlp_mix<V>(c, hd, sm, a, b, x);
+      mlp_mix(c, hd, sm, a, b, x);
       mlp_publish(c, hd, sm, a, x, b);
     }
     {
       float x[1][EPT];
-      mlp_mix<V>(c, hd, sm, a, 0, x);
+      mlp_mix(c, hd, sm, a, 0, x);
       mlp_in_x(c, hd, sm, a, x, 0);
     }
-    mlp_poll<V>(c, hd, sm, a, 1);
+    mlp_poll(c, hd, sm, a, 1);
     return 0;
   }
   if (desig<V>(hd)) {
     for (int b = dsel<V>(hd); b < hd.B; b += gridDim.x) {
       float x[1][EPT];
-      mlp_mix<V>(c, hd, sm, a, b, x);
+      mlp_mix(c, hd, sm, a, b, x);
       mlp_publish(c, hd, sm, a, x, b);
     }
-    mlp_poll<V>(c, hd, sm, a);
+    if (big16<V>(hd)) return 0;   // rows polled per half before the router
+    mlp_poll(c, hd, sm, a);
     return 0;
   }
   for (int b = 0; b < hd.B; b++) {
     float x[1][EPT];
-    mlp_mix<V>(c, hd, sm, a, b, x);
+    mlp_mix(c, hd, sm, a, b, x);
     mlp_in_x(c, hd, sm, a, x, b);
   }
   __syncthreads();
   return 0;
 }
 
-__device__ void ph_router(PH_ARGS, int a) {
+template <bool V> __device__ void ph_router(PH_ARGS, int a, int boff = 0) {
+  const int ro = V ? hd.ro : 0;
   const LayerW& L = c.L[c.A[a].layer];
   const int B = hd.B, par = a & 1;
-  for (int strip = blockIdx.x; strip < 8; strip += gridDim.x) {
-    BSm bl{&sm.u.e.xr[0][0], HP, B};
+  for (int strip = (int)blockIdx.x - boff; strip >= 0 && strip < 8; strip += gridDim.x) {   // boff: blocks boff .. boff + 7
+    BSm bl{EXR(sm, 0), HP, B};
     block_strips<NWARP, 1>(sm, 1, 36,
       [&](int, int u0, int nu, float (*acc)[4]) { piece_bf16(L.wr + (long)strip * 36 * 2048, u0, nu, bl, acc[0]); },
       [&](int, float (*acc)[4]) {
@@ -2514,35 +2812,30 @@ __device__ void ph_router(PH_ARGS, int a) {
         for (int h = 0; h < 2; h++)
           for (int cc = 0; cc < 2; cc++) {
             const int tok = 2 * t + cc;
-            if (tok < B) st_tagf(c.rlogt + (par * MAXB + tok) * NE + strip * 16 + g + 8 * h, acc[0][2 * h + cc], TAGA(a));
+            if (tok < B) st_tagf(c.rlogt + (par * MAXR + ro + tok) * NE + strip * 16 + g + 8 * h, acc[0][2 * h + cc], TAGA(a));
           }
       });
   }
 }
 
 // top-8 + union (every block, identical)
-#ifndef RT_SEQ
-#define RT_SEQ 1   // verify kernel: router-logit polls one at a time per lane (all blocks poll the same logits)
-#endif
 template <bool V> __device__ void routing(const Ctx& c, const Hdr& hd, Smem& sm, int a) {
+  const int ro = V ? hd.ro : 0;
   const LayerW& L = c.L[c.A[a].layer];
   const int B = hd.B;
   const int w = threadIdx.x >> 5, lane = lane_id();
   if (threadIdx.x < 4) sm.umask[threadIdx.x] = 0u;
+  if (B > MAXB && threadIdx.x < NE) sm.uc0[threadIdx.x] = 0;   // 16-row passes: rows choosing expert e (bit mask)
   __syncthreads();
   if (w < B) {
     float lg[4], sel[4];
     uint2 rl[4];
-    const bool seq = V && RT_SEQ;
-    if (!seq) {
 #pragma unroll
-      for (int k = 0; k < 4; k++) rl[k] = ld_tag(c.rlogt + ((a & 1) * MAXB + w) * NE + lane + 32 * k);
-    }
+    for (int k = 0; k < 4; k++) rl[k] = ld_tag(c.rlogt + ((a & 1) * MAXR + ro + w) * NE + lane + 32 * k);
 #pragma unroll
     for (int k = 0; k < 4; k++) {
       const int e = lane + 32 * k;
-      if (seq) rl[k] = ld_tag(c.rlogt + ((a & 1) * MAXB + w) * NE + e);
-      lg[k] = __uint_as_float(wait_tag(c.rlogt + ((a & 1) * MAXB + w) * NE + e, rl[k], TAGA(a)));
+      lg[k] = __uint_as_float(wait_tag(c.rlogt + ((a & 1) * MAXR + ro + w) * NE + e, rl[k], TAGA(a)));
       sel[k] = sigm(lg[k]) + L.rbias[e];
       if (!(sel[k] == sel[k])) { sel[k] = -1e30f; atomicOr(c.bar + 2, 1u << (a & 31)); }   // NaN: never chosen, flagged
     }
@@ -2580,6 +2873,7 @@ template <bool V> __device__ void routing(const Ctx& c, const Hdr& hd, Smem& sm,
     if (lane < TOPK) {
       sm.tex[w][rank] = myid; sm.twt[w][rank] = wt;
       atomicOr(&sm.umask[myid >> 5], 1u << (myid & 31));
+      if (B > MAXB) atomicOr(&sm.uc0[myid], 1 << w);
     }
   }
   __syncthreads();
@@ -2597,13 +2891,43 @@ template <bool V> __device__ void routing(const Ctx& c, const Hdr& hd, Smem& sm,
 #ifdef MKPROF
     if (blockIdx.x == 0) SUBMARK(1000 + n);
 #endif
-    for (int u = lane; u < n; u += 32) {
-      const int e = sm.uexp[u];
-      int cnt = 0;
-      for (int b = 0; b < B; b++)
-        for (int r = 0; r < TOPK; r++)
-          if (sm.tex[b][r] == e) sm.utok[u][cnt++] = b;
-      sm.uncnt[u] = cnt;
+    if (B <= MAXB) {
+      for (int u = lane; u < n; u += 32) {
+        const int e = sm.uexp[u];
+        int cnt = 0;
+        for (int b = 0; b < B; b++)
+          for (int r = 0; r < TOPK; r++)
+            if (sm.tex[b][r] == e) sm.utok[u][cnt++] = b;
+        sm.uncnt[u] = cnt;
+      }
+    } else {
+      // 16-row passes: an expert chosen by more than 8 rows takes two entries (rows in order: the first 8, the rest),
+      // so that every entry has <= 8 tokens (the w13 / w2a item code); lane 0 builds the list in expert order
+      // 16-row passes: an expert chosen by more than 8 rows takes two entries (rows in order: the first 8, the rest),
+      // so that every entry has <= 8 tokens (the w13 / w2a item code). Warp 0: counts per expert, a prefix sum of the
+      // entries (1 or 2 per expert, in expert order), then each lane fills its experts' entries.
+      for (int u = lane; u < n; u += 32) sm.ue0[u] = sm.uexp[u];
+      __syncwarp();
+      int base = 0;
+      for (int u0 = 0; u0 < n; u0 += 32) {
+        const int u = u0 + lane;
+        const unsigned msk = u < n ? (unsigned)sm.uc0[sm.ue0[u]] : 0u;
+        const int ne = u < n ? (__popc(msk) > MAXB ? 2 : 1) : 0;
+        int incl = ne;
+#pragma unroll
+        for (int o = 1; o < 32; o <<= 1) { const int y = __shfl_up_sync(0xffffffffu, incl, o); if (lane >= o) incl += y; }
+        if (u < n) {
+          int mm = base + incl - ne, cnt = 0;
+          const int e = sm.ue0[u];
+          for (unsigned mb = msk; mb; mb &= mb - 1) {   // rows in order
+            if (cnt == MAXB) { sm.uexp[mm] = e; sm.uncnt[mm] = cnt; mm++; cnt = 0; }
+            sm.utok[mm][cnt++] = __ffs(mb) - 1;
+          }
+          sm.uexp[mm] = e; sm.uncnt[mm] = cnt;
+        }
+        base += __shfl_sync(0xffffffffu, incl, 31);
+      }
+      if (lane == 0) sm.nU = base;
     }
   }
   __syncthreads();
@@ -2632,11 +2956,12 @@ __device__ __forceinline__ void w13_run(const Ctx& c, Smem& sm, const LayerW& L,
   colp[2] = nullptr;
   if (!L.mx) {
     if (ROLL && W13_ROLL > 0 && nu % W13_ROLL == 0) piece_fp4_roll<NG, (W13_ROLL > 0 ? W13_ROLL : 1)>(L.w13 + ((long)e * 144 + strip) * 36 * 576, u0, nu, colp, acc);
-    else piece_fp4<NG, false>(L.w13 + ((long)e * 144 + strip) * 36 * 576, u0, nu, colp, acc);
+    else piece_fp4<NG, false, W13_UNR16>(L.w13 + ((long)e * 144 + strip) * 36 * 576, u0, nu, colp, acc);
   } else piece_fp8<NG, false>(L.w13 + ((long)e * 144 + strip) * 36 * 1056, u0, nu, colp, acc);
 }
+template <bool V = false>
 __device__ void w13_epi(const Ctx& c, const Hdr& hd, Smem& sm, const LayerW& L, int a, int u, int strip, int NGN, float (*acc)[4]) {
-  const int lane = lane_id(), g = lane >> 2, t = lane & 3, par = a & 1;
+  const int lane = lane_id(), g = lane >> 2, t = lane & 3, par = (a & 1) + (V ? 2 * (hd.ro >> 3) : 0);   // act16t set (half)
   const int e = sm.uexp[u], nt = sm.uncnt[u];
   const float fac = L.mx ? 1.0f : L.f13[e];
   for (int ng = 0; ng < NGN; ng++) {
@@ -2710,7 +3035,7 @@ __device__ void w13_async(const Ctx& c, const Hdr& hd, Smem& sm, const LayerW& L
   const int first = blockIdx.x + G * q, step = 8 * G;
   const int nit = first < T ? (T - first + step - 1) / step : 0;
   const int N = nit * 12;
-  unsigned char* ring = w < 9 ? reinterpret_cast<unsigned char*>(&sm.u.e.xr[0][0]) + w * W13_RING
+  unsigned char* ring = w < 9 ? reinterpret_cast<unsigned char*>(EXR(sm, 0)) + w * W13_RING
                               : reinterpret_cast<unsigned char*>(&sm) + sizeof(Smem) + (w - 9) * W13_RING;
   auto issue = [&](int n) {
     const int it = first + step * (n / 12), u = it / 144, strip = it - 144 * u;
@@ -2784,13 +3109,7 @@ template <bool V> __device__ void ph_w13(PH_ARGS, int a) {
 
   const int T = nU * 144, G = gridDim.x;
   constexpr int WG = 3, PER = NWARP / WG;
-#ifndef W13_CONTIG
-#define W13_CONTIG 0   // verify passes: each block takes a contiguous range of (expert, strip) items (contiguous weights)
-#endif
-  const bool contig = V && W13_CONTIG;
-  const int cb = contig ? (int)((long)T * blockIdx.x / G) : 0, ce = contig ? (int)((long)T * (blockIdx.x + 1) / G) : 0;
-  const int mine = contig ? ce - cb : (T - (int)blockIdx.x + G - 1) / G;      // items blockIdx.x + k G (or cb + k)
-  auto itm = [&](int k) { return contig ? cb + k : (int)blockIdx.x + k * G; };
+  const int mine = (T - (int)blockIdx.x + G - 1) / G;      // items blockIdx.x + k G
 #ifdef MKPROF
   const bool w13m = V && (threadIdx.x & 31) == 0 && (threadIdx.x >> 5) == 0;   // warp 0 marks its rounds
 #endif
@@ -2801,14 +3120,14 @@ template <bool V> __device__ void ph_w13(PH_ARGS, int a) {
     const int ns = min(PER, mine - r0);
     // one n-group unless an expert of this round has more than 4 tokens
     bool two = false;
-    for (int q = 0; q < ns; q++) two |= sm.uncnt[itm(r0 + q) / 144] > 4;
-    auto run1 = [&](int q, int u0, int nu, float (*acc)[4]) { const int it = itm(r0 + q); w13_run<1, V>(c, sm, L, it / 144, it % 144, u0, nu, acc); };
+    for (int q = 0; q < ns; q++) two |= sm.uncnt[(blockIdx.x + (r0 + q) * G) / 144] > 4;
+    auto run1 = [&](int q, int u0, int nu, float (*acc)[4]) { const int it = blockIdx.x + (r0 + q) * G; w13_run<1, V>(c, sm, L, it / 144, it % 144, u0, nu, acc); };
     auto run2 = [&](int q, int u0, int nu, float (*acc)[4]) {
-      const int it = itm(r0 + q);
+      const int it = blockIdx.x + (r0 + q) * G;
       if (sm.uncnt[it / 144] > 4) w13_run<2, V>(c, sm, L, it / 144, it % 144, u0, nu, acc);
       else w13_run<1, V>(c, sm, L, it / 144, it % 144, u0, nu, acc);
     };
-    auto epi = [&](int q, float (*acc)[4]) { const int it = itm(r0 + q); w13_epi(c, hd, sm, L, a, it / 144, it % 144, sm.uncnt[it / 144] > 4 ? 2 : 1, acc); };
+    auto epi = [&](int q, float (*acc)[4]) { const int it = blockIdx.x + (r0 + q) * G; w13_epi<V>(c, hd, sm, L, a, it / 144, it % 144, sm.uncnt[it / 144] > 4 ? 2 : 1, acc); };
     if (!two) block_strips<WG, 1, GRP_EXP>(sm, ns, 36, run1, epi);
     else block_strips<WG, 2, GRP_EXP>(sm, ns, 36, run2, epi);
   }
@@ -2820,6 +3139,9 @@ template <bool V> __device__ void ph_w13(PH_ARGS, int a) {
 // w2, part 1: work items (union expert u, output strip) expert-major in block-contiguous ranges (at most two experts
 // per block, their inputs staged in shared memory once); 8 items per round, 3 warps x 6 units each (a fixed split).
 // Each item publishes its contribution per token as tagged f32 rows w2ct[par][token][rank of the expert][row].
+#ifndef W2_BPC16
+#define W2_BPC16 2   // w2a NVFP4 chains: units loaded per batch
+#endif
 template <bool V, bool M> __device__ void ph_w2a(PH_ARGS, int a) {
   const App& ap = c.A[a];
   const LayerW& L = c.L[ap.layer];
@@ -2836,9 +3158,12 @@ template <bool V, bool M> __device__ void ph_w2a(PH_ARGS, int a) {
 #ifndef W2_STEP
 #define W2_STEP 1   // 1: the step kernel for B >= 2 (mk_step<false, true>) uses the one-warp w2a items and the work balance
 #endif
-  const bool w2v = V || (W2_STEP && M);
+#ifndef W2V16
+#define W2V16 0   // s18-c4 (V(16) -1.5%): 0 = the step's 3-warp w2a items (faster in the 8-row kernel once the bank conflicts were fixed)
+#endif
+  const bool w2v = (V && W2V16) || (W2_STEP && M);
   if (w2v && W2_BAL) for (int u = 0; u < nU; u++) big |= sm.uncnt[u] > 4;
-  if (w2v && W2_BAL && big) {
+  if (w2v && W2_BAL && big && (!V || hd.B <= MAXB || [&] { long C2 = 0; for (int u = 0; u < nU; u++) C2 += 144L * (sm.uncnt[u] > 4 ? 3 : 2); return C2 <= 288L * gridDim.x; }())) {
     // verify passes: block ranges of equal estimated work (an item of an expert with more than 4 tokens runs two
     // n-groups: cost 3 vs 2), mapped back to item indices; the same assignment in every block (routing tables)
     long C = 0;
@@ -2864,7 +3189,10 @@ template <bool V, bool M> __device__ void ph_w2a(PH_ARGS, int a) {
   {
     const int np = n0 + (u1 > u0 ? sm.uncnt[u1] : 0);
     const int nw = np * 2 * (IE / 2);   // tagged words
-    constexpr int SB = V ? W2S_UNR_V : W2S_UNR_S;
+#ifndef W2S_UNR_V
+#define W2S_UNR_V 2   // (2: -28 us at K=16 vs 8) w2a input staging: tagged loads in flight per thread (verify passes)
+#endif
+    constexpr int SB = V ? W2S_UNR_V : 8;
     for (int i0 = 2 * threadIdx.x; i0 < nw; i0 += 2 * NTH * SB) {
       uint2 r[SB][2]; const uint2* pp[SB];
 #pragma unroll
@@ -2872,14 +3200,15 @@ template <bool V, bool M> __device__ void ph_w2a(PH_ARGS, int a) {
         const int i = min(i0 + q * 2 * NTH, nw - 2);
         const int j = i / IE, w0 = i % IE;
         const int uu = j < n0 ? u0 : u1, jj = j < n0 ? j : j - n0;
-        pp[q] = c.act16t + (((long)(par * MAXU + uu) * MAXB + jj) * 2) * (IE / 2) + w0;
+        pp[q] = c.act16t + (((long)((par + (V ? 2 * (hd.ro >> 3) : 0)) * MAXU + uu) * MAXB + jj) * 2) * (IE / 2) + w0;
         ld_tag2(pp[q], r[q][0], r[q][1]);
       }
 #pragma unroll
       for (int q = 0; q < SB; q++) {
         const int i = i0 + q * 2 * NTH;
         if (i >= nw) continue;
-        uint32_t* d = reinterpret_cast<uint32_t*>(&sm.u.w2s[0][0][0]) + i;
+        const int jw = i / IE, ww = i % IE;   // s18-c4: padded rows (no 8-way bank conflicts)
+        uint32_t* d = reinterpret_cast<uint32_t*>(&sm.u.w2s[0][0][0]) + (jw * 2 + ww / (IE / 2)) * (W2S_RS / 2) + ww % (IE / 2);
         d[0] = wait_tag(pp[q], r[q][0], TAGA(a));
         d[1] = wait_tag(pp[q] + 1, r[q][1], TAGA(a));
       }
@@ -2899,14 +3228,11 @@ template <bool V, bool M> __device__ void ph_w2a(PH_ARGS, int a) {
       const int tok = sm.utok[u][li];
       int k = 0;
       for (int r = 0; r < TOPK; r++) if (sm.tex[tok][r] == e) k = r;
-      uint2* dst = c.w2ct + (((long)(par * MAXB + tok) * TOPK + k) * H) + strip * 16;
+      uint2* dst = c.w2ct + (((long)(par * MAXR + (V ? hd.ro : 0) + tok) * TOPK + k) * H) + strip * 16;
       st_tagf(dst + g, (acc[ng][0] + acc[ng][1] * 5.9604644775390625e-08f) * fac, TAGA(a));
       st_tagf(dst + g + 8, (acc[ng][2] + acc[ng][3] * 5.9604644775390625e-08f) * fac, TAGA(a));
     }
   };
-#ifndef W2_BPC
-#define W2_BPC 2   // verify w2a (NVFP4): units of each chain loaded per batch (1, 2, 3, 6)
-#endif
 #ifndef W2_1W_MIN
 #define W2_1W_MIN 0   // one warp per item only from this many items per block (12 / 16 / 24 measured slower at every K >= 2)
 #endif
@@ -2919,18 +3245,18 @@ template <bool V, bool M> __device__ void ph_w2a(PH_ARGS, int a) {
 #pragma unroll
       for (int ng = 0; ng < 2; ng++) {
         const int li = 4 * ng + (g >> 1), part = g & 1;
-        colp[ng] = li < nt ? w2sb + ((long)(j0 + li) * 2 + part) * IE : nullptr;
+        colp[ng] = li < nt ? w2sb + ((long)(j0 + li) * 2 + part) * W2S_RS : nullptr;
       }
       colp[2] = nullptr;
       float tot[2][4];
       if (nt > 4) {
         float acc[3][2][4] = {};
-        if (!L.mx) piece3c<2, false, 6, W2_BPC>(L.w2 + ((long)e * 144 + strip) * 18 * 576, colp, acc);
+        if (!L.mx) piece3c<2, false, 6, W2_BPC16>(L.w2 + ((long)e * 144 + strip) * 18 * 576, colp, acc);
         else piece3c<2, true, 6, 1>(L.w2 + ((long)e * 144 + strip) * 18 * 1056, colp, acc);
         sum3<2>(acc, tot);
       } else {
         float acc[3][1][4] = {};
-        if (!L.mx) piece3c<1, false, 6, W2_BPC>(L.w2 + ((long)e * 144 + strip) * 18 * 576, colp, acc);
+        if (!L.mx) piece3c<1, false, 6, W2_BPC16>(L.w2 + ((long)e * 144 + strip) * 18 * 576, colp, acc);
         else piece3c<1, true, 6, 1>(L.w2 + ((long)e * 144 + strip) * 18 * 1056, colp, acc);
         sum3<1>(acc, tot);
       }
@@ -2949,7 +3275,7 @@ template <bool V, bool M> __device__ void ph_w2a(PH_ARGS, int a) {
 #pragma unroll
       for (int ng = 0; ng < 2; ng++) {
         const int li = 4 * ng + (g >> 1), part = g & 1;
-        colp[ng] = li < nt ? w2sb + ((long)(j0 + li) * 2 + part) * IE : nullptr;
+        colp[ng] = li < nt ? w2sb + ((long)(j0 + li) * 2 + part) * W2S_RS : nullptr;
       }
       colp[2] = nullptr;
       if (nt > 4) {
@@ -2980,7 +3306,7 @@ template <bool V> __device__ void ph_w2b(PH_ARGS, int a) {
     const int et = threadIdx.x >> 4, er = threadIdx.x & 15;    // token et, row er
     const int row = strip * 16 + er;
     float np_ = 0.f;
-    const int t = row_t<V>(hd, min(et, MAXB - 1)), nin = row_nin<V>(hd, min(et, MAXB - 1)), seq = row_seq<V>(hd, min(et, MAXB - 1));
+    const int t = row_t<V>(hd, min(et, MAXR - 1)), nin = row_nin<V>(hd, min(et, MAXR - 1)), seq = row_seq<V>(hd, min(et, MAXR - 1));
     bf16* hb = c.hm + ((long)ap.slot * MAXB + seq) * RING * H + row;
     float x = 0.f, xl[3] = {0.f, 0.f, 0.f};
     uint2 ra = make_uint2(0u, 0u), rp = make_uint2(0u, 0u), tw = make_uint2(0u, 0u);
@@ -2989,19 +3315,15 @@ template <bool V> __device__ void ph_w2b(PH_ARGS, int a) {
 #pragma unroll
       for (int l = 1; l <= 3; l++) if (l > nin) xl[l - 1] = ldcg_bf(hb + ((t - l) & (RING - 1)) * H);
       tw = *reinterpret_cast<const uint2*>(L.mlp_sc + row * 4);
-      ra = ld_tag(c.attst + (long)(par * MAXB + et) * NPAIR + row / 2);
-      rp = ld_tag(c.pbt + ((long)(addp ? ap.pin : 0) * MAXB + et) * NPAIR + row / 2);
+      ra = ld_tag(c.attst + (long)(par * MAXR + et) * NPAIR + row / 2);
+      rp = ld_tag(c.pbt + ((long)(addp ? ap.pin : 0) * MAXR + et) * NPAIR + row / 2);
       uint2 rk[TOPK];
-      const uint2* src = c.w2ct + ((long)(par * MAXB + et) * TOPK) * H + row;
-      constexpr int WB = V ? W2B_UNR_V : TOPK;   // loads issued per batch (the sum stays in expert-rank order)
+      const uint2* src = c.w2ct + ((long)(par * MAXR + et) * TOPK) * H + row;
+#pragma unroll
+      for (int k = 0; k < TOPK; k++) rk[k] = ld_tag(src + (long)k * H);
       float s = 0.f;
 #pragma unroll
-      for (int k0 = 0; k0 < TOPK; k0 += WB) {
-#pragma unroll
-        for (int k = k0; k < k0 + WB; k++) rk[k] = ld_tag(src + (long)k * H);
-#pragma unroll
-        for (int k = k0; k < k0 + WB; k++) s += __uint_as_float(wait_tag(src + (long)k * H, rk[k], TAGA(a)));
-      }
+      for (int k = 0; k < TOPK; k++) s += __uint_as_float(wait_tag(src + (long)k * H, rk[k], TAGA(a)));
       x = rbf(s);
     }
     if (V) {   // verify pass: the previous positions of this pass are the rows et - l of this block
@@ -3021,16 +3343,16 @@ template <bool V> __device__ void ph_w2b(PH_ARGS, int a) {
       acc = __fadd_rn(acc, __fmul_rn(x, bf(w4[3])));
       const float ms = rbf(__fmul_rn(__fadd_rn(acc, x), 0.44721359549995793f));
       hb[(t & (RING - 1)) * H] = tobf(x);
-      const uint32_t av = wait_tag(c.attst + (long)(par * MAXB + et) * NPAIR + row / 2, ra, TAGA(a));
+      const uint32_t av = wait_tag(c.attst + (long)(par * MAXR + et) * NPAIR + row / 2, ra, TAGA(a));
       const float as = (row & 1) ? bf_hi(av) : bf_lo(av);
       if (!addp) np_ = as + ms;
       else {
-        const uint32_t pv = wait_tag(c.pbt + ((long)ap.pin * MAXB + et) * NPAIR + row / 2, rp, TAGP(ap.pin));
+        const uint32_t pv = wait_tag(c.pbt + ((long)ap.pin * MAXR + et) * NPAIR + row / 2, rp, TAGP(ap.pin));
         np_ = (((row & 1) ? bf_hi(pv) : bf_lo(pv)) + as) + ms;
       }
     }
     const float other = __shfl_down_sync(0xffffffff, np_, 1);
-    if (et < B && (er & 1) == 0) st_tag(c.pbt + ((long)ap.out * MAXB + et) * NPAIR + row / 2, pack_bf2(np_, other), TAGP(ap.out));
+    if (et < B && (er & 1) == 0) st_tag(c.pbt + ((long)ap.out * MAXR + et) * NPAIR + row / 2, pack_bf2(np_, other), TAGP(ap.out));
   }
 }
 
@@ -3038,33 +3360,27 @@ template <bool V> __device__ void ph_w2b(PH_ARGS, int a) {
 #ifndef FIN_DES
 #define FIN_DES 3   // verify passes of at least this many rows: designated blocks mix the final rows and publish them
 #endif
-#ifndef UN8_DIAG
-#define UN8_DIAG 0   // timing only: skip the exact recompute (wrong tokens)
-#endif
-#ifndef UN8
-#define UN8 1   // (off by default via MK_UN8=0: no gain) verify passes without logits output: certified argmax through the INT8 unembedding copy
-#endif
-template <bool V> __device__ void ph_final(PH_ARGS, unsigned& nbar, unsigned base) {
+template <bool V> __device__ void ph_final(PH_ARGS) {
   const int B = hd.B;
   if (V && B >= FIN_DES) {
     for (int b = dsel<V>(hd); b < B; b += gridDim.x) {
       float v[5][EPT], x[1][EPT], wv[1][EPT];
       const int idx[5] = {c.fin[0], c.fin[1], c.fin[2], c.fin[3], c.fin_pin};
       const unsigned msk = ((1u << c.nfin) - 1u) | 16u;
-      load_srcs<5, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, idx, msk, b, v);
+      load_srcs<5>(c, hd, idx, msk, b, v);
       const float* qs[1] = {c.oq};
       depth_mix<5, 1>(v, msk, qs, 1, x, sm);
       load_w(c.fnorm, wv[0]);
       uint2* dst[1] = {c.xft + (long)b * NPAIR};
       norm_publish<1>(x, wv, 1, dst, TAGP(60), sm);   // the same arithmetic as rmsnorm_store
     }
-    pollr<V>(hd.B, c.xft, B, [&](int r) { return &sm.u.xs[0][r][0]; }, TAGP(60));
+    poll_rows(c.xft, B, [&](int r) { return &sm.u.xs[0][r][0]; }, TAGP(60));
   } else
   for (int b = 0; b < B; b++) {
     float v[5][EPT], x[1][EPT];
     const int idx[5] = {c.fin[0], c.fin[1], c.fin[2], c.fin[3], c.fin_pin};
     const unsigned msk = ((1u << c.nfin) - 1u) | 16u;
-    load_srcs<5, (V ? LS_SEQ : LS_SEQ_S)>(c, hd, idx, msk, b, v);
+    load_srcs<5>(c, hd, idx, msk, b, v);
     const float* qs[1] = {c.oq};
     depth_mix<5, 1>(v, msk, qs, 1, x, sm);
     rmsnorm_store(x[0], c.fnorm, &sm.u.xs[0][b][0], sm);
@@ -3074,99 +3390,75 @@ template <bool V> __device__ void ph_final(PH_ARGS, unsigned& nbar, unsigned bas
     for (int i = threadIdx.x; i < B * (H / 8); i += NTH)
       reinterpret_cast<uint4*>(c.fout)[i] = *reinterpret_cast<const uint4*>(&sm.u.xs[0][i / (H / 8)][(i % (H / 8)) * 8]);
   const int w = threadIdx.x >> 5, lane = lane_id(), g = lane >> 2, t = lane & 3;
-  unsigned long long best[2] = {0ull, 0ull};
-  const bool cert = V && UN8 && c.un8 && !hd.logits;
-  float zl0[2] = {-1e30f, -1e30f};
-  if (cert) {
-    // pass 1: approximate logits A = s * sum q h with a rigorous bound M on |exact acc - A| (quantization error x |h|_1,
-    // fp32 summation error of both sums, the scale's rounding); z bounds with a 0.06 allowance for the approximate tanh
-    float h1[MAXB];
-#pragma unroll
-    for (int b = 0; b < MAXB; b++) {
-      float sacc = 0.f;
-      if (b < B) for (int i = threadIdx.x; i < H; i += NTH) sacc += fabsf(bf(sm.u.xs[0][b][i]));
-      h1[b] = sacc;
-    }
-    block_sum<MAXB>(h1, sm);
-    for (int it = blockIdx.x + gridDim.x * w; it < UN_STRIPS; it += gridDim.x * NWARP) {
-      BSm bl{&sm.u.xs[0][0][0], HP, B};
-      float acc[4] = {0.f, 0.f, 0.f, 0.f};
-      piece_i8(c.un8 + (long)it * 36 * 1024, bl, acc);
-      for (int h = 0; h < 2; h++) {
-        const int row = it * 16 + g + 8 * h;
-        if (row >= VOCAB_REAL) continue;
-        const float sc = c.un8s[row], mc = c.un8m[row];
-        for (int cc = 0; cc < 2; cc++) {
-          const int tok = 2 * t + cc;
-          if (tok >= B) continue;
-          const float A = sc * acc[2 * h + cc];
-          const float M = mc * h1[tok] * 1.001f + 1e-7f * fabsf(A) + 1e-6f;
-          const float zhi = 30.0f * tanhf((A + M) / 30.0f) + 0.06f;
-          const float zlo = 30.0f * tanhf((A - M) / 30.0f) - 0.06f;
-          c.zhi[(long)tok * (UN_STRIPS * 16) + row] = zhi;
-          zl0[cc] = fmaxf(zl0[cc], zlo);
-        }
-      }
-    }
-    for (int cc = 0; cc < 2; cc++) {
-      float m = zl0[cc];
-#pragma unroll
-      for (int o = 4; o < 32; o <<= 1) m = fmaxf(m, __shfl_xor_sync(0xffffffff, m, o));
-      const int tok = 2 * t + cc;
-      if (g == 0 && tok < B) {
-        unsigned u = __float_as_uint(m);
-        u = (u & 0x80000000u) ? ~u : (u | 0x80000000u);
-        atomicMax(c.zlo + tok, u);
-      }
-    }
-    grid_bar(c, nbar, base);
-  }
-  float zmin[2] = {0.f, 0.f};
-  if (cert)
-    for (int cc = 0; cc < 2; cc++) {
-      const int tok = 2 * t + cc;
-      const unsigned u = tok < B ? ldcg_u32(c.zlo + tok) : 0u;
-      zmin[cc] = __uint_as_float((u & 0x80000000u) ? (u & 0x7fffffffu) : ~u);
-    }
-  for (int it = blockIdx.x + gridDim.x * w; it < UN_STRIPS; it += gridDim.x * NWARP) {
-    if (cert) {   // pass 2: only strips holding a row whose upper bound reaches a row's best lower bound, exactly
-      bool any = false;
-      for (int h = 0; h < 2; h++) {
-        const int row = it * 16 + g + 8 * h;
-        for (int cc = 0; cc < 2; cc++) {
-          const int tok = 2 * t + cc;
-          if (tok < B && row < VOCAB_REAL && __ldcg(c.zhi + (long)tok * (UN_STRIPS * 16) + row) >= zmin[cc]) any = true;
-        }
-      }
-      if (!__any_sync(0xffffffffu, any) || UN8_DIAG) continue;
-    }
-    BSm bl{&sm.u.xs[0][0][0], HP, B};
-    float acc[4] = {0.f, 0.f, 0.f, 0.f};
-#ifdef W12
-    piece_w12(c.un12, it, 36, 0, 36, bl, acc);
-#else
-    piece_bf16(c.unembed + (long)it * 36 * 2048, 0, 36, bl, acc);
+#ifndef FIN1
+#define FIN1 1   // 16-row passes: the unembedding in one pass (two column groups per weight fragment: weights read once)
 #endif
-    for (int h = 0; h < 2; h++) {
-      const int row = it * 16 + g + 8 * h;
+#ifndef W12
+  if (V && FIN1 && B > SMB) {
+    unsigned long long best[2][2] = {{0ull, 0ull}, {0ull, 0ull}};
+    for (int it = blockIdx.x + gridDim.x * w; it < UN_STRIPS; it += gridDim.x * NWARP) {
+      BSm b0{&sm.u.xs[0][0][0], HP, SMB}, b1{&sm.u.xs[0][0][0] + (long)SMB * HP, HP, B - SMB};
+      float acc[2][4] = {{0.f, 0.f, 0.f, 0.f}, {0.f, 0.f, 0.f, 0.f}};
+      piece_bf16_2(c.unembed + (long)it * 36 * 2048, 0, 36, b0, b1, acc);
+      for (int ng = 0; ng < 2; ng++)
+        for (int h = 0; h < 2; h++) {
+          const int row = it * 16 + g + 8 * h;
+          for (int cc = 0; cc < 2; cc++) {
+            const int tok = SMB * ng + 2 * t + cc;
+            if (tok >= B || row >= VOCAB_REAL) continue;
+            const float z = 30.0f * tanhf(acc[ng][2 * h + cc] / 30.0f);
+            if (hd.logits) hd.logits[(long)tok * VOCAB_REAL + row] = z;
+            unsigned u = __float_as_uint(z);
+            u = (u & 0x80000000u) ? ~u : (u | 0x80000000u);
+            const unsigned long long key = ((unsigned long long)u << 32) | (unsigned)(0xFFFFFFFFu - row);
+            if (key > best[ng][cc]) best[ng][cc] = key;
+          }
+        }
+    }
+    for (int ng = 0; ng < 2; ng++)
       for (int cc = 0; cc < 2; cc++) {
-        const int tok = 2 * t + cc;
-        if (tok >= B || row >= VOCAB_REAL) continue;
-        const float z = 30.0f * tanhf(acc[2 * h + cc] / 30.0f);
-        if (hd.logits) hd.logits[(long)tok * VOCAB_REAL + row] = z;
-        unsigned u = __float_as_uint(z);
-        u = (u & 0x80000000u) ? ~u : (u | 0x80000000u);
-        const unsigned long long key = ((unsigned long long)u << 32) | (unsigned)(0xFFFFFFFFu - row);
-        if (key > best[cc]) best[cc] = key;
+        unsigned long long k = best[ng][cc];
+  #pragma unroll
+        for (int o = 4; o < 32; o <<= 1) { const unsigned long long ok = __shfl_xor_sync(0xffffffff, k, o); if (ok > k) k = ok; }
+        const int tok = SMB * ng + 2 * t + cc;
+        if (g == 0 && tok < B && k) atomicMax(c.amax + tok, k);
+      }
+    return;
+  }
+#endif
+  // verify passes of > 8 rows: the unembedding per half (the 16 final rows lie contiguously in the xs region)
+  for (int ro = 0; ro < (V ? B : 1); ro += SMB) {
+    const int Bh = V ? min(SMB, B - ro) : B;
+    unsigned long long best[2] = {0ull, 0ull};
+    for (int it = blockIdx.x + gridDim.x * w; it < UN_STRIPS; it += gridDim.x * NWARP) {
+      BSm bl{&sm.u.xs[0][0][0] + (long)ro * HP, HP, Bh};
+      float acc[4] = {0.f, 0.f, 0.f, 0.f};
+  #ifdef W12
+      piece_w12(c.un12, it, 36, 0, 36, bl, acc);
+  #else
+      piece_bf16(c.unembed + (long)it * 36 * 2048, 0, 36, bl, acc);
+  #endif
+      for (int h = 0; h < 2; h++) {
+        const int row = it * 16 + g + 8 * h;
+        for (int cc = 0; cc < 2; cc++) {
+          const int tok = 2 * t + cc;
+          if (tok >= Bh || row >= VOCAB_REAL) continue;
+          const float z = 30.0f * tanhf(acc[2 * h + cc] / 30.0f);
+          if (hd.logits) hd.logits[(long)(ro + tok) * VOCAB_REAL + row] = z;
+          unsigned u = __float_as_uint(z);
+          u = (u & 0x80000000u) ? ~u : (u | 0x80000000u);
+          const unsigned long long key = ((unsigned long long)u << 32) | (unsigned)(0xFFFFFFFFu - row);
+          if (key > best[cc]) best[cc] = key;
+        }
       }
     }
-  }
-  for (int cc = 0; cc < 2; cc++) {
-    unsigned long long k = best[cc];
-#pragma unroll
-    for (int o = 4; o < 32; o <<= 1) { const unsigned long long ok = __shfl_xor_sync(0xffffffff, k, o); if (ok > k) k = ok; }
-    const int tok = 2 * t + cc;
-    if (g == 0 && tok < B && k) atomicMax(c.amax + tok, k);
+    for (int cc = 0; cc < 2; cc++) {
+      unsigned long long k = best[cc];
+  #pragma unroll
+      for (int o = 4; o < 32; o <<= 1) { const unsigned long long ok = __shfl_xor_sync(0xffffffff, k, o); if (ok > k) k = ok; }
+      const int tok = 2 * t + cc;
+      if (g == 0 && tok < Bh && k) atomicMax(c.amax + ro + tok, k);
+    }
   }
 }
 
@@ -3186,13 +3478,25 @@ template <bool V, bool M = false> __global__ void __launch_bounds__(NTH, 1) mk_s
 #else
 #define GBAR() do { __syncthreads(); } while (0)
 #endif
+  // track C: both verify kernels are queued for every cycle; flags 0x100 = run only if the device row count vpos[1] > 8
+  // (the 16-row library), 0x200 = run only if vpos[1] <= 8: the other one returns at once (block-uniform, before any
+  // barrier or tagged store)
+  if (V && (hd0.flags & 0x300)) { const int kb_ = hd0.vpos[1]; if (((hd0.flags & 0x100) && kb_ <= 8) || ((hd0.flags & 0x200) && kb_ > 8)) return; }
+#ifndef KB16
+#define KB16 0
+#endif
+  if (KB16 && V && hd0.vpos[1] != MAXR) return;   // (never: 16-row passes have exactly 16 rows)
   const int nst = hd0.nsteps > 0 ? hd0.nsteps : 1;
   for (int st = 0; st < nst; st++) {
   Hdr hd = hd0;
   if (V) {   // verify pass: position and number of rows from the device (written by the draft of the previous cycle)
     hd.pos = hd0.vpos[0];
     const int kb = hd0.vpos[1];
-    hd.B = (kb >= 1 && kb <= MAXB) ? kb : hd0.B;
+    hd.B = (kb >= 1 && kb <= MAXR) ? kb : hd0.B;
+#if KB16
+    hd.B = MAXR;   // s18-c4: compiled for exactly 16 rows (the n-gram rule proposes 15 drafts; other counts return below)
+#endif
+    if (HD_MT(hd0)) { const int nr = hd0.mt[0]; hd.B = (nr >= 1 && nr <= MAXR) ? nr : 1; hd.pos = hd0.mt[MT_POS]; }
   }
   if (hd0.nsteps > 0) {   // device loop: step st at position pos + st, its own tag range, token from the prompt or fed back
     hd.pos = hd0.pos + st;
@@ -3214,20 +3518,16 @@ template <bool V, bool M = false> __global__ void __launch_bounds__(NTH, 1) mk_s
       GBAR(); MARK(7);
       ph_gate_d<V>(c, hd, sm, a, 0, 3);
       GBAR(); MARK(8);
-      ph_gate_fg<V>(c, hd, sm, a, 0, 3);
+      ph_gate_fg(c, hd, sm, a, 0, 3);
       GBAR(); MARK(9);
       const LayerW& L = c.L[ap.layer];
       float wv[3][EPT];
       for (int q = 0; q < 3; q++) load_w(L.norm[L.glob ? q : 0], wv[q]);
-#ifndef HYB_GN_MAX
-#define HYB_GN_MAX 2   // gate norm: hybrid up to this many rows
-#endif
-      const bool hy = V && HYB2 && hd.B >= 2 && hd.B <= (HYB_GN_MAX > HYB_MAX ? HYB_GN_MAX : HYB_MAX);
-      const bool bc = desig<V>(hd) && !hy;
+      const bool bc = desig<V>(hd), hy = hyb2<V>(hd);
       auto row = [&](int b, bool pub) {
         float x[3][EPT];
         uint2 r[3][EPT];
-        const uint2* p0 = c.xpt + ((long)((a & 1) * MAXB + b) * 4) * H;
+        const uint2* p0 = c.xpt + ((long)((a & 1) * MAXR + b) * 4) * H;
 #pragma unroll
         for (int q = 0; q < 3; q++)
 #pragma unroll
@@ -3237,8 +3537,8 @@ template <bool V, bool M = false> __global__ void __launch_bounds__(NTH, 1) mk_s
 #pragma unroll
           for (int k = 0; k < EPT; k++) x[q][k] = EV(k) ? __uint_as_float(wait_tag(p0 + q * H + EL(k), r[q][k], TAGA(a))) : 0.f;
         if (pub) {
-          uint2* xs_pub = c.xst + (long)(a & 1) * 3 * MAXB * NPAIR;
-          uint2* dst[3] = {xs_pub + (long)b * NPAIR, xs_pub + (long)(MAXB + b) * NPAIR, xs_pub + (long)(2 * MAXB + b) * NPAIR};
+          uint2* xs_pub = c.xst + (long)(a & 1) * 3 * MAXR * NPAIR;
+          uint2* dst[3] = {xs_pub + (long)b * NPAIR, xs_pub + (long)(MAXR + b) * NPAIR, xs_pub + (long)(2 * MAXR + b) * NPAIR};
           norm_publish<3>(x, wv, 3, dst, TAGA(a), sm);
         } else {
           bf16* dst[3] = {&sm.u.xs[0][b][0], &sm.u.xs[1][b][0], &sm.u.xs[2][b][0]};
@@ -3248,60 +3548,124 @@ template <bool V, bool M = false> __global__ void __launch_bounds__(NTH, 1) mk_s
       if (bc) { for (int b = dsel<V>(hd); b < hd.B; b += gridDim.x) row(b, true); }
       else if (hy) { for (int b = 1 + (int)(gridDim.x - 1 - blockIdx.x); b < hd.B; b += gridDim.x) row(b, true); row(0, false); }
       else { for (int b = 0; b < hd.B; b++) row(b, false); }
-      if (bc || hy) {
+      if ((bc || hy) && !big16<V>(hd)) {
         const int r0 = hy ? 1 : 0;
-        const uint2* xs_pub = c.xst + (long)(a & 1) * 3 * MAXB * NPAIR;
+        const uint2* xs_pub = c.xst + (long)(a & 1) * 3 * MAXR * NPAIR;
         const unsigned need = ((V || POLL_STEP) && POLL_NEEDED) ? qkv_streams(L, 3) : 7u;
         for (int q = 0; q < 3; q++)
-          if ((need >> q) & 1u) pollr<V>(hd.B, xs_pub + ((long)q * MAXB + r0) * NPAIR, hd.B - r0, [&](int rr) { return &sm.u.xs[q][r0 + rr][0]; }, TAGA(a));
+          if ((need >> q) & 1u) poll_rows(xs_pub + ((long)q * MAXR + r0) * NPAIR, hd.B - r0, [&](int rr) { return &sm.u.xs[q][r0 + rr][0]; }, TAGA(a));
       }
       __syncthreads();
       ns = 3;
     }
     MARK(10);
-    ph_qkv(c, hd, sm, a, ns);
+    if (big16<V>(hd)) {
+      // rows in halves of 8: the published normalized rows of the half -> smem -> the qkv strips (rows ro + b)
+      const LayerW& L = c.L[ap.layer];
+      const uint2* xs_pub = c.xst + (long)(a & 1) * 3 * MAXR * NPAIR;
+      const unsigned need = POLL_NEEDED ? qkv_streams(L, ns) : 7u;
+#ifndef W12
+      // the streams of this block's strips: stream 0 and at most one other (148 blocks, <= 4 strips each), else halves
+      int other = -1; bool one = QKV1;
+      {
+        const int strips = QG_STRIPS + 2 * L.nsk, G = gridDim.x;
+        for (int strip = blockIdx.x; strip < strips; strip += G) {
+          const int st = qkv_stream_of(strip, L.nsk, ns);
+          if (st != 0) { if (other >= 0 && other != st) one = false; other = st; }
+        }
+      }
+      if (one) {
+        poll_rows(xs_pub + (long)0 * NPAIR, hd.B, [&](int rr) { return &sm.u.xs16[0][rr][0]; }, TAGA(a));
+        if (other > 0) poll_rows(xs_pub + ((long)other * MAXR) * NPAIR, hd.B, [&](int rr) { return &sm.u.xs16[1][rr][0]; }, TAGA(a));
+        __syncthreads();
+        ph_qkv16(c, hd, sm, a, ns, other);
+        __syncthreads();
+      } else
+#endif
+      for (int h = 0; h * SMB < hd.B; h++) {
+        Hdr hh = hd; hh.ro = h * SMB; hh.B = min(SMB, hd.B - hh.ro);
+        for (int q = 0; q < ns; q++)
+          if ((need >> q) & 1u) poll_rows(xs_pub + ((long)q * MAXR + hh.ro) * NPAIR, hh.B, [&](int rr) { return &sm.u.xs[q][rr][0]; }, TAGA(a));
+        __syncthreads();
+        ph_qkv<V>(c, hh, sm, a, ns);
+        __syncthreads();
+      }
+    } else
+    ph_qkv<V>(c, hd, sm, a, ns);
     GBAR(); MARK(2);
     ph_attn<V>(c, hd, sm, a);
     GBAR(); MARK(3);
-    ph_oproj<V>(c, hd, sm, a);
+    if (big16<V>(hd)) ph_oproj16(c, hd, sm, a); else ph_oproj<V>(c, hd, sm, a);
     GBAR(); MARK(4);
     int r = ph_mlp_in<V>(c, hd, sm, a);
     if (r < 0) {
       GBAR(); MARK(14);
       ph_gate_d<V>(c, hd, sm, a, 3, 1);
       GBAR(); MARK(15);
-      ph_gate_fg<V>(c, hd, sm, a, 3, 1);
+      ph_gate_fg(c, hd, sm, a, 3, 1);
       GBAR(); MARK(16);
       if (hyb2<V>(hd)) {
         for (int b = 1 + (int)(gridDim.x - 1 - blockIdx.x); b < hd.B; b += gridDim.x) {
           float x[1][EPT];
-          load_vec_f(c.xpt + ((long)((a & 1) * MAXB + b) * 4 + 3) * H, TAGA(a), x[0]);
+          load_vec_f(c.xpt + ((long)((a & 1) * MAXR + b) * 4 + 3) * H, TAGA(a), x[0]);
           mlp_publish(c, hd, sm, a, x, b);
         }
         {
           float x[1][EPT];
-          load_vec_f(c.xpt + ((long)((a & 1) * MAXB + 0) * 4 + 3) * H, TAGA(a), x[0]);
+          load_vec_f(c.xpt + ((long)((a & 1) * MAXR + 0) * 4 + 3) * H, TAGA(a), x[0]);
           mlp_in_x(c, hd, sm, a, x, 0);
         }
-        mlp_poll<V>(c, hd, sm, a, 1);
+        mlp_poll(c, hd, sm, a, 1);
       } else if (desig<V>(hd)) {
         for (int b = dsel<V>(hd); b < hd.B; b += gridDim.x) {
           float x[1][EPT];
-          load_vec_f(c.xpt + ((long)((a & 1) * MAXB + b) * 4 + 3) * H, TAGA(a), x[0]);
+          load_vec_f(c.xpt + ((long)((a & 1) * MAXR + b) * 4 + 3) * H, TAGA(a), x[0]);
           mlp_publish(c, hd, sm, a, x, b);
         }
-        mlp_poll<V>(c, hd, sm, a);
+        if (!big16<V>(hd)) mlp_poll(c, hd, sm, a);
       } else {
         for (int b = 0; b < hd.B; b++) {
           float x[1][EPT];
-          load_vec_f(c.xpt + ((long)((a & 1) * MAXB + b) * 4 + 3) * H, TAGA(a), x[0]);
+          load_vec_f(c.xpt + ((long)((a & 1) * MAXR + b) * 4 + 3) * H, TAGA(a), x[0]);
           mlp_in_x(c, hd, sm, a, x, b);
         }
       }
       __syncthreads();
     }
     MARK(11);
-    ph_router(c, hd, sm, a);
+    if (big16<V>(hd)) {
+      // the MoE per half of 8 rows (router inputs of the half -> router -> routing -> w13 -> w2a; act16t set per half)
+      if (MOE1) {   // router per half (8-row smem input), then one routing / w13 / w2a over the 16 rows
+        if (ROUT1) moe_in16(c, hd, sm, a); else
+        for (int h = 0; h * SMB < hd.B; h++) {
+          Hdr hh = hd; hh.ro = h * SMB; hh.B = min(SMB, hd.B - hh.ro);
+          mlp_poll_half(c, hh, sm, a, false);
+          ph_router<V>(c, hh, sm, a, RTR2 ? h * 8 : 0);   // RTR2: half h on blocks 8h .. 8h + 7 (the halves in parallel)
+          __syncthreads();
+          mlp_conv_half(c, hh, sm, a);   // after the router: rows 8 + b overwrite the router input in place
+        }
+        MARK(5);
+        routing<V>(c, hd, sm, a);
+        MARK(12);
+        ph_w13<V>(c, hd, sm, a);
+        __syncthreads(); MARK(6);
+        ph_w2a<V, M>(c, hd, sm, a);
+        __syncthreads(); MARK(17);
+      } else
+      for (int h = 0; h * SMB < hd.B; h++) {
+        Hdr hh = hd; hh.ro = h * SMB; hh.B = min(SMB, hd.B - hh.ro);
+        mlp_poll_half(c, hh, sm, a);
+        ph_router<V>(c, hh, sm, a);
+        __syncthreads(); if (h) MARK(5);
+        routing<V>(c, hh, sm, a);
+        if (h) MARK(12);
+        ph_w13<V>(c, hh, sm, a);
+        __syncthreads(); if (h) MARK(6);
+        ph_w2a<V, M>(c, hh, sm, a);
+        __syncthreads(); if (h) MARK(17);
+      }
+    } else {
+    ph_router<V>(c, hd, sm, a);
     GBAR(); MARK(5);
     routing<V>(c, hd, sm, a);
     MARK(12);
@@ -3309,11 +3673,12 @@ template <bool V, bool M = false> __global__ void __launch_bounds__(NTH, 1) mk_s
     GBAR(); MARK(6);
     ph_w2a<V, M>(c, hd, sm, a);
     GBAR(); MARK(17);
+    }
     ph_w2b<V>(c, hd, sm, a);
     GBAR();
   }
   MARK(13);
-  ph_final<V>(c, hd, sm, nbar, base);
+  ph_final<V>(c, hd, sm);
   MARK(MKPROF_WAIT);
   grid_bar(c, nbar, base);
   if (blockIdx.x == 0) {
@@ -3322,7 +3687,6 @@ template <bool V, bool M = false> __global__ void __launch_bounds__(NTH, 1) mk_s
       const int tok = (int)(0xFFFFFFFFu - (unsigned)(k & 0xFFFFFFFFu));
       c.next_tok[threadIdx.x] = tok;
       c.amax[threadIdx.x] = 0ull;
-      if (V && c.zlo) c.zlo[threadIdx.x] = 0u;
       st_tag(c.ntt + threadIdx.x, (uint32_t)tok, (hd.tag0 + 60u) & 0x7fffffffu);
       if (hd.out_tok) hd.out_tok[threadIdx.x] = tok + 1;   // 0 = not yet written (host polls)
     }
@@ -3384,6 +3748,8 @@ int mk_hdr_bytes() { return (int)sizeof(Hdr); }
 int mk_smem_bytes() { return (int)sizeof(Smem); }
 int mk_nth() { return NTH; }
 int mk_cn_total() { return CN_TOTAL; }
+int mk_ring() { return RING; }
+int mk_maxu() { return MAXU; }
 #ifdef W12
 int mk_w12() { return 1; }
 #else

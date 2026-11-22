@@ -296,12 +296,12 @@
       "track": "C",
       "kind": "offline",
       "source": "../engines/inkling-2-mini_b200/offline-c",
-      "sha256": "2b48f9ffbe04e280",
-      "from": "run s16-mini-b200-c1, submission s0022",
+      "sha256": "baac7e26a1490ff8",
+      "from": "run s18-mini-b200-c4, submission s0013",
       "max_batch": 8,
       "max_context": 2048,
-      "what": "exact speculative decoding with one sequence: drafts from the checkpoint's MTP head (DSpark, mtp.safetensors) and from n-gram copies of the context, verified in one pass by a track-A decode step (logits bit-identical to run s15-mini-b200-a2, submission s0025, and at one sequence to offline-a); its tokens equal its own one-token-per-step greedy tokens; 2 to 8 sequences decode one token per step; a request that arrives while others decode waits for them; served in native mode (greedy); --mode step: one token per step, with sampling",
-      "verified": "2026-11-21: valid in the evaluator with track C's rules (every gate, the hidden set included), every release check (eval/release_check.py), lossless in eval/spec_check.py (natural text and the benchmark's prompts, 1 and 8 sequences, staggered requests: 56 of 56 sequences identical), and 12 of 12 checks of scripts/mkserve_check.py on this card (native mode)"
+      "what": "exact speculative decoding with one sequence, built on the track-A engine offline-a (run s17-mini-b200-ma, submission s0014): drafts from the checkpoint's MTP head (DSpark, mtp.safetensors) inside the megakernel, verified in one pass by the track-A decode step; its tokens equal its own one-token-per-step greedy tokens; 2 to 8 sequences decode one token per step (its B=1 and B>=2 kernels differ in logits within tolerance, as offline-a's do); a request that arrives while others decode waits for them; served in native mode (greedy); --mode step: one token per step, with sampling",
+      "verified": "2026-11-22: valid in the evaluator with track C's rules (every gate, the hidden set included; megakernel-mini-rel2-rescore-c-1), every release check (megakernel-mini-rel2-relchk-c-1), lossless in eval/spec_check.py (natural text and the benchmark's prompts, 1 and 8 sequences, staggered requests: every sequence identical; megakernel-mini-rel2-lossless-c-1)"
      }
     }
    }

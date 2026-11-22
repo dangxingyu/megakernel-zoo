@@ -16,6 +16,7 @@ typedef __nv_bfloat16 bf16;
 #define NKV 8
 #define HD 128
 #define NB 8
+#define VR 16   // verify rows (the 16-row library's passes); the draft's block stays NB = 8 rows
 #define RK 256
 #define VOC 200058
 #define VSTRIPS 12504
@@ -53,10 +54,42 @@ struct Dk {
   long long f8;   // bit 0: base unembedding from un8, bit 1: fold from fold8
   long long ngmin, hT;   // n-gram drafts: minimum match length (> 8: off), history length
   double theta;   // draft length: the largest k with prod_{i<=k} p_i >= theta (k >= 1); next verify rows = k + 1
+  // 16-row verify passes (engine/mk16.cu): its target tokens / partials / final-norm rows; an n-gram match of at least
+  // ng16min tokens at an anchor c <= lim16 proposes 15 tokens (vpos[1] = 16); st[7] = the pass just verified had > 8 rows
+  const int* tgt16; const uint2* pbt16; const bf16* fout16;
+  long long lim16, ng16min;
+  long long ng16acc;   // ... and only if the cycle just verified accepted at least ng16acc drafts (a copying regime)
 };
 
 // programmatic dependent launch: let the next kernel start (its blocks wait in gdc_wait for this grid's completion
 // and memory); every kernel waits before touching data of earlier kernels (so completion is transitive)
+#ifndef DK_RULE
+#define DK_RULE 1      // draft length: 1 = expected tokens per verify time (DK_GAM, DK_D), 0 = prod p >= theta
+#endif
+#ifndef DK_GAM
+#define DK_GAM 2.5
+#endif
+#ifndef DK_D
+#define DK_D 400       // us: the draft's own time per cycle in the rule's denominator
+#endif
+#ifndef NG_SHORT
+#define NG_SHORT 1
+#endif
+#ifndef NG_SHORT_L
+#define NG_SHORT_L 3   // (served A/B: 3 vs 4: HTTP-median synthetic 1416 vs 1420)
+#endif
+#ifndef NG_SHORT_K
+#define NG_SHORT_K 4
+#endif
+#ifndef NG_SHORT_K5
+#define NG_SHORT_K5 4   // rows for a short copy from a 5..(n-gram minimum - 1)-token match
+#endif
+#ifndef NG_SHORT_P
+#define NG_SHORT_P 0.7
+#endif
+#ifndef DK_KDMIN
+#define DK_KDMIN 0     // fewest drafts verified (0: a 1-row pass when no draft is worth a row; served A/B: natural -0.3%)
+#endif
 __device__ __forceinline__ void gdc_launch() { asm volatile("griddepcontrol.launch_dependents;" ::: "memory"); }
 __device__ __forceinline__ void gdc_wait() { asm volatile("griddepcontrol.wait;" ::: "memory"); }
 // L2 prefetch of slice `part` of `nparts` of a weight matrix (bytes a multiple of 2048), issued by one thread
@@ -148,27 +181,29 @@ __device__ __forceinline__ float step_p(const Dk& d, int i) {
 
 // ---------------------------------------------------------------------------------------------- cycle state
 // every block: c, a, c_new, anchor, frow of this cycle
-struct CS { int c, a, cn, anchor, frow; };
+struct CS { int c, a, cn, anchor, frow, big; };
 __device__ __forceinline__ CS cycle_state(const Dk& d) {
   CS s;
   if (d.mode == 0) {
     s.c = d.vpos[0];
-    const int kp = min(max(d.vpos[1], 1), NB);   // rows of the verify pass that just ran: rows >= kp are stale
+    const int kp = min(max(d.vpos[1], 1), VR);   // rows of the verify pass that just ran: rows >= kp are stale
+    s.big = kp > NB && d.tgt16 != nullptr;
+    const int* tg = s.big ? d.tgt16 : d.tgt;
     int a = 0;
-    while (a < kp - 1 && d.vtok[1 + a] == d.tgt[a]) a++;
-    s.a = a; s.cn = s.c + a + 1; s.anchor = d.tgt[a]; s.frow = a;
+    while (a < kp - 1 && d.vtok[1 + a] == tg[a]) a++;
+    s.a = a; s.cn = s.c + a + 1; s.anchor = tg[a]; s.frow = a;
   } else {
-    s.c = 0; s.a = 0; s.cn = (int)d.c_new[0]; s.anchor = (int)d.anchor[0]; s.frow = (int)d.frow[0];
+    s.c = 0; s.a = 0; s.cn = (int)d.c_new[0]; s.anchor = (int)d.anchor[0]; s.frow = (int)d.frow[0]; s.big = 0;
   }
   return s;
 }
 
 // feature j (0..3) of verify row r, elements k, k + 1 (k even)
-__device__ __forceinline__ float2 feat2(const Dk& d, int r, int j, int k) {
+__device__ __forceinline__ float2 feat2(const Dk& d, int r, int j, int k, int big) {
   if (d.mode == 0 && d.pbt) {
-    if (j == 3) return __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(d.fout + (long)r * H + k));
+    if (j == 3) return __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>((big ? d.fout16 : d.fout) + (long)r * H + k));
     const int idx = j == 0 ? 5 : (j == 1 ? 23 : 41);
-    const unsigned v = d.pbt[((long)idx * NB + r) * (H / 2) + k / 2].x;
+    const unsigned v = big ? d.pbt16[((long)idx * VR + r) * (H / 2) + k / 2].x : d.pbt[((long)idx * NB + r) * (H / 2) + k / 2].x;
     return make_float2(__uint_as_float(v << 16), __uint_as_float(v & 0xffff0000u));
   }
   return __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(d.feats + ((long)r * 4 + j) * H + k));
@@ -177,15 +212,15 @@ __device__ __forceinline__ float2 feat2(const Dk& d, int r, int j, int k) {
 #define K1_NT 256
 #define EPT1 9   // 2304 / 256
 #define MIXP 5   // element pairs per thread (1152 pairs / 256, rounded up)
-__device__ __forceinline__ float2 feat2(const Dk& d, int r, int j, int k);
+__device__ __forceinline__ float2 feat2(const Dk& d, int r, int j, int k, int big);
 // m = sum_j alpha_j F_j (FP32, j in order) for the element pairs of this thread; ss += sum m^2
-__device__ __forceinline__ void mix_row(const Dk& d, int r, const float* al, float* m, float& ss) {
+__device__ __forceinline__ void mix_row(const Dk& d, int r, const float* al, float* m, float& ss, int big) {
 #pragma unroll
   for (int e = 0; e < MIXP; e++) {
     const int k = 2 * (threadIdx.x + e * K1_NT);
     m[2 * e] = m[2 * e + 1] = 0.f;
     if (k >= H) continue;
-    float2 f0 = feat2(d, r, 0, k), f1 = feat2(d, r, 1, k), f2 = feat2(d, r, 2, k), f3 = feat2(d, r, 3, k);
+    float2 f0 = feat2(d, r, 0, k, big), f1 = feat2(d, r, 1, k, big), f2 = feat2(d, r, 2, k, big), f3 = feat2(d, r, 3, k, big);
     float v0 = f0.x * al[0], v1 = f0.y * al[0];
     v0 += f1.x * al[1]; v1 += f1.y * al[1];
     v0 += f2.x * al[2]; v1 += f2.y * al[2];
@@ -201,33 +236,34 @@ __global__ void __launch_bounds__(K1_NT) k_start(const Dk d) {
   if (b == 0 && tid == 0) {
     if (d.mode == 0) {
       d.emit[0] = s.a + 1;
-      for (int i = 0; i < NB; i++) d.emit[1 + i] = d.tgt[i];
+      for (int i = 0; i < (s.big ? VR : NB); i++) d.emit[1 + i] = s.big ? d.tgt16[i] : d.tgt[i];
       d.c_new[0] = s.cn; d.anchor[0] = s.anchor; d.frow[0] = s.frow;
     }
     d.st[0] = s.c; d.st[1] = s.a; d.st[2] = s.cn; d.st[3] = s.anchor; d.st[4] = s.frow; d.st[5] = NB - 1; d.st[6] = 0;
-    for (int r = 0; r < NB; r++) d.st[8 + r] = d.mode == 1 ? (int)d.pos64[r < d.nrows ? r : 0] : s.c + r;
+    d.st[7] = s.big;
+    for (int r = 0; r < VR; r++) d.st[8 + r] = d.mode == 1 ? (int)d.pos64[r < d.nrows ? r : 0] : s.c + r;
   }
   if (b == 0 && tid < NB && d.mode != 1) d.amax[tid] = 0ull;
   if (b == 0 && d.mode != 1) d.state[tid] = tobf(0.f);   // the Markov state s_0 = 0 (K1_NT = RK threads)
-  if (b < 24) {
+  if (b < 3 * VR) {
     if (d.mode == 2) return;
-    const int l = b / NB, r = b % NB;
-    if (r >= d.nrows) return;
+    const int l = b / VR, r = b % VR;
+    if (r >= (d.mode == 0 ? (s.big ? VR : NB) : (int)d.nrows)) return;
     float m[2 * MIXP], ss = 0.f;
-    mix_row(d, r, d.alpha + l * 4, m, ss);
+    mix_row(d, r, d.alpha + l * 4, m, ss, s.big);
     const float rs = rsqrtf(block_sum<K1_NT>(ss, red) / (float)H + EPS);
     const float* w = d.L[l].dflare;
 #pragma unroll
     for (int e = 0; e < MIXP; e++) {
       const int k = 2 * (tid + e * K1_NT);
-      if (k < H) { d.u[((long)l * NB + r) * H + k] = tobf(m[2 * e] * rs * w[k]); d.u[((long)l * NB + r) * H + k + 1] = tobf(m[2 * e + 1] * rs * w[k + 1]); }
+      if (k < H) { d.u[((long)l * VR + r) * H + k] = tobf(m[2 * e] * rs * w[k]); d.u[((long)l * VR + r) * H + k + 1] = tobf(m[2 * e + 1] * rs * w[k + 1]); }
     }
     return;
   }
   if (d.mode == 1) return;
-  if (b == 24) {
+  if (b == 3 * VR) {
     float m[2 * MIXP], ss = 0.f;
-    mix_row(d, s.frow, d.alpha + 3 * 4, m, ss);
+    mix_row(d, s.frow, d.alpha + 3 * 4, m, ss, s.big);
     const float rs = rsqrtf(block_sum<K1_NT>(ss, red) / (float)H + EPS);
 #pragma unroll
     for (int e = 0; e < MIXP; e++) {
@@ -236,7 +272,7 @@ __global__ void __launch_bounds__(K1_NT) k_start(const Dk d) {
     }
     return;
   }
-  const int r = b - 25;
+  const int r = b - (3 * VR + 1);
   float x[EPT1];
   if (r == 0) {
     float ss = 0.f;
@@ -271,10 +307,10 @@ __global__ void __launch_bounds__(K1_NT) k_start(const Dk d) {
 struct GJ {
   const uint8_t* W; const bf16* X; const bf16* X2; void* out; const float* bias; const float* bp;   // E_F32: + (sum of nbp partials bp[q * NB * 768]) + bias
   const float* wsc; int fp8, ng;   // ng: nothing to do when the cycle's proposal is the n-gram one (st[6])   // fp8: W holds E4M3 codes in FP8 fragment order, wsc the per-row scales (B operand as f16)
-  int nbp, xs, ksplit_at, ncol, strips, U, ks, epi, os, rec, sb;   // rec >= 0: the Markov step's recurrent GEMV; sb strips per block
+  int nbp, xs, ksplit_at, ncol, strips, U, ks, epi, os, rec, sb, bg, lp;   // lp > 0: lp blocks per split loop over the strip groups (X staged once)   // bg: only after a 16-row verify pass (st[7])   // rec >= 0: the Markov step's recurrent GEMV; sb strips per block
 };
 struct GJs { GJ j[3]; int n; };
-__host__ __device__ __forceinline__ int gj_blocks(const GJ& j) { return (j.strips + j.sb - 1) / j.sb * j.ks; }
+__host__ __device__ __forceinline__ int gj_blocks(const GJ& j) { return (j.lp ? j.lp : (j.strips + j.sb - 1) / j.sb) * j.ks; }
 
 __device__ __forceinline__ int n0w(int strip) { return strip * 16 + ((threadIdx.x & 31) >> 2); }
 __device__ __forceinline__ void gemv_epi(const GJ& j, int strip, int split, const float* v, const float* bpre = nullptr) {
@@ -312,13 +348,19 @@ __device__ __forceinline__ void gemv_epi(const GJ& j, int strip, int split, cons
 #ifndef G_NW
 #define G_NW 8
 #endif
+#ifndef G_LP
+#define G_LP 0     // base unembedding GEMV: this many looping blocks (0: one block per strip group; 296: 357 vs 366 us, noise)
+#endif
+#ifndef G_DB
+#define G_DB 0   // FP8 GEMVs: next unit's weights loaded during this unit's MMAs (measured: 357 vs 356 us per draft, no gain)
+#endif
 #ifndef G_SBMAX
 #define G_SBMAX 4
 #endif
 #ifndef SM_MINB
 #define SM_MINB 2   // <= 128 registers: 2 blocks per SM (129+ registers halve the occupancy: +36 us per cycle)
 #endif
-template <bool F8>
+template <bool F8, bool DB = false>
 __global__ void __launch_bounds__(G_NW * 32, SM_MINB) k_gemv(const Dk d, const GJs js) {
   extern __shared__ __align__(16) unsigned char gsm[];
   __shared__ float4 red[G_SBMAX][G_NW][32];
@@ -327,15 +369,15 @@ __global__ void __launch_bounds__(G_NW * 32, SM_MINB) k_gemv(const Dk d, const G
   GJ j = js.j[ji];
   gdc_launch();
   if (bid >= gj_blocks(j)) { gdc_wait(); return; }
-  const bool f8j = F8 && j.fp8;
+  const bool f8j = DB || (F8 && j.fp8);
   const int sg = bid / j.ks, split = bid % j.ks;
-  const int s0 = sg * j.sb, ns = min(j.sb, j.strips - s0);
+  int s0 = sg * j.sb, ns = min(j.sb, j.strips - s0);
   const int tid = threadIdx.x, w = tid >> 5, lane = tid & 31, g = lane >> 2, t = lane & 3;
   const int ub0 = j.U * split / j.ks, ub1 = j.U * (split + 1) / j.ks, nu = ub1 - ub0;
   const int kr = nu * 64, RS = kr + 8;
   const int u0 = nu * w / G_NW, u1 = nu * (w + 1) / G_NW;
   const uint8_t* wbase = j.W + ((long)s0 * j.U + ub0) * 2048 + lane * 16;
-  uint4 wv[G_SBMAX][4];   // the first unit's weights before waiting for the previous kernel
+  uint4 wv[G_SBMAX][DB ? 2 : 4];   // the first unit's weights before waiting for the previous kernel (DB: FP8 jobs only)
   const uint8_t* wbase8 = j.W + ((long)s0 * j.U + ub0) * 1024 + lane * 16;
   if (u0 < u1)
 #pragma unroll
@@ -344,13 +386,14 @@ __global__ void __launch_bounds__(G_NW * 32, SM_MINB) k_gemv(const Dk d, const G
         if (f8j) {
 #pragma unroll
           for (int q = 0; q < 2; q++) wv[sb][q] = ldg_nc(wbase8 + ((long)sb * j.U + u0) * 1024 + q * 512);
-        } else {
+        } else if (!DB) {
 #pragma unroll
-          for (int q = 0; q < 4; q++) wv[sb][q] = ldg_nc(wbase + ((long)sb * j.U + u0) * 2048 + q * 512);
+          for (int q = 0; q < (DB ? 2 : 4); q++) wv[sb][q] = ldg_nc(wbase + ((long)sb * j.U + u0) * 2048 + q * 512);
         }
       }
   gdc_wait();
   if (j.ng && d.st[6]) return;   // the n-gram proposal is used: nothing to compute
+  if (j.bg && !d.st[7]) return;   // rows 8..15 of the context: only after a 16-row pass
   if (j.rec >= 0) {
     const int i = j.rec;
     const int prev = i == 0 ? d.st[3] : kidx(d.amax[i - 1]);
@@ -369,6 +412,7 @@ __global__ void __launch_bounds__(G_NW * 32, SM_MINB) k_gemv(const Dk d, const G
     *reinterpret_cast<uint4*>(xsm + m * RS + c8) = v;
   }
   __syncthreads();
+  for (int sgi = sg;;) {
   float acc[G_SBMAX][4];
 #pragma unroll
   for (int sb = 0; sb < G_SBMAX; sb++) acc[sb][0] = acc[sb][1] = acc[sb][2] = acc[sb][3] = 0.f;
@@ -381,6 +425,30 @@ __global__ void __launch_bounds__(G_NW * 32, SM_MINB) k_gemv(const Dk d, const G
       bfr[q][1] = *reinterpret_cast<const uint32_t*>(pb + 8);
     }
     if (f8j) {
+      if constexpr (DB) {
+      // double buffer (FP8-only instance): the next unit's weights are in flight while this unit's MMAs run (same sums)
+      uint4 wn[G_SBMAX][2];
+      if (u + 1 < u1)
+#pragma unroll
+        for (int sb = 0; sb < G_SBMAX; sb++)
+          if (sb < ns)
+#pragma unroll
+            for (int q = 0; q < 2; q++) wn[sb][q] = ldg_nc(wbase8 + ((long)sb * j.U + u + 1) * 1024 + q * 512);
+#pragma unroll
+      for (int sb = 0; sb < G_SBMAX; sb++)
+        if (sb < ns)
+#pragma unroll
+          for (int q = 0; q < 2; q++) {
+            mma_e4m3(acc[sb], wv[sb][q].x, wv[sb][q].y, bfr[2 * q][0], bfr[2 * q][1]);
+            mma_e4m3(acc[sb], wv[sb][q].z, wv[sb][q].w, bfr[2 * q + 1][0], bfr[2 * q + 1][1]);
+          }
+      if (u + 1 < u1)
+#pragma unroll
+        for (int sb = 0; sb < G_SBMAX; sb++)
+#pragma unroll
+          for (int q = 0; q < 2; q++) wv[sb][q] = wn[sb][q];
+      continue;
+      }
       if (u > u0)
 #pragma unroll
         for (int sb = 0; sb < G_SBMAX; sb++)
@@ -397,6 +465,7 @@ __global__ void __launch_bounds__(G_NW * 32, SM_MINB) k_gemv(const Dk d, const G
           }
       continue;
     }
+    if constexpr (!DB) {
     if (u > u0)
 #pragma unroll
       for (int sb = 0; sb < G_SBMAX; sb++)
@@ -408,17 +477,39 @@ __global__ void __launch_bounds__(G_NW * 32, SM_MINB) k_gemv(const Dk d, const G
       if (sb < ns)
 #pragma unroll
         for (int q = 0; q < 4; q++) mma_bf16(acc[sb], wv[sb][q].x, wv[sb][q].y, wv[sb][q].z, wv[sb][q].w, bfr[q][0], bfr[q][1]);
+    }
   }
 #pragma unroll
   for (int sb = 0; sb < G_SBMAX; sb++) if (sb < ns) red[sb][w][lane] = make_float4(acc[sb][0], acc[sb][1], acc[sb][2], acc[sb][3]);
   __syncthreads();
-  if (w >= ns) return;
-  const int strip = s0 + w;
-  float v[4] = {0.f, 0.f, 0.f, 0.f};
+  if (w < ns) {
+    const int strip = s0 + w;
+    float v[4] = {0.f, 0.f, 0.f, 0.f};
 #pragma unroll
-  for (int k = 0; k < G_NW; k++) { const float4 r = red[w][k][lane]; v[0] += r.x; v[1] += r.y; v[2] += r.z; v[3] += r.w; }
-  if (f8j && j.wsc) { const float s0 = j.wsc[n0w(strip)], s1 = j.wsc[n0w(strip) + 8]; v[0] *= s0; v[1] *= s0; v[2] *= s1; v[3] *= s1; }
-  gemv_epi(j, strip, split, v);
+    for (int k = 0; k < G_NW; k++) { const float4 r = red[w][k][lane]; v[0] += r.x; v[1] += r.y; v[2] += r.z; v[3] += r.w; }
+    if (f8j && j.wsc) { const float s0 = j.wsc[n0w(strip)], s1 = j.wsc[n0w(strip) + 8]; v[0] *= s0; v[1] *= s0; v[2] *= s1; v[3] *= s1; }
+    gemv_epi(j, strip, split, v);
+  }
+  if (!j.lp) break;
+  sgi += j.lp; s0 = sgi * j.sb;
+  if (s0 >= j.strips) break;
+  ns = min(j.sb, j.strips - s0);
+  wbase = j.W + ((long)s0 * j.U + ub0) * 2048 + lane * 16;
+  wbase8 = j.W + ((long)s0 * j.U + ub0) * 1024 + lane * 16;
+  __syncthreads();   // red is reused
+  if (u0 < u1)
+#pragma unroll
+    for (int sb = 0; sb < G_SBMAX; sb++)
+      if (sb < ns) {
+        if (f8j) {
+#pragma unroll
+          for (int q = 0; q < 2; q++) wv[sb][q] = ldg_nc(wbase8 + ((long)sb * j.U + u0) * 1024 + q * 512);
+        } else if (!DB) {
+#pragma unroll
+          for (int q = 0; q < (DB ? 2 : 4); q++) wv[sb][q] = ldg_nc(wbase + ((long)sb * j.U + u0) * 2048 + q * 512);
+        }
+      }
+  }
 }
 
 // L1 variant (sb = 1): the B fragments straight from global memory (L1-resident X), warps split the strip's k-units
@@ -446,6 +537,7 @@ __global__ void __launch_bounds__(L1_NW * 32, L1_MINB) k_gemv_l1(const Dk d, con
   for (int q = 0; q < 4 * G_UNR; q++) if (u0 + (q >> 2) < u1) wv[q] = ldg_nc(wst + ((long)(u0 + (q >> 2)) * 4 + (q & 3)) * 512 + lane * 16);
   gdc_wait();
   if (j.ng && d.st[6]) return;   // the n-gram proposal is used: nothing to compute
+  if (j.bg && !d.st[7]) return;   // rows 8..15 of the context: only after a 16-row pass
   if (j.rec >= 1) {   // Markov step i >= 1: stop once the cumulative top-1 probability of steps < i fell below theta
     __shared__ int skip;
     if (threadIdx.x < 32) {
@@ -573,13 +665,13 @@ __global__ void __launch_bounds__(256) k_post(const Dk d, int layer, int do_ctx,
   const int vec = blockIdx.x * 8 + (threadIdx.x >> 5), lane = threadIdx.x & 31;
   const long T = d.T;
   int v = vec;
-  const int nctx = do_ctx ? 3 * NB * NKV * 2 : 0;
+  const int nctx = do_ctx ? 3 * VR * NKV * 2 : 0;
   if (v < nctx) {
-    const int isv = v & 1, rest = v >> 1, g = rest % NKV, r = (rest / NKV) % NB, l = rest / (NKV * NB);
-    if (r >= d.nrows) return;
+    const int isv = v & 1, rest = v >> 1, g = rest % NKV, r = (rest / NKV) % VR, l = rest / (NKV * VR);
+    if (r >= (d.mode == 0 ? (d.st[7] ? VR : NB) : (int)d.nrows)) return;
     const int p = d.st[8 + r];
     if (p < 0 || p >= T) return;
-    const bf16* src = d.kvraw + ((long)l * NB + r) * 2048 + isv * 1024 + g * HD;
+    const bf16* src = d.kvraw + ((long)l * VR + r) * 2048 + isv * 1024 + g * HD;
     if (isv) {
       bf16* dst = d.L[l].vc + ((long)p * NKV + g) * HD;
 #pragma unroll
@@ -950,28 +1042,57 @@ __global__ void __launch_bounds__(256) k_end(const Dk d) {
   if (tid == 0) {
     float cum = 1.f;
     int kd = 1;
+#if DK_RULE == 1
+    // expected tokens per verify time: kd maximizes (1 + sum_{k<kd} cum_k^DK_GAM) / (V(kd + 1) + DK_D), V = the verify
+    // pass time by rows (measured, ctx 600: tests/c/tv.py); cum_k = the draft's cumulative top-1 probability (p^GAM:
+    // the draft is overconfident, tests/c3/ana/a4.py); kd >= DK_KDMIN
+    {
+      const float VK[9] = {0.f, 2900.f, 3445.f, 3630.f, 3880.f, 4255.f, 4550.f, 4720.f, 4810.f};   // s18-c4 kernels
+      float e = 0.f, best = -1.f;
+      for (int k = 0; k < ns; k++) {
+        cum *= pc[k];
+        e += powf(cum, (float)DK_GAM);
+        const float v = (1.f + e) / (VK[k + 2] + (float)DK_D);
+        if (k + 1 >= DK_KDMIN && v > best) { best = v; kd = k + 1; }
+      }
+      if (DK_KDMIN == 0 && 1.f / (VK[1] + (float)DK_D) > best) kd = 0;
+    }
+#else
     for (int k = 0; k < ns; k++) {
       cum *= pc[k];
       if (cum >= (float)d.theta) kd = k + 1; else break;
     }
+#endif
     const int last = kidx(d.amax[ns - 1]);
     for (int k = ns; k < NB - 1; k++) { d.vtok[1 + k] = last; d.pconf[k] = 0.f; }   // never verified
     d.vtok[0] = d.st[3]; d.vpos[0] = d.st[2]; d.vpos[1] = kd + 1;
+#if NG_SHORT
+    // an earlier occurrence of the committed suffix of NG_SHORT_L tokens (shorter than the n-gram rule's minimum) and
+    // an unconfident first draft: verify NG_SHORT_K - 1 copied tokens instead (simulated: synthetic -0.3..-0.7%)
+    {
+      const int L = d.st[24], i = d.st[25], c = d.st[2];
+      if (L >= NG_SHORT_L && L < (int)d.ngmin && pc[0] < (float)NG_SHORT_P && i >= 0 && i < c) {
+        const int per = max(c - i, 1), kk = L >= 5 ? NG_SHORT_K5 : NG_SHORT_K;
+        for (int k = 0; k < kk - 1; k++) d.vtok[1 + k] = d.hist[min(i + 1 + k % per, (int)d.hT - 1)];
+        d.vpos[1] = kk;
+      }
+    }
+#endif
   }
 }
 // n-gram drafts (engine/ngram.py, mk.cu mk_ngram_k: the same rule): record the verify pass's target tokens at
 // positions c_old + 1 .. c_old + 8 (mode 0); the longest earlier occurrence (<= 8 tokens, ties: most recent) of the
 // committed suffix ending at the anchor hist[c_new]; if >= ngmin tokens: its continuation (periodic past c_new) is
 // the proposal, K = 8, and the DSpark block / Markov kernels of this cycle return at once (st[6] = 1, st[5] = 0)
-__global__ void __launch_bounds__(1024) k_ngram(const Dk d) {
+__global__ void __launch_bounds__(1024) k_ngram(const Dk d, cudaGraphConditionalHandle cond, int use_cond) {
   __shared__ int suf[8];
   __shared__ unsigned long long red[32];
   gdc_launch(); gdc_wait();
   int* hist = d.hist;
   const int T = (int)d.hT, c = d.st[2], minn = (int)d.ngmin;
-  if (d.mode == 0 && threadIdx.x < 8) {
+  if (d.mode == 0 && threadIdx.x < (d.st[7] ? VR : NB)) {
     const int p = d.st[0] + 1 + threadIdx.x;
-    if (p >= 0 && p < T) hist[p] = d.tgt[threadIdx.x];
+    if (p >= 0 && p < T) hist[p] = d.st[7] ? d.tgt16[threadIdx.x] : d.tgt[threadIdx.x];
   }
   __syncthreads();
   if (threadIdx.x < 8) suf[threadIdx.x] = (c - (int)threadIdx.x >= 0) ? hist[c - threadIdx.x] : -2;
@@ -992,12 +1113,17 @@ __global__ void __launch_bounds__(1024) k_ngram(const Dk d) {
 #pragma unroll
     for (int o = 16; o; o >>= 1) { const unsigned long long x = __shfl_xor_sync(0xffffffffu, best, o); if (x > best) best = x; }
     const int L = (int)(best >> 32), i = (int)(best & 0xffffffffu);
+    if (threadIdx.x == 0) { d.st[24] = L; d.st[25] = i; }   // the best match, for k_end's short-copy choice (NG_SHORT)
     if (L >= minn) {
-      if (threadIdx.x < 7) {
+      const int nd = (L >= (int)d.ng16min && c <= (int)d.lim16 && d.st[1] >= (int)d.ng16acc) ? VR - 1 : NB - 1;   // drafts: 15 (a 16-row pass) or 7
+      if (threadIdx.x < nd) {
         const int per = max(c - i, 1);
         d.vtok[1 + threadIdx.x] = hist[min(i + 1 + (int)threadIdx.x % per, T - 1)];
       }
-      if (threadIdx.x == 0) { d.vtok[0] = d.st[3]; d.vpos[0] = c; d.vpos[1] = NB; d.st[6] = 1; d.st[5] = 0; }
+      if (threadIdx.x == 0) {
+        d.vtok[0] = d.st[3]; d.vpos[0] = c; d.vpos[1] = nd + 1; d.st[6] = 1; d.st[5] = 0;
+        if (use_cond) cudaGraphSetConditional(cond, 0u);   // s18-c4: the DSpark part of this cycle's graph is skipped
+      }
     }
   }
 }
@@ -1005,6 +1131,9 @@ __global__ void k_zero_state(const Dk d) { gdc_launch(); gdc_wait(); d.state[thr
 
 // ---------------------------------------------------------------------------------------------- host
 static bool g_pdl = true;
+static bool g_cond = true;          // s18-c4: MK_DK_COND=0: no conditional node (the DSpark kernels launch and return at once)
+static cudaStream_t g_s2 = nullptr;
+static bool g_nopdl_once = false;   // the next launch without PDL (first kernel of a conditional body)
 // launches with programmatic stream serialization (PDL) except the first kernel of a cycle
 template <typename... KA, typename... AA>
 static void launch(void (*k)(KA...), int grid, int block, size_t smem, cudaStream_t s, bool pdl, AA... args) {
@@ -1013,11 +1142,12 @@ static void launch(void (*k)(KA...), int grid, int block, size_t smem, cudaStrea
   cudaLaunchAttribute at[1];
   at[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
   at[0].val.programmaticStreamSerializationAllowed = 1;
-  cfg.attrs = at; cfg.numAttrs = (pdl && g_pdl) ? 1 : 0;
+  cfg.attrs = at; cfg.numAttrs = (pdl && g_pdl && !g_nopdl_once) ? 1 : 0;
+  g_nopdl_once = false;
   cudaLaunchKernelEx(&cfg, k, args...);
 }
 static GJ job(const uint8_t* W, const bf16* X, int xs, int ncol, int strips, int U, int ks, int epi, void* out, int os, const float* bias = nullptr) {
-  GJ j; j.W = W; j.X = X; j.X2 = nullptr; j.out = out; j.bias = bias; j.bp = nullptr; j.nbp = 0; j.wsc = nullptr; j.fp8 = 0; j.ng = 1; j.xs = xs; j.ksplit_at = 1 << 30; j.ncol = ncol;
+  GJ j; j.W = W; j.X = X; j.X2 = nullptr; j.out = out; j.bias = bias; j.bp = nullptr; j.nbp = 0; j.wsc = nullptr; j.fp8 = 0; j.ng = 1; j.bg = 0; j.lp = 0; j.xs = xs; j.ksplit_at = 1 << 30; j.ncol = ncol;
   j.strips = strips; j.U = U; j.ks = ks; j.epi = epi; j.os = os; j.rec = -1;
   const int nb = strips * ks;
 #ifndef SB_MID
@@ -1044,9 +1174,10 @@ static void gemv(const Dk& d, cudaStream_t s, GJ a, GJ* b = nullptr, GJ* c = nul
     const int u = (js.j[k].U + js.j[k].ks - 1) / js.j[k].ks;
     kr = u * 64 > kr ? u * 64 : kr;
   }
-  bool any8 = false;
-  for (int k = 0; k < js.n; k++) any8 |= js.j[k].fp8 != 0;
-  if (a.sb > 1 || any8) { if (any8) launch(k_gemv<true>, nb, G_NW * 32, NB * (kr + 8) * 2, s, true, d, js);
+  bool any8 = false, all8 = true;
+  for (int k = 0; k < js.n; k++) { any8 |= js.j[k].fp8 != 0; all8 &= js.j[k].fp8 != 0; }
+  if (a.sb > 1 || any8) { if (all8 && G_DB) launch(k_gemv<true, true>, nb, G_NW * 32, NB * (kr + 8) * 2, s, true, d, js);
+                  else if (any8) launch(k_gemv<true>, nb, G_NW * 32, NB * (kr + 8) * 2, s, true, d, js);
                   else launch(k_gemv<false>, nb, G_NW * 32, NB * (kr + 8) * 2, s, true, d, js); }
   else {
     for (int k = 0; k < js.n; k++) js.j[k].sb = 1;
@@ -1060,9 +1191,11 @@ extern "C" {
 int dk_struct_bytes() { return (int)sizeof(Dk); }
 int dk_setup() {
   { const char* e = getenv("MK_DK_PDL"); g_pdl = !(e && e[0] == '0'); }
+  { const char* e = getenv("MK_DK_COND"); g_cond = !(e && e[0] == '0'); }
   cudaError_t e = cudaFuncSetAttribute(k_attn, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)sizeof(AttS));
   if (e == cudaSuccess) e = cudaFuncSetAttribute(k_gemv<false>, cudaFuncAttributeMaxDynamicSharedMemorySize, 100 * 1024);
   if (e == cudaSuccess) e = cudaFuncSetAttribute(k_gemv<true>, cudaFuncAttributeMaxDynamicSharedMemorySize, 100 * 1024);
+  if (e == cudaSuccess) e = cudaFuncSetAttribute(k_gemv<true, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, 100 * 1024);
   if (e != cudaSuccess) { fprintf(stderr, "dk_setup: %s\n", cudaGetErrorString(e)); return 1; }
   return 0;
 }
@@ -1073,22 +1206,63 @@ int dk_run(const Dk* dp, void* stream) {
   cudaStream_t s = (cudaStream_t)stream;
   const int mode = (int)d.mode, nr = mode == 0 ? NB : (int)d.nrows;
   Dk dd = d; dd.nrows = nr;
-  launch(k_start, 33, K1_NT, 0, s, false, dd);
-  if (mode != 1 && d.ngmin <= 8) launch(k_ngram, 1, 1024, 0, s, true, dd);
+  // s18-c4: under stream capture (the engine's cycle / propose graphs), the DSpark part goes into the body of a
+  // conditional IF node whose condition k_ngram clears when the n-gram proposal is used (its kernels are not launched)
+  bool cond = false;
+  cudaGraphConditionalHandle ch = 0;
+  cudaGraph_t cg = nullptr;
+  const cudaGraphNode_t* cdeps = nullptr;
+  size_t ncdeps = 0;
+  if (mode != 1 && d.ngmin <= 8 && g_cond) {
+    cudaStreamCaptureStatus cst = cudaStreamCaptureStatusNone;
+    if (cudaStreamGetCaptureInfo(s, &cst, nullptr, &cg, nullptr, nullptr, nullptr) == cudaSuccess && cst == cudaStreamCaptureStatusActive)
+      cond = cudaGraphConditionalHandleCreate(&ch, cg, 1u, cudaGraphCondAssignDefault) == cudaSuccess;
+  }
+  launch(k_start, 3 * VR + 1 + NB, K1_NT, 0, s, false, dd);
+  if (mode != 1 && d.ngmin <= 8) launch(k_ngram, 1, 1024, 0, s, true, dd, ch, (int)cond);
   // context K/V projections (mode 0, 1) and layer 0's q/k/v (mode 0, 2)
   {
     GJ jc[3], jq = f8w(job(d.L[0].qkv, d.h, H, NB, QKVN / 16, 36, 1, E_BF16, d.qkv, QKVN), d, d.L[0].qkv8, d.L[0].qkv_s);
     for (int l = 0; l < 3; l++) {
-      jc[l] = f8w(job(d.L[l].kvc, d.u + (long)l * NB * H, H, nr, 2048 / 16, 36, 1, E_BF16, d.kvraw + (long)l * NB * 2048, 2048), d, d.L[l].kvc8, d.L[l].kvc_s);
+      jc[l] = f8w(job(d.L[l].kvc, d.u + (long)l * VR * H, H, nr, 2048 / 16, 36, 1, E_BF16, d.kvraw + (long)l * VR * 2048, 2048), d, d.L[l].kvc8, d.L[l].kvc_s);
       jc[l].ng = 0;
     }
     if (mode != 2) gemv(dd, s, jc[0], &jc[1], &jc[2]);
-    if (mode != 1) gemv(dd, s, jq);
+    if (mode == 0 && d.tgt16) {   // context rows 8..15 of a 16-row verify pass (the kernels return unless st[7])
+      GJ jh[3];
+      for (int l = 0; l < 3; l++) {
+        jh[l] = f8w(job(d.L[l].kvc, d.u + ((long)l * VR + NB) * H, H, NB, 2048 / 16, 36, 1, E_BF16, d.kvraw + ((long)l * VR + NB) * 2048, 2048), d, d.L[l].kvc8, d.L[l].kvc_s);
+        jh[l].ng = 0; jh[l].bg = 1;
+      }
+      gemv(dd, s, jh[0], &jh[1], &jh[2]);
+    }
+    if (cond) {
+      // context rows' post-processing outside the condition, then the IF node and its body on a second stream
+      if (mode != 2) launch(k_post, (3 * VR * NKV * 2 + 7) / 8, 256, 0, s, true, dd, 0, 1, 0);
+      cudaStreamCaptureStatus cst;
+      const cudaGraphEdgeData* ced = nullptr;
+      cudaStreamGetCaptureInfo(s, &cst, nullptr, &cg, &cdeps, &ced, &ncdeps);
+      cudaGraphNodeParams np_ = {};
+      np_.type = cudaGraphNodeTypeConditional;
+      np_.conditional.handle = ch;
+      np_.conditional.type = cudaGraphCondTypeIf;
+      np_.conditional.size = 1;
+      cudaGraphNode_t cnode;
+      if (cudaGraphAddNode(&cnode, cg, cdeps, nullptr, ncdeps, &np_) != cudaSuccess) return 101;
+      if (!g_s2 && cudaStreamCreateWithFlags(&g_s2, cudaStreamNonBlocking) != cudaSuccess) return 102;
+      if (cudaStreamBeginCaptureToGraph(g_s2, np_.conditional.phGraph_out[0], nullptr, nullptr, 0, cudaStreamCaptureModeRelaxed) != cudaSuccess) return 103;
+      if (cudaStreamUpdateCaptureDependencies(s, &cnode, nullptr, 1, cudaStreamSetCaptureDependencies) != cudaSuccess) return 104;
+      s = g_s2;   // the rest of the cycle is the body
+      g_nopdl_once = true;
+      gemv(dd, s, jq);
+      launch(k_post, (NB * (NH + 2 * NKV) + 7) / 8, 256, 0, s, true, dd, 0, 0, 1);
+    } else if (mode != 1) gemv(dd, s, jq);
   }
-  if (!FUSE_POST) {
-    const int npost_ctx = mode != 2 ? 3 * NB * NKV * 2 : 0, npost_blk = mode != 1 ? NB * (NH + 2 * NKV) : 0;
+  if (cond) {
+  } else if (!FUSE_POST) {
+    const int npost_ctx = mode != 2 ? 3 * VR * NKV * 2 : 0, npost_blk = mode != 1 ? NB * (NH + 2 * NKV) : 0;
     launch(k_post, (npost_ctx + npost_blk + 7) / 8, 256, 0, s, true, dd, 0, (int)(mode != 2), (int)(mode != 1));
-  } else if (mode != 2) launch(k_post, (3 * NB * NKV * 2 + 7) / 8, 256, 0, s, true, dd, 0, 1, 0);   // context rows; block rows: in k_attn
+  } else if (mode != 2) launch(k_post, (3 * VR * NKV * 2 + 7) / 8, 256, 0, s, true, dd, 0, 1, 0);   // context rows; block rows: in k_attn
   if (mode == 1) return (int)cudaGetLastError();
   for (int l = 0; l < 3; l++) {
     const DkL& L = d.L[l];
@@ -1108,6 +1282,7 @@ int dk_run(const Dk* dp, void* stream) {
   {
     GJ jb = job(d.un, d.xm, 2 * H, NB - 1, VSTRIPS, 36, 1, E_BF16, d.base, VP);
     if (d.f8 & 1) { jb.W = d.un8; jb.wsc = d.un_s; jb.fp8 = 1; }
+    if (G_LP > 0 && gj_blocks(jb) > G_LP) jb.lp = G_LP;   // looping blocks: X (7 rows) staged once per block
     GJ jc = job(d.wctx, d.xm, 2 * H, NB - 1, 768 / 16, 72, 2, E_PART, d.ctxo, 768);   // partials [2][8][768]
     jc.sb = 1;
     gemv(dd, s, jb, &jc);
@@ -1121,6 +1296,10 @@ int dk_run(const Dk* dp, void* stream) {
     else launch(k_fold<false>, (VSTRIPS + 7) / 8, 256, 0, s, true, dd, i);
   }
   launch(k_end, 1, 256, 0, s, true, dd);
+  if (cond) {
+    cudaGraph_t body;
+    if (cudaStreamEndCapture(g_s2, &body) != cudaSuccess) return 105;
+  }
   return (int)cudaGetLastError();
 }
 }
