@@ -1,0 +1,416 @@
+<title>Inkling-2-Mini on an M5 Max</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* layout: one reading column (680px) with figures and tables allowed to 880px, as the megakernel post */
+:root {
+  --bg:#ffffff; --ink:#10151c; --muted:#667080; --rule:#e4e7ec; --rule-2:#cdd3dc; --panel:#f3f5f8;
+  --accent:#1f5db8; --accent-soft:#dfe8f8; --ours:#1f5db8; --ours-2:#7fa6e0; --gray:#a3abb7; --gray-2:#cfd5dd; --warn:#b45309;
+  --read:"Iowan Old Style BT","Iowan Old Style","Source Serif 4",Georgia,serif;
+  --sans:"Helvetica Neue",Helvetica,Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#0f1318; --ink:#e6e9ee; --muted:#98a2b1; --rule:#252c35; --rule-2:#38414d; --panel:#181e26;
+  --accent:#7aa7f0; --accent-soft:#1d2a40; --ours:#6f9ff0; --ours-2:#3d5f99; --gray:#6b7482; --gray-2:#3a424d; --warn:#f0a35c; color-scheme:dark } }
+:root[data-theme="dark"] {
+  --bg:#0f1318; --ink:#e6e9ee; --muted:#98a2b1; --rule:#252c35; --rule-2:#38414d; --panel:#181e26;
+  --accent:#7aa7f0; --accent-soft:#1d2a40; --ours:#6f9ff0; --ours-2:#3d5f99; --gray:#6b7482; --gray-2:#3a424d; --warn:#f0a35c; color-scheme:dark }
+
+html[data-lang="en"] [lang="zh"], html[data-lang="zh"] [lang="en"], html:not([data-lang]) [lang="zh"] { display:none !important; }
+[lang="zh"] { font-family:"PingFang SC","Hiragino Sans GB","Noto Sans SC","Source Han Sans SC","Microsoft YaHei",var(--sans); letter-spacing:0.01em; }
+p > [lang="zh"], li > [lang="zh"], figcaption > [lang="zh"] { line-height:1.85; }
+
+body { background:var(--bg); color:var(--ink); font:18px/1.65 var(--read); -webkit-font-smoothing:antialiased; }
+.wrap { max-width:880px; margin:0 auto; padding-block:40px 80px;
+        padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); }
+.col > * { max-width:680px; margin-left:auto; margin-right:auto; }
+.col > figure, .col > .wide { max-width:880px; }
+.langsw { display:flex; justify-content:flex-end; margin:0 0 14px; }
+.langsw .pill { display:inline-flex; gap:2px; padding:3px; border-radius:999px; background:var(--panel); }
+.langsw button { font:600 13.5px/1 var(--sans); padding:7px 13px; border:0; border-radius:999px; background:transparent; color:var(--muted); cursor:pointer; }
+.langsw button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
+.langsw button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+h1 { font:600 clamp(30px, 5vw, 42px)/1.15 var(--read); letter-spacing:-0.01em; margin:8px auto 14px; text-wrap:balance; }
+.dek { font-size:20px; color:var(--muted); margin-bottom:14px; }
+.byline { font:14px/1.5 var(--sans); color:var(--muted); margin-bottom:6px; }
+.byline a { color:var(--muted); }
+h2 { font:600 26px/1.25 var(--read); margin:56px auto 14px; text-wrap:balance; scroll-margin-top:24px; }
+h3 { font:600 19px/1.3 var(--sans); margin:34px auto 10px; text-wrap:balance; }
+p { margin:0 auto 16px; }
+ul, ol { padding-left:1.3em; margin:0 auto 16px; }
+li { margin-bottom:8px; }
+a { color:var(--accent); text-underline-offset:2px; }
+code { font:0.84em/1 var(--mono); background:var(--panel); padding:2px 5px; border-radius:4px; }
+strong { font-weight:600; }
+
+.tldr { background:var(--panel); border-radius:10px; padding:20px 24px 6px; margin:26px auto 8px; }
+.tldr .k { font:700 12px/1 var(--sans); letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:12px; }
+.tldr p { font-size:17px; }
+
+.toc { font-family:var(--sans); border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); margin:28px auto 0; padding:10px 0; }
+.toc ol { list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:6px 20px; }
+.toc a { color:var(--muted); text-decoration:none; font-size:14px; }
+.toc a:hover { color:var(--ink); }
+
+figure { margin:30px auto 30px; }
+.fig-title h4 { font:600 15px/1.35 var(--sans); margin:0 0 12px; }
+figcaption { font:14px/1.6 var(--sans); color:var(--muted); margin-top:12px; }
+.tablewrap { overflow-x:auto; }
+table.data { border-collapse:collapse; width:100%; font:14px/1.45 var(--sans); font-variant-numeric:tabular-nums; }
+table.data th { text-align:left; font-weight:600; color:var(--muted); border-bottom:1px solid var(--rule-2); padding:8px 10px 8px 0; vertical-align:bottom; }
+table.data td { border-bottom:1px solid var(--rule); padding:8px 10px 8px 0; vertical-align:top; }
+table.data td.num, table.data th.num { text-align:right; white-space:nowrap; }
+table.data tr.ours td { font-weight:600; }
+table.data tr.ctrl td { color:var(--muted); }
+
+/* Figure 1: paired horizontal bars */
+.bars { display:grid; grid-template-columns:minmax(150px, 34%) 1fr; gap:10px 14px; font:13.5px/1.3 var(--sans); align-items:center; }
+.bars .name { min-width:0; }
+.bars .name b { font-weight:600; display:block; }
+.bars .name span.sub { color:var(--muted); font-size:12.5px; }
+.bars .pair { display:grid; gap:3px; min-width:0; }
+.bar { position:relative; height:15px; background:transparent; }
+.bar i { position:absolute; left:0; top:0; bottom:0; border-radius:2px; }
+.bar em { position:absolute; top:-1px; font:500 12px/17px var(--mono); font-style:normal; color:var(--ink); padding-left:6px; white-space:nowrap; }
+.bar.syn i { background:var(--gray); } .bar.nat i { background:var(--gray-2); }
+.row-ours .bar.syn i { background:var(--ours); } .row-ours .bar.nat i { background:var(--ours-2); }
+.legend { display:flex; flex-wrap:wrap; gap:6px 18px; font:13px/1.3 var(--sans); color:var(--muted); margin:0 0 14px; }
+.legend span::before { content:""; display:inline-block; width:11px; height:11px; border-radius:2px; margin-right:6px; vertical-align:-1px; background:var(--sw); }
+.axis { grid-column:2; display:flex; justify-content:space-between; font:12px/1 var(--mono); color:var(--muted); border-top:1px solid var(--rule); padding-top:6px; }
+
+/* Figure 2: progress chart */
+.chart svg { width:100%; height:auto; display:block; }
+.chart text { font-family:var(--sans); font-size:12px; fill:var(--muted); }
+.chart .lbl { fill:var(--ink); }
+
+.note { font:15px/1.6 var(--sans); color:var(--muted); border-left:2px solid var(--rule-2); padding-left:14px; }
+.refs { font:14px/1.6 var(--sans); color:var(--muted); }
+.refs li { margin-bottom:6px; }
+@media (max-width:560px) {
+  body { font-size:17px; }
+  .bars { grid-template-columns:1fr; gap:4px; }
+  .bars .pair { margin-bottom:10px; }
+  .axis { grid-column:1; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior:smooth; } }
+</style>
+
+<div class="wrap"><div class="col">
+
+<div class="langsw"><div class="pill" role="group" aria-label="Language">
+  <button type="button" id="lang-en" data-l="en" aria-pressed="true">EN</button>
+  <button type="button" id="lang-zh" data-l="zh" aria-pressed="false">中文</button>
+</div></div>
+
+<h1><span lang="en">Inkling-2-Mini on an M5 Max</span><span lang="zh">Inkling-2-Mini 跑在 M5 Max 上</span></h1>
+<p class="dek"><span lang="en">The megakernel recipe, moved from a B200 to a laptop: an agent-written engine for one checkpoint on one Apple GPU, with exact speculative decoding from the checkpoint's own draft head. How fast it is against the engines people run on Macs, what moved the number, and where the remaining error comes from.</span><span lang="zh">把 megakernel 的做法从 B200 搬到笔记本上：由 agent 为一块 Apple GPU 上的一个 checkpoint 写专用 engine，用 checkpoint 自带的 draft head 做精确的 speculative decoding。它比 Mac 上大家常用的 engine 快多少，哪些改动带来了收益，剩下的数值误差从哪里来。</span></p>
+<div class="byline"><span lang="en">Progress report · Nov 23, 2026 · follows <a href="https://dangxingyu.github.io/megakernel/">A Megakernel per Model</a></span><span lang="zh">进展报告 · 2026 年 11 月 23 日 · 接续 <a href="https://dangxingyu.github.io/megakernel/">A Megakernel per Model</a></span></div>
+
+<nav class="toc" aria-label="Contents"><ol>
+  <li><a href="#tldr">TL;DR</a></li>
+  <li><a href="#setup"><span lang="en">Setup</span><span lang="zh">设定</span></a></li>
+  <li><a href="#speed"><span lang="en">Decode speed</span><span lang="zh">解码速度</span></a></li>
+  <li><a href="#moved"><span lang="en">What moved the number</span><span lang="zh">哪些改动有效</span></a></li>
+  <li><a href="#ruledout"><span lang="en">What we measured and dropped</span><span lang="zh">测过但放弃的</span></a></li>
+  <li><a href="#error"><span lang="en">Where the error comes from</span><span lang="zh">误差从哪来</span></a></li>
+  <li><a href="#noise"><span lang="en">Timing on a laptop</span><span lang="zh">在笔记本上计时</span></a></li>
+  <li><a href="#serving"><span lang="en">Serving it</span><span lang="zh">部署</span></a></li>
+  <li><a href="#prefill"><span lang="en">Prefill</span><span lang="zh">预填充</span></a></li>
+  <li><a href="#cache"><span lang="en">Prefix cache</span><span lang="zh">prefix cache</span></a></li>
+  <li><a href="#context"><span lang="en">Long context</span><span lang="zh">长上下文</span></a></li>
+  <li><a href="#sampling"><span lang="en">Sampling</span><span lang="zh">sampling</span></a></li>
+  <li><a href="#limits"><span lang="en">Limits and next</span><span lang="zh">局限与下一步</span></a></li>
+</ol></nav>
+
+<div id="tldr" class="tldr"><div class="k">TL;DR</div>
+<p><span lang="en">Inkling-2-Mini is a 26 B mixture-of-experts model meant for devices, shipped with NVFP4 experts and a DSpark draft head. On an M5 Max (40-core GPU, 48 GB), two six-hour runs of Claude Fable 5.2 wrote an engine in MLX and run-time Metal that decodes one sequence at <strong>8.1 ms per token on the synthetic workload and 5.1 ms on natural text</strong> (123 and 194 tokens/s). That is <strong>1.70× and 1.62×</strong> the fastest engine we found for this model on a Mac (oMLX on its own 4-bit requantization, with DSpark), 3.7× mlx-lm on the same weights, and 3.1× llama.cpp on a Q4_K_M GGUF.</span><span lang="zh">Inkling-2-Mini 是一个面向端侧的 26 B MoE 模型，发布时 experts 是 NVFP4，并带一个 DSpark draft head。在一台 M5 Max（40 核 GPU，48 GB）上，Claude Fable 5.2 跑了两轮、每轮六小时，用 MLX 和运行时编译的 Metal 写出一个 engine。它单序列解码 <strong>synthetic workload 每 token 8.1 ms，自然文本 5.1 ms</strong>（123 和 194 tokens/s），是我们在 Mac 上找到的最快 engine（oMLX 在它自己的 4-bit 重量化权重上加 DSpark）的 <strong>1.70× 和 1.62×</strong>，是同样权重下 mlx-lm 的 3.7×，是 llama.cpp 跑 Q4_K_M GGUF 的 3.1×。</span></p>
+<p><span lang="en"><strong>Exact, on the checkpoint's formats.</strong> Every token the engine returns is the token its own one-token greedy step would choose; the evaluator checks this on every sequence. The weights are the stored NVFP4, MXFP8 and BF16 values; the dense BF16 matrices are read through a lossless 12-bit code that decodes to the identical bits. The second run gained 10% on synthetic text from that code, a draft depth chosen by a cost model, and expert kernels that read each expert once per pass.</span><span lang="zh"><strong>结果是精确的，权重是 checkpoint 自己的格式。</strong> engine 返回的每个 token 都等于它自己一次走一个 token 的 greedy step 会选的那个，evaluator 在每条序列上逐一检查。权重是存储的 NVFP4、MXFP8、BF16 原值；dense 的 BF16 矩阵通过一种无损 12-bit 编码读取，解码出来逐位相同。第二轮在 synthetic 上又快了 10%，来自三处：这个编码、由代价模型决定的 draft 深度、以及每个 pass 每个 expert 只读一次的 expert kernel。</span></p>
+<p><span lang="en"><strong>The error.</strong> Every BF16 engine sits about 0.025 (median relative L2 of the logits) from the float32 reference. 83% of that is expert routing: in 39% of (token, layer) pairs the 8th and 9th expert scores are within BF16 noise and the choice flips. With float32's routes forced, the error falls to 0.0045. The engine is served by mkserve behind the OpenAI, Anthropic and Ollama APIs and passes all twelve of its serving checks. Prompts are prefilled in wide passes: a 1,630-token prompt gets its first token after <strong>1.2 s, down from 6.3 s</strong>. A prefix cache starts the next turn of a chat after 0.2 s, the context goes to 32,768 tokens, and sampling runs through the same exact draft-and-verify at greedy speed.</span><span lang="zh"><strong>误差。</strong> 所有 BF16 engine 与 float32 reference 之间都差 0.025 左右（logits 相对 L2 误差的中位数）。其中 83% 来自 expert 路由：39% 的 (token, layer) 上，第 8 和第 9 名 expert 的分数差在 BF16 噪声以内，选择会翻转。强制使用 float32 的路由后，误差降到 0.0045。engine 通过 mkserve 以 OpenAI、Anthropic、Ollama 三种 API 对外服务，12 项部署检查全部通过。prompt 现在用宽 pass 预填充：1,630-token 的 prompt 首 token 从 6.3 s 降到 <strong>1.2 s</strong>。prefix cache 让对话的下一轮 0.2 s 就开始，上下文扩到 32,768 token，sampling 走同一套精确的 draft-and-verify，速度与 greedy 相当。</span></p>
+</div>
+
+<h2 id="setup"><span lang="en">Setup</span><span lang="zh">设定</span></h2>
+<p><span lang="en">In the B200 post the agent wrote one CUDA megakernel per model. A Mac has no offline Metal compiler without Xcode and no grid-wide barrier, so the unit here is a <em>pass</em>: K consecutive positions of one sequence through the whole model, built from our own Metal kernels (through <code>mx.fast.metal_kernel</code>) and traced once per K with <code>mx.compile</code>. No library model code runs in the timed path: not mlx-lm, oMLX, llama.cpp or transformers.</span><span lang="zh">在 B200 那篇里，agent 为每个模型写一个 CUDA megakernel。Mac 上没有 Xcode 就没有离线 Metal 编译器，也没有全网格同步，所以这里的基本单元是一个 <em>pass</em>：一条序列连续 K 个位置走完整个模型，由我们自己的 Metal kernel（通过 <code>mx.fast.metal_kernel</code>）组成，每种 K 用 <code>mx.compile</code> trace 一次。计时路径里不跑任何库的模型代码：没有 mlx-lm、oMLX、llama.cpp 或 transformers。</span></p>
+<p><span lang="en">The track is C, exact speculative decoding. The engine drafts tokens with the checkpoint's DSpark head (<code>mtp.safetensors</code>) and with n-gram copies from the prompt and its own output, then verifies them in one K-row pass. Every row of that pass must have the bits the one-token step would give it, so every per-row sum keeps an order that does not depend on K. Speculation changes the speed, never the text.</span><span lang="zh">这次是 track C：精确的 speculative decoding。engine 用 checkpoint 的 DSpark head（<code>mtp.safetensors</code>）以及从 prompt 和自身输出里做的 n-gram copy 来起草 token，再用一个 K 行的 pass 一次验证。这个 pass 的每一行都必须和单 token step 给出的 bits 完全一样，所以每一行的每个求和，顺序都不能随 K 变化。speculation 只改变速度，不改变文本。</span></p>
+<p><span lang="en">The workload is the one from the post: a 64-token prompt, 1,024 greedy new tokens, one sequence, served over HTTP. The rate counts tokens received, so a verify pass that commits five tokens counts five. The headline is the synthetic prompts; natural text (prose, Python source, word problems) is reported next to it. Every submission passes the same gates before it is timed:</span><span lang="zh">workload 与博客相同：64-token prompt，生成 1,024 个 greedy token，单条序列，通过 HTTP 服务。速率按收到的 token 数计，一个提交了 5 个 token 的验证 pass 算 5 个。主指标是 synthetic prompts，自然文本（散文、Python 代码、数学应用题）一并报告。每次提交在计时前都要通过同样的 gate：</span></p>
+
+<figure id="tab-gates"><div class="fig-title"><h4><span lang="en">Table 1. The gates, and where the final engine lands</span><span lang="zh">表 1. 各项 gate，以及最终 engine 的结果</span></h4></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th><span lang="en">Check</span><span lang="zh">检查</span></th><th class="num"><span lang="en">Limit</span><span lang="zh">上限</span></th><th class="num"><span lang="en">Engine</span><span lang="zh">engine</span></th></tr></thead>
+<tbody>
+<tr><td><span lang="en">Logit error against float32, median (relative L2)</span><span lang="zh">与 float32 的 logit 误差，中位数（相对 L2）</span></td><td class="num">0.0494</td><td class="num">0.0240</td></tr>
+<tr><td><span lang="en">Logit error, 99th percentile</span><span lang="zh">logit 误差，99 分位</span></td><td class="num">0.1207</td><td class="num">0.1013</td></tr>
+<tr><td><span lang="en">KL of the next-token distribution, median</span><span lang="zh">下一 token 分布的 KL，中位数</span></td><td class="num">0.0039</td><td class="num">0.0007</td></tr>
+<tr><td><span lang="en">Top-1 agreement with the reference</span><span lang="zh">与 reference 的 top-1 一致率</span></td><td class="num"><span lang="en">≥ BF16 − 1 pt</span><span lang="zh">≥ BF16 − 1 点</span></td><td class="num">1.000</td></tr>
+<tr><td><span lang="en"><code>generate()</code> and served tokens equal step-by-step greedy, full length</span><span lang="zh"><code>generate()</code> 与服务出的 token 等于逐步 greedy，全长</span></td><td class="num"><span lang="en">every token</span><span lang="zh">每个 token</span></td><td class="num"><span lang="en">pass</span><span lang="zh">通过</span></td></tr>
+</tbody></table></div>
+<figcaption><span lang="en">The reference is the model in float32 on the CPU (<code>eval/inkling2_ref.py</code>), at every position up to 128 and every 8th position up to 1,152. Limits are 2× (logits) and 4× (KL) the error of the repository's BF16 path at the same positions. Final source, submission s0019.</span><span lang="zh">reference 是在 CPU 上以 float32 计算的模型（<code>eval/inkling2_ref.py</code>），覆盖 128 以内的每个位置，以及 1,152 以内每隔 8 个的位置。上限是仓库里 BF16 路径在相同位置误差的 2 倍（logits）和 4 倍（KL）。最终源码，提交 s0019。</span></figcaption>
+</figure>
+
+<h2 id="speed"><span lang="en">Decode speed</span><span lang="zh">解码速度</span></h2>
+<p><span lang="en">We measured every engine we could get to run this model on the same Mac, through the same client: mlx-lm on the checkpoint as stored, oMLX on its published 4-bit requantization with and without DSpark, llama.cpp on a Q4_K_M GGUF with and without a DSpark pull request, and Ollama.</span><span lang="zh">我们在同一台 Mac 上、用同一个 client，测了所有能跑这个模型的 engine：mlx-lm 跑原始 checkpoint，oMLX 跑它发布的 4-bit 重量化版本（加和不加 DSpark），llama.cpp 跑 Q4_K_M GGUF（加和不加一个 DSpark 的 pull request），以及 Ollama。</span></p>
+
+<figure id="fig1" class="wide"><div class="fig-title"><h4><span lang="en">Figure 1. Tokens per second, one sequence, M5 Max</span><span lang="zh">图 1. 单序列每秒 token 数，M5 Max</span></h4></div>
+<div class="legend"><span style="--sw:var(--gray)"><span lang="en">general engine, synthetic</span><span lang="zh">通用 engine，synthetic</span></span><span style="--sw:var(--gray-2)"><span lang="en">general engine, natural text</span><span lang="zh">通用 engine，自然文本</span></span><span style="--sw:var(--ours)"><span lang="en">ours, synthetic</span><span lang="zh">我们的，synthetic</span></span><span style="--sw:var(--ours-2)"><span lang="en">ours, natural text</span><span lang="zh">我们的，自然文本</span></span></div>
+<div class="bars" id="bars"></div>
+<figcaption><span lang="en">1,000,000 divided by microseconds per token, over HTTP, greedy, 64-token prompts and 1,024 new tokens; the general engines are the median of two server starts × three prompts, ours the median of six evaluations of the final source (run 1: its final submission, s0014). Ollama is one server start. The weights differ: mlx-lm, Ollama and our engine use the checkpoint's own NVFP4 / MXFP8 / BF16; oMLX uses oQ4e (affine 4-bit for four MXFP8 layers, 8-bit attention), llama.cpp a Q4_K_M GGUF. Ollama 0.40.17 could not load the GGUF (unknown architecture <code>inkling2_loop</code>) or the DSpark draft. LM Studio was not measured.</span><span lang="zh">即 1,000,000 除以每 token 微秒数；HTTP，greedy，64-token prompt，生成 1,024 个 token。通用 engine 取两次启动 × 三个 prompt 的中位数；我们的取最终源码六次评测的中位数（第一轮取它的最终提交 s0014）。Ollama 只启动了一次。各家权重不同：mlx-lm、Ollama 和我们的 engine 用 checkpoint 原生的 NVFP4 / MXFP8 / BF16；oMLX 用 oQ4e（四层 MXFP8 改成 affine 4-bit，attention 8-bit），llama.cpp 用 Q4_K_M GGUF。Ollama 0.40.17 加载不了 GGUF（不认识 <code>inkling2_loop</code> 架构），也加载不了 DSpark draft。LM Studio 没有测。</span></figcaption>
+</figure>
+
+<p><span lang="en">Against the fastest general engine, oMLX with DSpark at 13.8 / 8.3 ms per token, the final engine is 1.70× on synthetic prompts and 1.62× on natural text. oMLX reads fewer bytes, since it requantized the model to 4 bits; against mlx-lm on the same weights as ours the factor is 3.7× and 5.9×. With the copy proposals switched off, so that every draft comes from the DSpark head, the engine runs at 8.8 / 6.8 ms (1.56× / 1.21× oMLX + DSpark): the copy proposals are worth 8% on synthetic text and 25% on natural text, where continuations repeat more.</span><span lang="zh">对比最快的通用 engine（oMLX 加 DSpark，每 token 13.8 / 8.3 ms），最终 engine 在 synthetic 上是 1.70×，在自然文本上是 1.62×。oMLX 把模型重量化到了 4 bit，读的字节更少；和同样权重的 mlx-lm 比，倍数是 3.7× 和 5.9×。关掉 copy proposals、只让 DSpark head 起草时，engine 是 8.8 / 6.8 ms（oMLX + DSpark 的 1.56× / 1.21×）：copy proposals 在 synthetic 上值 8%，在自然文本上值 25%，因为自然文本的续写更容易重复。</span></p>
+
+<p><span lang="en">Where the time goes depends on the text. On prose, a cycle takes about 19.5 ms: a verify pass of about 2.3 rows (16.3 ms), the draft (2.4 ms) and 0.5 ms between cycles, and commits about 1.75 tokens. The verify pass reads 2.1 GB of 12-bit dense codes, 0.46 GB of an 8-bit unembedding copy for the exact-argmax short list, and about 1.5 GB of experts per row, at 450–530 GB/s; it is near the memory roofline. On text that repeats itself (half of the natural workload's time) the engine verifies 16-row copy proposals at about 3.1 ms per token, and there it is bound by arithmetic: the experts of a 16-row pass are 81 G multiply-adds in 28.5 ms.</span><span lang="zh">时间花在哪里取决于文本。在散文上，一个 cycle 约 19.5 ms：约 2.3 行的验证 pass（16.3 ms）、draft（2.4 ms）、cycle 之间 0.5 ms，提交约 1.75 个 token。验证 pass 每行读 2.1 GB 的 12-bit dense 编码、0.46 GB 用于精确 argmax 候选短名单的 8-bit unembedding 副本，以及约 1.5 GB 的 experts，带宽 450–530 GB/s，已经接近内存 roofline。在会自我重复的文本上（占自然文本 workload 一半的时间），engine 验证 16 行的 copy proposals，每 token 约 3.1 ms，这时瓶颈是算力：16 行 pass 的 experts 是 81 G 次乘加，耗时 28.5 ms。</span></p>
+
+<h2 id="moved"><span lang="en">What moved the number</span><span lang="zh">哪些改动有效</span></h2>
+<p><span lang="en">The first run started from a plain MLX pass with no speculation (26.9 ms per token) and ended at 9.0 / 5.3 ms. The second run started from that engine, with a prompt that asked for changes to the algorithm (more tokens per pass, fewer bytes per token) rather than more kernel tuning, because the first run had found its passes near the memory roofline.</span><span lang="zh">第一轮从一个不带 speculation 的朴素 MLX pass 开始（每 token 26.9 ms），结束时到了 9.0 / 5.3 ms。第二轮从这个 engine 出发。由于第一轮已经发现 pass 接近内存 roofline，第二轮的 prompt 要求改算法（每个 pass 提交更多 token、每个 token 读更少字节），而不是继续调 kernel。</span></p>
+
+<figure id="fig2" class="wide chart"><div class="fig-title"><h4><span lang="en">Figure 2. Every evaluation of both runs, synthetic workload</span><span lang="zh">图 2. 两轮的每一次评测，synthetic workload</span></h4></div>
+<svg id="prog" viewBox="0 0 880 330" role="img" aria-label="Microseconds per token of every evaluation over twelve hours"></svg>
+<figcaption><span lang="en">Microseconds per token (lower is faster) of each valid evaluation against hours into the run. Filled points are full engines; open gray points are controls with copy proposals off. Run 1's first point (26,852, no speculation) is off the top of the axis. The dashed line is oMLX + DSpark. Points of the same source spread by up to 10%: see <a href="#noise">Timing on a laptop</a>.</span><span lang="zh">每次有效评测的每 token 微秒数（越低越快），横轴是 run 进行的小时数。实心点是完整 engine，空心灰点是关掉 copy proposals 的对照组。run 1 的第一个点（26,852，没有 speculation）超出了纵轴上限。虚线是 oMLX + DSpark。同一份源码的点之间可以差 10%：见<a href="#noise">在笔记本上计时</a>。</span></figcaption>
+</figure>
+
+<figure id="tab-moved"><div class="fig-title"><h4><span lang="en">Table 2. The changes that stayed</span><span lang="zh">表 2. 保留下来的改动</span></h4></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th><span lang="en">Change</span><span lang="zh">改动</span></th><th class="num"><span lang="en">Synthetic / natural, µs per token</span><span lang="zh">synthetic / 自然文本，µs/token</span></th></tr></thead>
+<tbody>
+<tr><td colspan="2"><strong><span lang="en">Run 1</span><span lang="zh">第一轮</span></strong></td></tr>
+<tr><td><span lang="en">Own K-row pass in MLX + Metal, no speculation</span><span lang="zh">自己的 MLX + Metal K 行 pass，无 speculation</span></td><td class="num">26,852 / –</td></tr>
+<tr><td><span lang="en">DSpark draft, exact K-row verify</span><span lang="zh">DSpark draft，精确的 K 行验证</span></td><td class="num">15,646 / 12,704</td></tr>
+<tr><td><span lang="en">Compiled pass, experts read once per slot, n-gram copy proposals</span><span lang="zh">编译后的 pass，每个 slot 只读一次 expert，n-gram copy proposals</span></td><td class="num">10,545 / 8,335</td></tr>
+<tr><td><span lang="en">Fused glue kernels, two-tier K/V cache, 16-row copy passes, 8-bit draft copies</span><span lang="zh">融合的胶水 kernel，两级 K/V cache，16 行 copy pass，8-bit draft 副本</span></td><td class="num">9,758 / 5,731</td></tr>
+<tr><td><span lang="en">Exact argmax through an 8-bit short list; bit-identical latency fixes</span><span lang="zh">经 8-bit 候选短名单做精确 argmax；逐位不变的延迟修正</span></td><td class="num">9,029 / 5,378</td></tr>
+<tr><td><span lang="en">Down projection with 4 weight rows per simdgroup (run 1 final)</span><span lang="zh">down projection 每个 simdgroup 4 行权重（第一轮最终版）</span></td><td class="num">8,982 / 5,333</td></tr>
+<tr><td colspan="2"><strong><span lang="en">Run 2, measured against the run 1 engine in the same machine state (8,985 / 5,331)</span><span lang="zh">第二轮，与同一机器状态下的第一轮 engine（8,985 / 5,331）对比</span></strong></td></tr>
+<tr><td><span lang="en">Lossless 12-bit dense matrices; NVFP4 decoded by a table per code byte; draft chained behind the verify pass</span><span lang="zh">无损 12-bit dense 矩阵；NVFP4 按每个编码字节查表解码；draft 接在验证 pass 后面</span></td><td class="num">−4%</td></tr>
+<tr><td><span lang="en">Draft depth from a cost model calibrated per request</span><span lang="zh">按请求在线校准的代价模型决定 draft 深度</span></td><td class="num">−5% / 0</td></tr>
+<tr><td><span lang="en">Expert slots of up to 4 (row, expert) pairs, one gate/up row pair per simdgroup</span><span lang="zh">expert slot 最多 4 个 (row, expert) 对，每个 simdgroup 一对 gate/up 行</span></td><td class="num">−1.7% / −3%</td></tr>
+<tr class="ours"><td><span lang="en">Run 2 final (median of six evaluations)</span><span lang="zh">第二轮最终版（六次评测的中位数）</span></td><td class="num">8,100 / 5,143</td></tr>
+</tbody></table></div>
+<figcaption><span lang="en">Scores from the run's own evaluator. Run 2's steps keep every sum's order, so its logits are bit-identical across all nineteen submissions and each change is a clean A/B.</span><span lang="zh">分数来自 run 自己的 evaluator。第二轮的每一步都保持了所有求和的顺序，所以 19 次提交的 logits 全部逐位相同，每个改动都是干净的 A/B。</span></figcaption>
+</figure>
+
+<h3><span lang="en">A 12-bit code for BF16 weights, again</span><span lang="zh">又一次：BF16 权重的 12-bit 编码</span></h3>
+<p><span lang="en">The dense BF16 matrices (attention projections, gates, output projections) are 2.6 GB of every pass. As in track B on the B200s, the agent measured that the weights of one row span few binades: with a per-row window of 16 exponents, 8.8 × 10<sup>−5</sup> of the weights fall outside. It stores 4 weights in 6 bytes (sign and mantissa bytes, plus a 4-bit exponent offset each) and keeps the 19% of rows that have an outlier as plain BF16 in a side array, so the kernel has no escape branch. Each weight is rebuilt to its stored 16 bits before the same fma chain, so every sum keeps its order and its bits; the loader asserts the round trip. The two largest matrices went from 4.4 to 3.2 ms per one-row pass, and the decode keeps up with memory at 530 GB/s on the packed bytes.</span><span lang="zh">dense 的 BF16 矩阵（attention 投影、gate、输出投影）每个 pass 要读 2.6 GB。和 B200 上的 track B 一样，agent 测得同一行权重只跨很少几个 binade：按每行 16 个指数的窗口，只有 8.8 × 10<sup>−5</sup> 的权重落在窗口外。它把 4 个权重存成 6 个字节（符号和尾数的字节，加上每个权重 4 bit 的指数偏移），带离群值的那 19% 的行照旧以 BF16 存在一个旁路数组里，所以 kernel 里没有转义分支。每个权重先还原成存储的 16 bits，再进入同样的 fma 链，所以每个求和的顺序和 bits 都不变；loader 会断言往返一致。最大的两个矩阵在单行 pass 上从 4.4 ms 降到 3.2 ms，解码速度跟得上内存，压缩后的字节流达到 530 GB/s。</span></p>
+
+<h3><span lang="en">How deep to draft</span><span lang="zh">draft 起草多深</span></h3>
+<p><span lang="en">A verify row costs about 2.5 ms on prose; a committed token is worth about 10. The engine keeps verifying rows while the calibrated probability that the whole prefix is accepted stays above the row's cost times the request's recent tokens per millisecond. The calibration is kept per request, P(accept | depth, bucket of the draft's probability) with a decay, because the head's probabilities mean different things on different text. This gained 5.3% on synthetic text and nothing on natural text, half of whose time is in copy passes the policy does not touch.</span><span lang="zh">在散文上，验证一行约花 2.5 ms，一个提交的 token 约值 10 ms。只要"整段前缀全被接受"的校准概率还高于"这一行的耗时 × 该请求最近每毫秒产出的 token 数"，engine 就继续加验证行。校准按请求分别维护，统计的是带衰减的 P(accept | 深度, draft 概率所在区间)，因为 head 给出的概率在不同文本上含义不同。这在 synthetic 上带来 5.3% 的提升，在自然文本上没有效果：自然文本有一半时间花在 copy pass 上，而这个策略不管 copy pass。</span></p>
+
+<h2 id="ruledout"><span lang="en">What we measured and dropped</span><span lang="zh">测过但放弃的</span></h2>
+<p><span lang="en">The second run's prompt listed five algorithmic directions. The agent ran the cheap measurement that decides each before building it:</span><span lang="zh">第二轮的 prompt 列了五个算法方向。agent 在动手实现之前，先为每个方向跑了能做出判断的低成本测量：</span></p>
+<ul>
+<li><span lang="en"><strong>Token trees.</strong> Over 11 greedy continuations, DSpark's second-best first token is right at 1–5% of the anchors (12% on the hardest prose). Replaying the decode with a sibling row for it gains 0.0–0.3%. Not built.</span><span lang="zh"><strong>Token tree。</strong> 在 11 条 greedy 续写上，DSpark 的第二候选首 token 只在 1–5% 的锚点上是对的（最难的散文上 12%）。用一行兄弟节点回放解码，收益 0.0–0.3%。没有做。</span></li>
+<li><span lang="en"><strong>Suffix-structure proposals.</strong> Matches shorter than 5 tokens are right 3–14% of the time unless the DSpark chain already says the same thing, and then they add nothing.</span><span lang="zh"><strong>Suffix 结构的候选。</strong> 短于 5 个 token 的匹配只有 3–14% 是对的；对的那些，DSpark 链本来就已经给出，加了也没用。</span></li>
+<li><span lang="en"><strong>Lossless codes for the experts.</strong> NVFP4 codes carry 3.97 of their 4 bits, and the expert kernels are compute-bound from 3 rows up: decoding by arithmetic instead of a table is 60–90% slower.</span><span lang="zh"><strong>expert 的无损编码。</strong> NVFP4 每个码本身就带 3.97 bit 信息（满分 4 bit），而且 expert kernel 从 3 行起就是算力瓶颈：用算术代替查表解码会慢 60–90%。</span></li>
+<li><span lang="en"><strong>Fewer host round trips.</strong> Chaining the draft behind the verify pass cut syncs from 2–3 to 1 per cycle, worth about 1%: a sync costs about 0.2 ms here. Removing the remaining 0.5 ms of idle GPU per cycle would need a fixed row count, which loses about as much as it saves.</span><span lang="zh"><strong>更少的 host 往返。</strong> 把 draft 接在验证 pass 后面，每个 cycle 的同步从 2–3 次降到 1 次，约快 1%：这里一次同步只要 0.2 ms 左右。要去掉每个 cycle 剩下的 0.5 ms GPU 空闲，就得固定行数，而固定行数损失的和省下的差不多。</span></li>
+<li><span lang="en"><strong>Copies from 8 matching tokens instead of 5.</strong> −0.9% in process, +0.8% / −0.6% in the evaluation. Reverted.</span><span lang="zh"><strong>copy 匹配长度从 5 改到 8。</strong> 进程内 −0.9%，评测中 +0.8% / −0.6%。已回退。</span></li>
+</ul>
+<p><span lang="en">What limits the prose regime now is the draft head: its first token is right 60–70% of the time on prose and 98% on code and word problems. A better draft, not a faster pass, is the next large factor there.</span><span lang="zh">现在限制散文场景的是 draft head：它的首 token 在散文上只有 60–70% 是对的，在代码和应用题上是 98%。那里下一个大的提升来自更好的 draft，而不是更快的 pass。</span></p>
+
+<h2 id="error"><span lang="en">Where the error comes from</span><span lang="zh">误差从哪来</span></h2>
+<p><span lang="en">Every BF16 implementation we have is about 0.025 from the float32 reference: the repository's BF16 path (0.027), our engine (0.024) and mlx-lm (0.026). We took the reference apart to see why.</span><span lang="zh">我们手上所有 BF16 实现与 float32 reference 都差 0.025 左右：仓库里的 BF16 路径（0.027）、我们的 engine（0.024）、mlx-lm（0.026）。我们把 reference 拆开来看原因。</span></p>
+
+<figure id="tab-routes"><div class="fig-title"><h4><span lang="en">Table 3. The BF16 path against float32, with and without its own expert choices</span><span lang="zh">表 3. BF16 路径对 float32，用和不用它自己的 expert 选择</span></h4></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th><span lang="en">Configuration</span><span lang="zh">配置</span></th><th class="num"><span lang="en">Median</span><span lang="zh">中位数</span></th><th class="num">p99</th><th class="num">top-1</th><th class="num"><span lang="en">Route flips</span><span lang="zh">路由翻转</span></th></tr></thead>
+<tbody>
+<tr><td><span lang="en">BF16 path</span><span lang="zh">BF16 路径</span></td><td class="num">0.0272</td><td class="num">0.318</td><td class="num">0.969</td><td class="num">39%</td></tr>
+<tr><td><span lang="en">BF16 path, float32's expert choices forced</span><span lang="zh">BF16 路径，强制用 float32 的 expert 选择</span></td><td class="num">0.0045</td><td class="num">0.027</td><td class="num">0.996</td><td class="num">0</td></tr>
+</tbody></table></div>
+<figcaption><span lang="en">Relative L2 error of the logits on the reference's first sequence (256 positions). Route flips: share of (token, layer) pairs where at least one of the 8 chosen experts differs from float32's.</span><span lang="zh">reference 第一条序列（256 个位置）上 logits 的相对 L2 误差。路由翻转：8 个被选中的 expert 里至少一个与 float32 不同的 (token, layer) 占比。</span></figcaption>
+</figure>
+
+<p><span lang="en">Inkling-2-Mini routes each token to 8 experts, and the 8th and 9th scores are often within BF16 noise of each other. A flipped choice also changes the K/V history every later position attends to, which is why the error grows with position (0.033 median at long positions against 0.025 in the first 128). Forcing float32's choices cuts the median 6× and the p99 12×. The remaining 0.0045 is spread over the model: rounding only one family of operations at a time, with float32's routes, gives attention 0.0024, the attention residuals 0.0023, the MoE 0.0023, the norms 0.0014, the short convolutions 0.0013 and the loop's message gates 0.0005. These add in quadrature to 0.0045, against 0.0043 with all of them rounded together.</span><span lang="zh">Inkling-2-Mini 给每个 token 选 8 个 expert，而第 8 名和第 9 名的分数经常在 BF16 噪声以内。一次选择翻转还会改变后面所有位置都要 attend 的 K/V 历史，所以误差随位置增大（长位置中位数 0.033，前 128 个位置是 0.025）。强制使用 float32 的选择后，中位数降了 6 倍，p99 降了 12 倍。剩下的 0.0045 分散在整个模型里：在使用 float32 路由的前提下，一次只让一类运算按 BF16 舍入，结果是 attention 0.0024、attention residual 0.0023、MoE 0.0023、norm 0.0014、short convolution 0.0013、loop 的 message gate 0.0005。这些按平方和开方合起来是 0.0045，全部一起舍入时实测是 0.0043。</span></p>
+<p><span lang="en">Two consequences. The gate's limits (2× the BF16 path) and the 0.10 p99 our engine lands at are set by routing near-ties, not by any one rounding point; that is why a build that changes a single summation order can land on either side of the p99 limit, and why the second run kept every sum's order. And activations in float32 would cut the error only 3–4×, because the routes would still flip, only less often.</span><span lang="zh">由此得到两点。第一，gate 的上限（BF16 路径的 2 倍）以及我们 engine 落在的 0.10 p99，都由路由的近似平局决定，而不是由某一处舍入决定。所以只改一个求和顺序的 build 就可能落在 p99 上限的任一侧，这也是第二轮坚持保持所有求和顺序的原因。第二，即使激活改用 float32，误差也只能降 3–4 倍，因为路由仍会翻转，只是少一些。</span></p>
+<p class="note"><span lang="en">A side finding: on this GPU with MLX 0.32.4, a float32 <code>mx.matmul</code> with more than one row has relative error 7.7 × 10<sup>−4</sup> against float64, about TF32 precision; one row (GEMV) is accurate to 1.5 × 10<sup>−7</sup>. So mlx-lm after <code>set_dtype(float32)</code> still lands at 0.030. Fed one token at a time, so that every product is a GEMV, it agrees with our reference to 3 × 10<sup>−4</sup> with identical top-1: the two implement the same function.</span><span lang="zh">一个附带发现：在这块 GPU 上用 MLX 0.32.4，多于一行的 float32 <code>mx.matmul</code> 相对 float64 的误差是 7.7 × 10<sup>−4</sup>，大约是 TF32 精度；只有一行（GEMV）时精确到 1.5 × 10<sup>−7</sup>。所以 mlx-lm 即使 <code>set_dtype(float32)</code> 之后误差仍是 0.030。改成一次喂一个 token、让每个乘积都是 GEMV 后，它和我们的 reference 只差 3 × 10<sup>−4</sup>，top-1 完全一致：两者实现的是同一个函数。</span></p>
+
+<h2 id="noise"><span lang="en">Timing on a laptop</span><span lang="zh">在笔记本上计时</span></h2>
+<p><span lang="en">Two things make a single number on this Mac unreliable, and both runs spent evaluations to measure them.</span><span lang="zh">有两件事让这台 Mac 上的单次数字不可靠，两轮都专门花了评测次数去量它们。</span></p>
+<ul>
+<li><span lang="en"><strong>Machine state.</strong> After a long stretch of in-process tests, 16-row passes take 56–62 ms instead of 50–53 for the same engine; 15 idle minutes clear it. The run 1 engine measured 9,394 at the start of run 2 and 8,985 two hours later. The six evaluations of the final source span 8,040–8,333.</span><span lang="zh"><strong>机器状态。</strong> 进程内连续测试一段时间后，同一个 engine 的 16 行 pass 会从 50–53 ms 变成 56–62 ms；空闲 15 分钟就能恢复。第一轮的 engine 在第二轮开始时测出 9,394，两小时后测出 8,985。最终源码的六次评测分布在 8,040–8,333。</span></li>
+<li><span lang="en"><strong>Which prompts loop.</strong> The three repeats of a workload are different prompts, and a continuation that falls into a loop decodes 2–3× faster through copy proposals. Which ones loop is decided by last-bit numerics, so a build that changes a summation order can move the headline by 30% without changing the speed of any pass. Run 1 saw 9.5–14.2 k on one workload across numerically different builds.</span><span lang="zh"><strong>哪些 prompt 会进入循环。</strong> 一个 workload 的三次重复是三个不同的 prompt，续写一旦进入循环，借助 copy proposals 会快 2–3 倍。哪些会进入循环由最后几位的数值决定，所以一个改了求和顺序的 build，可能在任何 pass 都没变快的情况下让主指标变动 30%。第一轮在数值不同的 build 之间，同一个 workload 测出过 9.5–14.2 k。</span></li>
+</ul>
+<p><span lang="en">The general engines were measured in their own sessions, and we do not know their machine state. Treat differences under 5% as noise until they repeat.</span><span lang="zh">通用 engine 是在各自的会话里测的，我们不知道当时的机器状态。5% 以内的差异，在复现之前都当作噪声。</span></p>
+
+<h2 id="serving"><span lang="en">Serving it</span><span lang="zh">部署</span></h2>
+<p><span lang="en">The engine is registered in mkserve as <code>offline-c</code> for <code>m5max</code>, so <code>mkserve serve thinkingmachines/Inkling-2-Mini</code> on an M5 Max serves it on one port behind the OpenAI (<code>/v1/chat/completions</code>, <code>/v1/completions</code>, <code>/v1/responses</code>), Anthropic (<code>/v1/messages</code>) and Ollama (<code>/api/chat</code>, <code>/api/generate</code>) APIs, with Inkling 2's reasoning, text and tool calls returned in the fields each API uses. <code>mkserve launch claude | codex | opencode</code> points those agents at it. It passes all twelve checks of <code>scripts/mkserve_check.py</code>: completions and chats, streamed and not, stop strings, four concurrent requests, a 1,630-token prompt, a request beyond the context (refused with HTTP 400) and invalid inputs.</span><span lang="zh">engine 已经以 <code>offline-c</code> 的名字注册进 mkserve 的 <code>m5max</code>。在 M5 Max 上执行 <code>mkserve serve thinkingmachines/Inkling-2-Mini</code>，就会在同一个端口上提供 OpenAI（<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/responses</code>）、Anthropic（<code>/v1/messages</code>）和 Ollama（<code>/api/chat</code>、<code>/api/generate</code>）三种 API，Inkling 2 的推理、正文和 tool call 按各 API 约定的字段返回。<code>mkserve launch claude | codex | opencode</code> 可以把这些 agent 接到它上面。它通过了 <code>scripts/mkserve_check.py</code> 的全部 12 项检查：completion 和 chat（流式和非流式）、stop string、四个并发请求、一个 1,630-token 的 prompt、超出上下文的请求（以 HTTP 400 拒绝）、以及非法输入。</span></p>
+<p><span lang="en">Two things surfaced on the way. Inkling 2's template takes <code>reasoning_effort</code> and ignores Qwen's <code>enable_thinking</code>, which many clients send, so mkserve now maps <code>enable_thinking: false</code> to effort <code>none</code>. And even at effort <code>none</code> the model reasons briefly before answering (46 tokens for "Say hello."), so a client that sets a 24-token limit gets only reasoning back.</span><span lang="zh">过程中发现了两件事。第一，Inkling 2 的 template 只认 <code>reasoning_effort</code>，不认很多 client 会发的 Qwen 风格 <code>enable_thinking</code>，所以 mkserve 现在把 <code>enable_thinking: false</code> 映射成 effort <code>none</code>。第二，即使 effort 是 <code>none</code>，模型在回答前也会先简短推理（"Say hello." 推理了 46 个 token），所以把上限设成 24 个 token 的 client 只会拿到推理内容。</span></p>
+
+<h2 id="prefill"><span lang="en">Prefill</span><span lang="zh">预填充</span></h2>
+<p><span lang="en">The engine first prefilled a prompt the way it verifies drafts, in passes of 8 rows: 3.6 ms per prompt token, 6.3 s to the first token of a 1,630-token prompt. The kernels were built for few rows. A GEMV keeps one accumulator per row in registers and spills from 32 rows on (a 32-row pass takes 274 ms, against 47 ms for 16), and the attention kernel reads every key once per row. Prompts now go through <em>wide passes</em> of up to 256 rows, padded to 32, 64, 128 or 256 so only four shapes are ever compiled. The padding rows come after the real ones, so they never affect them. A wide pass runs in one of two modes.</span><span lang="zh">engine 最初像验证 draft 一样，用 8 行的 pass 预填充 prompt：每个 prompt token 3.6 ms，1,630-token 的 prompt 要 6.3 s 才出第一个 token。这些 kernel 是为少量行写的：GEMV 在寄存器里给每行留一个累加器，从 32 行起开始溢出（32 行的 pass 要 274 ms，16 行只要 47 ms）；attention kernel 每一行都要把所有 key 读一遍。现在 prompt 走<em>宽 pass</em>，每个最多 256 行，补齐到 32、64、128 或 256 行，所以只会编译这四种形状。补齐的行排在真实行之后，不会影响它们。宽 pass 有两种模式。</span></p>
+<ul>
+<li><span lang="en"><strong>Exact</strong>, the engine's default and what the evaluator runs. These are the step's own kernels, with the GEMVs in blocks of 8 rows per simdgroup and the experts in slots of 8 pairs. Every row keeps the bits of a one-row step: the K/V of all 48 layer applications is identical to the 8-row prefill's, and <code>eval/spec_check.py</code> finds the online tokens equal to step-by-step greedy on 4 of 4 prompts.</span><span lang="zh"><strong>exact</strong>，engine 的默认值，也是 evaluator 跑的模式。用的是 step 自己的 kernel：GEMV 每个 simdgroup 处理 8 行一块，experts 每个 slot 8 个 pair。每一行都保持单行 step 的 bits：48 次层应用的 K/V 与 8 行预填充逐位相同，<code>eval/spec_check.py</code> 在 4 个 prompt 上都判定 online 的 token 等于逐步 greedy 的结果。</span></li>
+<li><span lang="en"><strong>Fast</strong>, which mkserve serves. The experts go through MLX's <code>gather_qmm</code> on the stored NVFP4 / MXFP8 codes in half precision. Its layout matched our kernels' without conversion. The inputs are scaled by 2<sup>−8</sup>, because the raw products before NVFP4's outer scale (about 10<sup>−4</sup>) reach 250,000 on real text, past the half range. The dense matrices go through half GEMMs on half copies (1.3 GB more memory). Attention uses <code>mx.fast.scaled_dot_product_attention</code>, with the relative bias and the window as an additive mask and the per-row sink as one extra zero key.</span><span lang="zh"><strong>fast</strong>，mkserve 部署时用的模式。experts 走 MLX 的 <code>gather_qmm</code>，直接在存储的 NVFP4 / MXFP8 编码上做半精度计算，它的数据布局和我们的 kernel 一致，不需要转换。输入先乘 2<sup>−8</sup>：NVFP4 外层 scale 约 10<sup>−4</sup>，乘它之前的原始乘积在真实文本上能到 250,000，超出半精度范围。dense 矩阵用半精度副本做半精度 GEMM（多占 1.3 GB 内存）。attention 用 <code>mx.fast.scaled_dot_product_attention</code>：相对位置偏置和窗口写成加性 mask，每行的 sink 当作多出来的一个零 key。</span></li>
+</ul>
+
+<figure id="tab-prefill"><div class="fig-title"><h4><span lang="en">Table 4. Time to the first token, by prompt length</span><span lang="zh">表 4. 不同 prompt 长度的首 token 时间</span></h4></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th><span lang="en">Prompt tokens</span><span lang="zh">prompt token 数</span></th><th class="num"><span lang="en">8-row passes (before)</span><span lang="zh">8 行 pass（之前）</span></th><th class="num"><span lang="en">Exact wide</span><span lang="zh">exact 宽 pass</span></th><th class="num"><span lang="en">Fast wide</span><span lang="zh">fast 宽 pass</span></th></tr></thead>
+<tbody>
+<tr><td>64</td><td class="num">212 ms</td><td class="num">154 ms</td><td class="num">90 ms</td></tr>
+<tr><td>300</td><td class="num">999 ms</td><td class="num">738 ms</td><td class="num">259 ms</td></tr>
+<tr><td>1,630</td><td class="num">6,834 ms</td><td class="num">4,204 ms</td><td class="num"><strong>1,245 ms</strong></td></tr>
+<tr><td>3,000</td><td class="num">—</td><td class="num">—</td><td class="num">2,313 ms</td></tr>
+</tbody></table></div>
+<figcaption><span lang="en">The engine's <code>submit()</code> / <code>poll()</code> on real text, second of two requests. Over HTTP through mkserve, the 1,630-token prompt's first token takes 1.20 s and the 64-token prompt's 78 ms (206 ms before); decode speed is unchanged (325 against 317 tokens/s on the serving check's prompt).</span><span lang="zh">engine 的 <code>submit()</code> / <code>poll()</code>，真实文本，取两次请求中的第二次。通过 mkserve 走 HTTP 时，1,630-token prompt 的首 token 是 1.20 s，64-token prompt 是 78 ms（之前 206 ms）；解码速度没有变化（部署检查的 prompt 上 325 对 317 tokens/s）。</span></figcaption>
+</figure>
+
+<p><span lang="en">In a 256-row pass at position 768, the exact mode spends 2.6 ms per prompt token. 1.84 ms of it is the experts, which are bound by fp32 multiply-adds: each pair's sums must keep the step's order, so the matrix units are out. The fast mode spends 0.68 ms: experts 0.38, dense matrices 0.06, attention and the per-row kernels (depth mixes, gates, short convolutions) 0.24. That last part, not the matrix products, is now the largest piece left to fuse.</span><span lang="zh">在位置 768 的一个 256 行 pass 里，exact 模式每个 prompt token 花 2.6 ms，其中 1.84 ms 是 experts。它们受 fp32 乘加吞吐限制：每个 pair 的求和必须保持 step 的顺序，所以用不上矩阵单元。fast 模式每 token 花 0.68 ms：experts 0.38，dense 矩阵 0.06，attention 和逐行 kernel（depth mix、gate、short convolution）0.24。剩下最值得融合的是最后这一块，而不是矩阵乘。</span></p>
+<p><span lang="en">The fast mode is not step-exact: on <code>spec_check</code>'s random prompts, 1 of 4 replies matches step greedy, and the others first differ at tokens 1, 4 and 287. It is no further from the float32 reference, though. On the reference sequence it is closer:</span><span lang="zh">fast 模式不是 step-exact 的：在 <code>spec_check</code> 的随机 prompt 上，4 个回复里只有 1 个与 step greedy 相同，其余分别在第 1、4、287 个 token 处开始不同。但它离 float32 reference 并不更远。在 reference 序列上，它反而更近：</span></p>
+
+<figure id="tab-prefill-err"><div class="fig-title"><h4><span lang="en">Table 5. Error against float32 after a fast prefill</span><span lang="zh">表 5. fast 预填充之后相对 float32 的误差</span></h4></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th><span lang="en">Configuration</span><span lang="zh">配置</span></th><th class="num"><span lang="en">Positions</span><span lang="zh">位置</span></th><th class="num"><span lang="en">Median</span><span lang="zh">中位数</span></th><th class="num">p99</th><th class="num">top-1</th></tr></thead>
+<tbody>
+<tr><td><span lang="en">Step (exact passes)</span><span lang="zh">step（exact pass）</span></td><td class="num">128–1144</td><td class="num">0.0350</td><td class="num">0.313</td><td class="num">0.992</td></tr>
+<tr><td><span lang="en">Fast wide passes, their own rows</span><span lang="zh">fast 宽 pass 自身的行</span></td><td class="num">128–1144</td><td class="num">0.0174</td><td class="num">0.332</td><td class="num">1.000</td></tr>
+<tr><td><span lang="en">Step</span><span lang="zh">step</span></td><td class="num">512–1144</td><td class="num">0.0428</td><td class="num">0.380</td><td class="num">1.000</td></tr>
+<tr><td><span lang="en">Fast prefill of 512 tokens, then steps</span><span lang="zh">fast 预填充 512 个 token，之后用 step</span></td><td class="num">512–1144</td><td class="num">0.0292</td><td class="num">0.375</td><td class="num">1.000</td></tr>
+</tbody></table></div>
+<figcaption><span lang="en">Relative L2 of the logits at the reference's long positions (every 8th). One sequence, so read this as "no worse", not as "better". Full table, including prefixes of 256 and 1,024 tokens: <code>runs-mac/prefill-20261123/README.md</code>.</span><span lang="zh">reference 长位置（每隔 8 个）上 logits 的相对 L2 误差。只有一条序列，所以只能读作“不更差”，不能读作“更好”。完整表格（包括 256 和 1,024 token 的前缀）见 <code>runs-mac/prefill-20261123/README.md</code>。</span></figcaption>
+</figure>
+
+<p><span lang="en">So mkserve's registry entry sets <code>MK_PREFILL=fast</code> through a new <code>env</code> field, while the evaluator and anyone who needs replies equal to step greedy get the exact mode. mkserve's sampling (<code>step</code>) mode now also prefills through the engine's wide passes instead of one <code>step()</code> per prompt token.</span><span lang="zh">所以 mkserve 的注册项通过新增的 <code>env</code> 字段设置 <code>MK_PREFILL=fast</code>；evaluator，以及需要回复与 step greedy 完全一致的用户，用 exact 模式。mkserve 的 sampling（<code>step</code>）模式现在也用 engine 的宽 pass 预填充，不再每个 prompt token 调一次 <code>step()</code>。</span></p>
+
+<h2 id="cache"><span lang="en">Prefix cache</span><span lang="zh">prefix cache</span></h2>
+<p><span lang="en">The K/V arrays are indexed by position, so a request that starts with the tokens of the previous one can keep them. The only state that is not by position is the conv windows, the last three inputs of four short convolutions in each of the 48 layer applications: 3.8 MB. The engine keeps a snapshot of them every 64 positions, during prefill and decode. A new request is cut back to the last snapshot inside the prefix it shares with the cached sequence and prefills only the rest.</span><span lang="zh">K/V 数组按位置索引，所以一个请求如果开头和上一个请求的 token 相同，就可以直接沿用。唯一不按位置存的状态是 conv window：48 次层应用里各有 4 个 short convolution，每个保留最近 3 个输入，一共 3.8 MB。engine 在预填充和解码过程中每 64 个位置给它存一份快照。新请求退回到它与缓存序列的公共前缀内最近的一个快照，只预填充剩下的部分。</span></p>
+<ul>
+<li><span lang="en"><strong>Exact.</strong> In the exact mode the tokens equal those after a full reset in six cases: the next turn of a chat, the same prompt, a prefix of it, a prompt that diverges after 1,000 tokens, nothing shared, and a 3,000-token prompt plus its reply.</span><span lang="zh"><strong>精确。</strong> exact 模式下，六种情况的 token 都与完全重置后的结果相同：对话的下一轮、同一个 prompt、它的一个前缀、1,000 token 之后分叉的 prompt、完全不共享、以及 3,000-token prompt 加上它的回复。</span></li>
+<li><span lang="en"><strong>Through mkserve.</strong> A chat with a 1,452-token system prompt gets its first token after 1.60 s on turn 1 and after 0.20, 0.20 and 0.18 s on the next three, with 1,408 to 1,536 prompt tokens kept. The kept tokens are reported in each API's usage (<code>cached_tokens</code>, <code>cache_read_input_tokens</code>).</span><span lang="zh"><strong>通过 mkserve。</strong> 系统 prompt 为 1,452 token 的对话，第 1 轮首 token 是 1.60 s，后三轮是 0.20、0.20、0.18 s，沿用了 1,408 到 1,536 个 prompt token。沿用的 token 数在各 API 的 usage 里报告（<code>cached_tokens</code>、<code>cache_read_input_tokens</code>）。</span></li>
+</ul>
+
+<h2 id="context"><span lang="en">Long context</span><span lang="zh">长上下文</span></h2>
+<p><span lang="en">The engine was registered with 4,096 tokens of context. A coding agent sends 10,000 to 20,000 tokens of system prompt and tool definitions before the first message, so every request from one was refused. Three things stood between the engine and a long context.</span><span lang="zh">engine 最初注册的上下文是 4,096 token。coding agent 在第一条消息之前就要发送 10,000 到 20,000 token 的系统 prompt 和工具定义，所以它的每个请求都会被拒绝。要支持长上下文，有三处要改。</span></p>
+<ul>
+<li><span lang="en"><strong>Attention scores.</strong> The decode attention kernel kept one score per key in threadgroup memory, 32 KB, enough for 7,168 keys. Only 8 of the 48 layer applications attend globally; the other 40 see a 1,024-token window and never need more scores than that. The 8 global ones now keep their scores in a device buffer: the same statements, so the same bits.</span><span lang="zh"><strong>attention 分数。</strong> 解码用的 attention kernel 把每个 key 的分数放在 threadgroup 内存里，只有 32 KB，最多放 7,168 个 key。48 次层应用里只有 8 次是全局 attention；另外 40 次只看 1,024 token 的窗口，需要的分数不会超过这个数。那 8 次全局的现在把分数放进 device buffer：语句不变，所以 bits 也不变。</span></li>
+<li><span lang="en"><strong>Log scaling.</strong> Past position 8,192 the model scales the queries of its global layers by 1 + 0.1 ln(position / 8,192). The engine had never reached such a position and did not implement it.</span><span lang="zh"><strong>log scaling。</strong> 位置超过 8,192 之后，模型会把全局层的 query 乘以 1 + 0.1 ln(position / 8,192)。engine 以前到不了这么远的位置，没有实现它。</span></li>
+<li><span lang="en"><strong>The draft head.</strong> Its passes rewrite its whole K/V every cycle, so their cost would grow with the context. Beyond 4,104 positions it is now a ring over the most recent 4,104. That changes what is proposed, never what is returned.</span><span lang="zh"><strong>draft head。</strong> 它的 pass 每个 cycle 都会重写自己的整个 K/V，开销会随上下文增长。超过 4,104 个位置后，它现在是一个只覆盖最近 4,104 个位置的环形缓冲。这只改变它提议什么，不改变返回什么。</span></li>
+</ul>
+
+<figure id="tab-context"><div class="fig-title"><h4><span lang="en">Table 6. What a larger context costs with a short prompt</span><span lang="zh">表 6. 短 prompt 下，更大的上下文要付出什么</span></h4></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th><span lang="en">Max context</span><span lang="zh">最大上下文</span></th><th class="num"><span lang="en">Decode, ms per token</span><span lang="zh">解码，每 token ms</span></th><th class="num"><span lang="en">Memory in use</span><span lang="zh">占用内存</span></th></tr></thead>
+<tbody>
+<tr><td>4,096</td><td class="num">12.3</td><td class="num">22.1 GB</td></tr>
+<tr><td>8,192</td><td class="num">12.2</td><td class="num">23.0 GB</td></tr>
+<tr><td><span lang="en">16,384 (the default now)</span><span lang="zh">16,384（现在的默认值）</span></td><td class="num">11.9</td><td class="num">24.6 GB</td></tr>
+<tr><td><span lang="en">32,768 (the limit)</span><span lang="zh">32,768（上限）</span></td><td class="num">12.9</td><td class="num">27.7 GB</td></tr>
+</tbody></table></div>
+<figcaption><span lang="en">The evaluator's synthetic prompts, 512 greedy tokens, in process. MLX holds about 6 GB more in its buffer cache at every size. The extra 5% at 32,768 is the cache flush: K/V is 196 KB per position, and MLX copies an array when a slice of it is written.</span><span lang="zh">evaluator 的 synthetic prompt，512 个 greedy token，进程内测量。每种大小下 MLX 的 buffer cache 里还另有约 6 GB。32,768 多出的 5% 来自 cache flush：K/V 每个位置 196 KB，而 MLX 在写入数组的一个切片时会复制整个数组。</span></figcaption>
+</figure>
+
+<p><span lang="en">A decode step takes 13.6 ms at position 0 and 19.0 ms at position 30,000; a fast prefill pass takes 0.76 ms per token at position 4,096 and 1.10 at 30,000. An agent-sized request over the Anthropic API (19,683 tokens of system prompt and four tool definitions) took 21.7 s to its first token the first time. The next two turns read about 19,500 tokens from the prefix cache and started after 1.07 s and 0.82 s; the third was a correct tool call.</span><span lang="zh">一个解码 step 在位置 0 是 13.6 ms，在位置 30,000 是 19.0 ms；fast 预填充 pass 在位置 4,096 是每 token 0.76 ms，在 30,000 是 1.10 ms。通过 Anthropic API 发一个 agent 规模的请求（19,683 token 的系统 prompt 加四个工具定义），第一次到首 token 用了 21.7 s。之后两轮从 prefix cache 读了约 19,500 个 token，分别在 1.07 s 和 0.82 s 后开始输出；第三轮是一次正确的 tool call。</span></p>
+<p><span lang="en">The gates stop at position 1,152, so long positions got their own check: float32 references of a 9,600-token and a 24,000-token text. The engine's top-1 token equals float32's at all 58 checked positions. At 24,000 tokens, past the log-scaling threshold, its median logit error is 0.105 against 0.089 for the reference's own BF16 path, inside the evaluator's 2× rule; with the log scaling left out, the median KL is 17 times higher. This is one text per length.</span><span lang="zh">gate 只到位置 1,152，所以长位置另外做了检查：一条 9,600 token 和一条 24,000 token 文本的 float32 reference。在检查的全部 58 个位置上，engine 的 top-1 token 都与 float32 相同。在 24,000 token 处（已过 log scaling 的阈值），它的 logit 误差中位数是 0.105，reference 自己的 BF16 路径是 0.089，在 evaluator 的 2× 规则之内；去掉 log scaling 后，KL 中位数高 17 倍。每种长度只有一条文本。</span></p>
+
+<h2 id="sampling"><span lang="en">Sampling</span><span lang="zh">sampling</span></h2>
+<p><span lang="en">Speculation was exact only for greedy decoding, so a request with a temperature was either decoded greedily or served one token per pass. Most chat clients send a temperature. Exact draft-and-verify needs each token to be a function of its own row's logits; a sampled token usually also depends on a random number drawn in sequence. The engine makes it a function of the row again: a token is <code>argmax(logits / T + noise)</code>, where the noise is a Gumbel variable hashed from (seed, position, token id). That is a draw from softmax(logits / T), and <code>top_p</code> and <code>top_k</code> only restrict the argmax to the tokens above a threshold.</span><span lang="zh">speculation 以前只对 greedy 解码是精确的，所以带 temperature 的请求要么被当成 greedy 解码，要么一个 pass 只解一个 token。而大多数聊天客户端都会发 temperature。精确的 draft-and-verify 要求每个 token 只由它所在那一行的 logits 决定；采样出的 token 通常还依赖一个按顺序抽取的随机数。engine 让它重新变成只由这一行决定：token 是 <code>argmax(logits / T + noise)</code>，其中 noise 是由 (seed, position, token id) 哈希出来的 Gumbel 变量。这等价于从 softmax(logits / T) 采样，<code>top_p</code> 和 <code>top_k</code> 只是把 argmax 限制在高于某个阈值的 token 里。</span></p>
+<p><span lang="en">A row of a verify pass then draws exactly the token a one-token step draws, because the logits have the same bits and so has the noise. The draft head draws with the same noise, which keeps its tokens close to the target's. On four prompts and four settings (temperature 0.3, 0.7, 1.0 with <code>top_p</code> 0.95, 0.8 with <code>top_k</code> 40), 256 tokens each, the request path returned exactly the tokens of step-by-step sampling with the same seed in all 16 cases.</span><span lang="zh">这样验证 pass 的每一行抽到的 token，就和单 token step 抽到的完全相同，因为 logits 的 bits 相同，noise 也相同。draft head 用同样的 noise 抽样，所以它的 token 会贴近 target 的。在 4 个 prompt × 4 种设置（temperature 0.3、0.7、1.0 加 <code>top_p</code> 0.95、0.8 加 <code>top_k</code> 40）、每个 256 token 的测试里，请求路径返回的 token 在全部 16 种情况下都与用同一个 seed 逐步采样的结果完全相同。</span></p>
+
+<figure id="tab-sampling"><div class="fig-title"><h4><span lang="en">Table 7. Tokens per second over the chat API, by sampling setting</span><span lang="zh">表 7. 不同 sampling 设置下，chat API 的 tokens/s</span></h4></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th><span lang="en">Request</span><span lang="zh">请求</span></th><th class="num"><span lang="en">Greedy</span><span lang="zh">greedy</span></th><th class="num">T 0.7</th><th class="num">T 1.0, top_p 0.95</th><th class="num"><span lang="en">One token per pass</span><span lang="zh">每 pass 一个 token</span></th></tr></thead>
+<tbody>
+<tr><td><span lang="en">A short story</span><span lang="zh">写一个短故事</span></td><td class="num">76</td><td class="num">80</td><td class="num">68</td><td class="num">68</td></tr>
+<tr><td><span lang="en">A technical explanation with code</span><span lang="zh">带代码的技术解释</span></td><td class="num">102</td><td class="num">113</td><td class="num">86</td><td class="num">68</td></tr>
+</tbody></table></div>
+<figcaption><span lang="en">400 tokens after the first, the second of two identical requests. One token per pass is mkserve's step mode on the serving check's prompt, the only way to sample before. A sampling cycle costs what a greedy one does, about 20 ms; the rate follows how many drafts are accepted.</span><span lang="zh">首 token 之后的 400 个 token，取两次相同请求中的第二次。“每 pass 一个 token”是 mkserve 的 step 模式在部署检查的 prompt 上的速度，这是以前唯一能做 sampling 的方式。一个 sampling cycle 的开销和 greedy 的一样，约 20 ms；速率取决于有多少 draft 被接受。</span></figcaption>
+</figure>
+
+<p class="note"><span lang="en">The engine with all of this added (wide prefill, prefix cache, long context, sampling) was evaluated once more in full: valid, every gate at the same value as before, 8,205 µs per token on synthetic prompts and 5,173 on natural text, inside the earlier ranges.</span><span lang="zh">加上这些之后（宽 pass 预填充、prefix cache、长上下文、sampling），engine 又完整评测了一次：valid，每项 gate 的数值都与之前相同，synthetic 是每 token 8,205 µs，自然文本是 5,173 µs，都在之前的范围内。</span></p>
+
+<h2 id="limits"><span lang="en">Limits and next</span><span lang="zh">局限与下一步</span></h2>
+<ul>
+<li><span lang="en"><strong>One sequence, one machine.</strong> Requests queue behind each other. Everything here was measured on one M5 Max with 48 GB; other Apple chips run the same kernels but are untested.</span><span lang="zh"><strong>单序列、单台机器。</strong> 请求只能排队。这里的一切都是在一台 48 GB 的 M5 Max 上测的；其他 Apple 芯片能跑同样的 kernel，但没有测过。</span></li>
+<li><span lang="en"><strong>The reference.</strong> It is float32 on one sequence, and the gates cover positions up to 1,152. Long positions were checked on two texts, outside the gates. The engine has not had the independent audit the GPU engines had.</span><span lang="zh"><strong>reference。</strong> 它是一条序列上的 float32，gate 只覆盖 1,152 以内的位置。长位置是在 gate 之外用两条文本检查的。这个 engine 还没有做过 GPU engine 那样的独立审计。</span></li>
+<li><span lang="en"><strong>Sampling</strong> is exact against the engine's own sampler, not against another implementation's random numbers. On hard prose at high temperature it is no faster than one token per pass.</span><span lang="zh"><strong>sampling</strong> 的“精确”是相对 engine 自己的 sampler，而不是相对别的实现的随机数。在高 temperature 的难散文上，它并不比每 pass 一个 token 快。</span></li>
+<li><span lang="en"><strong>Baselines.</strong> The baseline table is provisional: Ollama ran one server start, LM Studio was not measured, and the general engines' machine state is unknown.</span><span lang="zh"><strong>基线。</strong> 基线表是暂定的：Ollama 只启动了一次，LM Studio 没有测，通用 engine 测量时的机器状态未知。</span></li>
+<li><span lang="en"><strong>The draft head.</strong> On prose the head's first token is right 60–70% of the time, and that, not the passes, now limits the headline.</span><span lang="zh"><strong>draft head。</strong> 在散文上 head 的首 token 只有 60–70% 是对的，现在限制主指标的是它，而不是 pass。</span></li>
+</ul>
+
+<h2 id="refs"><span lang="en">Data and code</span><span lang="zh">数据与代码</span></h2>
+<ul class="refs">
+<li><span lang="en">Engine: <code>engines/inkling-2-mini_m5max/offline-c</code>; registry entry in <code>mkserve/registry.json</code>.</span><span lang="zh">engine：<code>engines/inkling-2-mini_m5max/offline-c</code>；注册信息在 <code>mkserve/registry.json</code>。</span></li>
+<li><span lang="en">Runs: <code>runs-mac/fable-c-m5max-1</code>, <code>runs-mac/fable-c-m5max-2</code> (ledgers, summaries, journals).</span><span lang="zh">两轮 run：<code>runs-mac/fable-c-m5max-1</code>、<code>runs-mac/fable-c-m5max-2</code>（ledger、summary、journal）。</span></li>
+<li><span lang="en">Baselines: <code>eval/baselines_inkling-2-mini_m5max_c.json</code>, <code>runs-mac/baselines-20261123-ollama</code>.</span><span lang="zh">基线：<code>eval/baselines_inkling-2-mini_m5max_c.json</code>、<code>runs-mac/baselines-20261123-ollama</code>。</span></li>
+<li><span lang="en">Error study: <code>runs-mac/deviation/README.md</code>, <code>scripts/mac_error_attribution.py</code>, <code>scripts/mac_mlxlm_layer_diff.py</code>.</span><span lang="zh">误差分析：<code>runs-mac/deviation/README.md</code>、<code>scripts/mac_error_attribution.py</code>、<code>scripts/mac_mlxlm_layer_diff.py</code>。</span></li>
+<li><span lang="en">Serving checks: <code>runs-mac/mkserve-check-20261123</code>.</span><span lang="zh">部署检查：<code>runs-mac/mkserve-check-20261123</code>。</span></li>
+<li><span lang="en">Prefill, prefix cache, long context and sampling: <code>runs-mac/prefill-20261123</code> (timings, exactness and accuracy checks, scripts).</span><span lang="zh">预填充、prefix cache、长上下文和 sampling：<code>runs-mac/prefill-20261123</code>（计时、精确性和精度检查、脚本）。</span></li>
+<li><span lang="en">Mac guide: <code>mac/README.md</code>.</span><span lang="zh">Mac 使用说明：<code>mac/README.md</code>。</span></li>
+</ul>
+
+</div></div>
+
+<script>
+(function () {
+  // language toggle
+  var root = document.documentElement;
+  function setLang(l) {
+    root.setAttribute('data-lang', l);
+    root.lang = l === 'zh' ? 'zh-CN' : 'en';
+    document.querySelectorAll('.langsw button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.l === l)); });
+    try { localStorage.setItem('lang', l); } catch (e) {}
+  }
+  var saved = null; try { saved = localStorage.getItem('lang'); } catch (e) {}
+  setLang(saved === 'zh' || saved === 'en' ? saved : 'en');
+  document.querySelectorAll('.langsw button').forEach(function (b) { b.addEventListener('click', function () { setLang(b.dataset.l); }); });
+
+  // Figure 1: microseconds per token -> tokens/s
+  var rows = [
+    { en: 'mlx-lm', zh: 'mlx-lm', sub: 'checkpoint formats', subzh: 'checkpoint 原生格式', s: 30359, n: 30486 },
+    { en: 'Ollama 0.40 (MLX)', zh: 'Ollama 0.40（MLX）', sub: 'checkpoint formats', subzh: 'checkpoint 原生格式', s: 31291, n: 30748 },
+    { en: 'llama.cpp', zh: 'llama.cpp', sub: 'Q4_K_M', subzh: 'Q4_K_M', s: 25130, n: 25030 },
+    { en: 'llama.cpp + DSpark', zh: 'llama.cpp + DSpark', sub: 'Q4_K_M, PR #32218', subzh: 'Q4_K_M，PR #32218', s: 20556, n: 16323 },
+    { en: 'oMLX', zh: 'oMLX', sub: 'oQ4e requantization', subzh: 'oQ4e 重量化', s: 16744, n: 16779 },
+    { en: 'oMLX + DSpark', zh: 'oMLX + DSpark', sub: 'oQ4e, fastest general engine', subzh: 'oQ4e，最快的通用 engine', s: 13767, n: 8307 },
+    { en: 'Ours, DSpark only', zh: '我们的，仅 DSpark', sub: 'copy proposals off (control)', subzh: '关掉 copy proposals（对照）', s: 8808, n: 6847, ours: true },
+    { en: 'Ours, run 1', zh: '我们的，第一轮', sub: 'checkpoint formats', subzh: 'checkpoint 原生格式', s: 8982, n: 5333, ours: true },
+    { en: 'Ours, run 2', zh: '我们的，第二轮', sub: 'checkpoint formats, 12-bit dense code', subzh: 'checkpoint 原生格式，12-bit dense 编码', s: 8100, n: 5143, ours: true }
+  ];
+  var max = 240, host = document.getElementById('bars'), html = '';
+  rows.forEach(function (r) {
+    var ts = 1e6 / r.s, tn = 1e6 / r.n;
+    function bar(cls, t) {
+      var w = Math.min(100, t / max * 100);
+      return '<div class="bar ' + cls + '"><i style="width:' + w.toFixed(2) + '%"></i><em style="left:' + w.toFixed(2) + '%">' + t.toFixed(1) + '</em></div>';
+    }
+    html += '<div class="name' + (r.ours ? ' row-ours' : '') + '"><b><span lang="en">' + r.en + '</span><span lang="zh">' + r.zh + '</span></b><span class="sub"><span lang="en">' + r.sub + '</span><span lang="zh">' + r.subzh + '</span></span></div>';
+    html += '<div class="pair' + (r.ours ? ' row-ours' : '') + '">' + bar('syn', ts) + bar('nat', tn) + '</div>';
+  });
+  html += '<div class="axis"><span>0</span><span>60</span><span>120</span><span>180</span><span>240 tok/s</span></div>';
+  host.innerHTML = html;
+
+  // Figure 2: progress over both runs (synthetic us/token), x in hours 0..12
+  var r1 = [[0.53,15646],[0.77,10545],[0.97,14178],[1.24,9758],[1.56,9745],[2.06,9496],[2.72,11851],[3.9,9029],[4.97,8982],[5.21,10070],[5.4,8975],[5.59,8658],[5.8,9070],[5.88,9927],[5.95,9812]];
+  var r1c = [[1.47,11145],[4.28,9799],[5.72,9910]];
+  var r2 = [[0.13,9394],[0.5,9031],[1.08,8550],[1.46,8528],[2.22,8248],[2.4,8249],[2.6,8985],[2.78,8241],[3.42,8105],[3.87,8096],[4.65,9252],[4.96,8165],[5.23,8203],[5.51,8333],[5.85,8040],[5.92,8061]];
+  var r2c = [[1.61,9118],[3.05,9021],[3.68,8808]];
+  var W = 880, H = 330, L = 74, R = 16, T = 14, B = 40;
+  var y0 = 7000, y1 = 17500;
+  function X(h) { return L + h / 12 * (W - L - R); }
+  function Y(v) { return T + (y1 - v) / (y1 - y0) * (H - T - B); }
+  var svg = document.getElementById('prog'), out = '';
+  [8000, 10000, 12000, 14000, 16000].forEach(function (v) {
+    out += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v) + '" y2="' + Y(v) + '" stroke="var(--rule)" stroke-width="1"/>';
+    out += '<text x="' + (L - 8) + '" y="' + (Y(v) + 4) + '" text-anchor="end">' + v.toLocaleString('en-US') + '</text>';
+  });
+  [0, 2, 4, 6, 8, 10, 12].forEach(function (h) {
+    out += '<text x="' + X(h) + '" y="' + (H - B + 18) + '" text-anchor="middle">' + h + ' h</text>';
+  });
+  out += '<line x1="' + X(6) + '" x2="' + X(6) + '" y1="' + T + '" y2="' + (H - B) + '" stroke="var(--rule-2)" stroke-width="1"/>';
+  out += '<text x="' + X(3) + '" y="' + (T + 12) + '" text-anchor="middle" class="lbl">Run 1</text>';
+  out += '<text x="' + X(9) + '" y="' + (T + 12) + '" text-anchor="middle" class="lbl">Run 2</text>';
+  out += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(13767) + '" y2="' + Y(13767) + '" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="5 4"/>';
+  out += '<text x="' + (W - R - 4) + '" y="' + (Y(13767) - 6) + '" text-anchor="end" style="fill:var(--warn)">oMLX + DSpark 13,767</text>';
+  function dots(arr, off, filled) {
+    arr.forEach(function (p) {
+      var cx = X(p[0] + off), cy = Y(p[1]);
+      out += filled ? '<circle cx="' + cx + '" cy="' + cy + '" r="4.2" fill="var(--ours)"/>'
+                    : '<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="var(--bg)" stroke="var(--gray)" stroke-width="1.6"/>';
+    });
+  }
+  dots(r1c, 0, false); dots(r2c, 6, false); dots(r1, 0, true); dots(r2, 6, true);
+  out += '<text x="' + X(0.1) + '" y="' + (T + 12) + '" text-anchor="start">↑ 26,852 (0.3 h)</text>';
+  out += '<text transform="translate(12 ' + ((T + H - B) / 2) + ') rotate(-90)" text-anchor="middle">µs per token</text>';
+  svg.innerHTML = out;
+})();
+</script>

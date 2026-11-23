@@ -1,0 +1,79 @@
+diff --git a/engine/api.py b/engine/api.py
+index 6b24324..845d98c 100644
+--- a/engine/api.py
++++ b/engine/api.py
+@@ -42,7 +42,7 @@ class Engine:
+ 
+     def _warm(self):
+         """Compile every kernel variant (K = 1..8) before anything is timed."""
+-        for K in list(range(1, 9)) + [16]:
++        for K in list(range(1, 9)) + [12, 15, 16]:
+             lg = self.tg.forward(mx.zeros((K,), dtype=mx.int32))
+             self.tg.commit(K)
+             mx.eval(lg)
+diff --git a/engine/mk_draft.py b/engine/mk_draft.py
+index 2c938a5..4df0677 100644
+--- a/engine/mk_draft.py
++++ b/engine/mk_draft.py
+@@ -65,6 +65,8 @@ class Draft:
+         self.kmin = int(os.environ.get("MK_KMIN", "1"))
+         self.skip_low = float(os.environ.get("MK_SKIP_LOW", "0.5"))
+         self.skip_n = int(os.environ.get("MK_SKIP_N", "0"))
++        self.chain_th = float(os.environ.get("MK_CHAIN", "1.0"))        # >= 1: no chained second block
++        self.theta2 = float(os.environ.get("MK_CHAIN_TH2", "0.3"))
+         self.ng_min = int(os.environ.get("MK_NGRAM", "5"))
+         self.ng_wide = os.environ.get("MK_WIDE", "1") == "1"
+         w = mx.load(str(Path(model_dir) / "mtp.safetensors"))
+@@ -154,14 +156,14 @@ class Draft:
+             self.vc[l][pos:pos + n] = kv[:, 1024:].reshape(n, 8, 128)
+         self.frow = [x[n - 1:n] for x in feats]
+ 
+-    def _pure(self, anchor, cpos, kc, vc, frow):
++    def _pure(self, anchor, cpos, bpos, kc, vc, frow):
+         """The draft as a pure function with static shapes (traced once by mx.compile): the context is the whole K/V
+         array with a mask on the positions (>= c, or outside the window of the local layers)."""
+         tg = self.tg
+         nd = NB - 1
+         e = rms(tg.embed[anchor].astype(F32), tg.embed_norm)
+         x = mx.concatenate([e, mx.broadcast_to(self.mask_embed[None], (NB - 1, 2304))])
+-        pos = cpos + mx.arange(NB).astype(F32)
++        pos = bpos + mx.arange(NB).astype(F32)          # the block's positions; the context ends before cpos
+         vis_g = self.tpos < cpos
+         vis_l = vis_g & (self.tpos >= cpos - self.window)
+         zero8 = mx.zeros((NB,), dtype=F32)
+@@ -211,11 +213,14 @@ class Draft:
+             drafts.append(prev)
+         return mx.concatenate(drafts), mx.concatenate(probs)
+ 
+-    def propose(self, anchor, c: int, nd: int = NB - 1):
+-        """anchor: int32 [1], the token at position c -> (drafts int32 [7], probs float32 [7]), lazy."""
++    def propose(self, anchor, c: int, nd: int = NB - 1, b: int | None = None):
++        """anchor: int32 [1], the token at position b (default c); the context is positions < c -> (drafts int32 [7],
++        probs float32 [7]), lazy. b > c is a chained block: its anchor is a draft and positions c .. b - 1 have no
++        target features yet."""
+         if self._fn is None:
+             self._fn = mx.compile(self._pure) if os.environ.get("MK_COMPILE", "1") == "1" else self._pure
+-        return self._fn(anchor, mx.array([float(c)], dtype=F32), self.kc, self.vc, self.frow)
++        return self._fn(anchor, mx.array([float(c)], dtype=F32), mx.array([float(c if b is None else b)], dtype=F32),
++                        self.kc, self.vc, self.frow)
+ 
+     def warm(self):
+         z = mx.zeros((8, 2304), dtype=F32)
+@@ -257,6 +262,17 @@ class Draft:
+             kd = max(self.kmin, int((cum >= self.theta).cumprod().sum()))
+             if p[0] < self.skip_low:
+                 act["skip"] = self.skip_n
++            if self.chain_th < 1.0 and kd == nd and cum[-1] >= self.chain_th and left - 1 >= 14:
++                # a second block anchored on the 7th draft (no target features for the drafted positions yet)
++                d2, p2 = self.propose(mx.array([int(d[-1])], dtype=mx.int32), c, nd, b=c + nd)
++                mx.eval(d2, p2)
++                d2, p2 = np.array(d2), np.array(p2)
++                k2 = int((cum[-1] * np.cumprod(p2) >= self.theta2).cumprod().sum())
++                k2 = 7 if k2 >= 7 else (4 if k2 >= 4 else 0)            # passes of 8, 12 or 15 rows
++                if k2:
++                    d = np.concatenate([d, d2[:k2]])
++                    kd = nd + k2
++                    eng.counters["chained"] = eng.counters.get("chained", 0) + 1
+         t1 = time.perf_counter()
+         kd = max(0, min(kd, left - 1))
+         K = 1 + kd

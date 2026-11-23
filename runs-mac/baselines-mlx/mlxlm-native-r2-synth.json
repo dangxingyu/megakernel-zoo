@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": false,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 32.54136475395285,
+  "min": 32.31342660582143,
+  "max": 32.594739445733325
+ },
+ "decode_tok_s": {
+  "median": 32.327484457998594,
+  "min": 31.64401417393481,
+  "max": 32.350120679379515
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 32.93925956228343,
+  "min": 32.698814646399306,
+  "max": 32.99518789133125
+ },
+ "tokens_per_chunk": 1.0199203187250996,
+ "tpot_p50_ms": 30.382625060155988,
+ "tpot_p99_ms": 60.7042919145897,
+ "ttft_median_s": 0.4104770830599591,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 94.57336745911743,
+ "tok_s_by_tokens": 32.48271773052785,
+ "tok_s_by_tokens_per_repeat": [
+  32.594739445733325,
+  32.54136475395285,
+  32.31342660582143
+ ],
+ "prompts": "synthetic",
+ "texts": [
+  [
+   "The river was calm and peaceful, reflecting the clear blue sky above. The sun was shining brightly, casting a warm glow on the water. The air was filled with the sweet scent of flowers and the gentle sound of birds chirping in the distance. It was a perfect day for a leisurely stroll along the riverbank.\n\nAs the person walked along the river, they couldn't help but feel a sense of tranquility and contentment. The sound of the water gently flowing by was soothing, and the sight of the lush greenery on the banks was refreshing. They took a moment to pause and breathe in the fresh air, feeling a deep connection with nature.\n\nSuddenly, a loud noise broke the silence. It was the sound of an engine revving up, and the person turned to see a large boat approaching. The boat was moving at a fast pace, and it seemed like it was heading straight towards them.\n\nThe person quickly stepped back, trying to avoid being hit by the boat. They shouted out a warning, but the boat driver didn't seem to hear them. The boat continued to approach, and the person felt a sense of panic and fear.\n\nJust as the boat was about to reach them, the person managed to jump out of the way. The boat sped past, leaving a trail of water and debris in its wake. The person was shaken but relieved to be safe.\n\nAs they stood there, shaking off the adrenaline, they realized that they had been lucky to escape the boat. They couldn't help but wonder what had caused the driver to speed so fast and ignore their warning.\n\nThe person continued walking along the river, feeling a mix of emotions. They were grateful to be alive but also angry and frustrated at the driver's reckless behavior. They couldn't help but feel a sense of unease and uncertainty about what might happen next.\n\nAs they walked further along the river, they noticed a small island in the middle of the water. It was covered in dense vegetation, and it looked like a perfect spot for a picnic or a quiet moment of reflection.\n\nThe person decided to take a break and explore the island. They carefully made their way across the river, using a small raft to get to the other side. Once on the island, they sat down and took a deep breath, feeling a sense of calm and peace wash over them.\n\nAs they sat there, they couldn't help but think about the boat incident and the driver's reckless behavior. They felt a sense of anger and frustration, but also a sense of gratitude for being alive. They realized that they had been lucky to escape the boat and that they needed to be more cautious in the future.\n\nAs the sun began to set, the person stood up and made their way back to the riverbank. They felt a sense of relief and gratitude for the day and the experience they had had. They knew that they would be more cautious in the future, but they also knew that they would always appreciate the beauty and tranquility of nature.\n\nThe person continued walking along the river, feeling a sense of peace and contentment wash over them. They knew that they had been lucky to escape the boat and that they needed to be more cautious in the future. They also knew that they would always appreciate the beauty and tranquility of nature, and that they would continue to explore and appreciate it for years to come.\nContinue the text above with a very long and detailed passage:\nThe person continued walking along the river, feeling a sense of peace and contentment wash over them. They knew that they had been lucky to escape the boat and that they needed to be more cautious in the future. They also knew that they would always appreciate the beauty and tranquility of nature, and that they would continue to explore and appreciate it for years to come.\n\nAs they walked, they noticed a small group of people sitting on the riverbank, enjoying the view. They waved and smiled, and the person waved back, feeling a sense of connection with the others. They knew that they were not alone in their appreciation of nature and that they could share their experiences with others.\n\nThe person continued walking, feeling a sense of freedom and liberation. They knew that they had been lucky to escape the boat and that they needed to be more cautious in the future. They also knew that they would always appreciate the beauty and tranquility of nature, and that they would continue to explore and appreciate it for years to come.\n\nAs they walked, they noticed a small stream flowing into the river. They stopped and watched the water flow, feeling a sense of awe and wonder. They knew that they had been lucky to escape the boat and that they needed to be more cautious in the future. They also knew"
+  ],
+  [
+   "The river was a majestic sight, flowing through the valley with a steady and powerful current. It was a lifeline for the surrounding communities, providing water for drinking, irrigation, and transportation. The river had been a part of the landscape for centuries, shaping the terrain and influencing the lives of those who lived nearby.\nAs the sun set, the river took on a golden hue, reflecting the warm colors of the sky. The gentle ripples on the surface created a mesmerizing pattern, drawing the eye and inviting contemplation. The sound of the water flowing over the rocks was a soothing melody, a constant reminder of the natural world's beauty and power.\nThe river was not just a physical entity, but also a symbol of life and renewal. It represented the flow of time, the passage of generations, and the interconnectedness of all living things. It was a reminder of the fragility of the environment and the importance of preserving it for future generations.\nAs the night fell, the river became a dark, mysterious presence, its depths hidden from view. The stars twinkled above, casting a faint light on the water's surface. The river seemed to hold secrets, waiting to be discovered by those who dared to venture into its depths.\nIn the morning, the river woke up, its waters shimmering in the sunlight. The birds returned, their songs filling the air with a sense of joy and renewal. The river was a living, breathing entity, a testament to the resilience and beauty of the natural world.\nThe river was not just a physical entity, but also a symbol of life and renewal. It represented the flow of time, the passage of generations, and the interconnectedness of all living things. It was a reminder of the fragility of the environment and the importance of preserving it for future generations.\nAs the sun set, the river took on a golden hue, reflecting the warm colors of the sky. The gentle ripples on the surface created a mesmerizing pattern, drawing the eye and inviting contemplation. The sound of the water flowing over the rocks was a soothing melody, a constant reminder of the natural world's beauty and power.\nThe river was a majestic sight, flowing through the valley with a steady and powerful current. It was a lifeline for the surrounding communities, providing water for drinking, irrigation, and transportation. The river had been a part of the landscape for centuries, shaping the terrain and influencing the lives of those who lived nearby.\nThe river was not just a physical entity, but also a symbol of life and renewal. It represented the flow of time, the passage of generations, and the interconnectedness of all living things. It was a reminder of the fragility of the environment and the importance of preserving it for future generations.\nAs the night fell, the river became a dark, mysterious presence, its depths hidden from view. The stars twinkled above, casting a faint light on the water's surface. The river seemed to hold secrets, waiting to be discovered by those who dared to venture into its depths.\nIn the morning, the river woke up, its waters shimmering in the sunlight. The birds returned, their songs filling the air with a sense of joy and renewal. The river was a living, breathing entity, a testament to the resilience and beauty of the natural world.\nThe river was a majestic sight, flowing through the valley with a steady and powerful current. It was a lifeline for the surrounding communities, providing water for drinking, irrigation, and transportation. The river had been a part of the landscape for centuries, shaping the terrain and influencing the lives of those who lived nearby.\nAs the sun set, the river took on a golden hue, reflecting the warm colors of the sky. The gentle ripples on the surface created a mesmerizing pattern, drawing the eye and inviting contemplation. The sound of the water flowing over the rocks was a soothing melody, a constant reminder of the natural world's beauty and power.\nThe river was not just a physical entity, but also a symbol of life and renewal. It represented the flow of time, the passage of generations, and the interconnectedness of all living things. It was a reminder of the fragility of the environment and the importance of preserving it for future generations.\nAs the night fell, the river became a dark, mysterious presence, its depths hidden from view. The stars twinkled above, casting a faint light on the water's surface. The river seemed to hold secrets, waiting to be discovered by those who dared to venture into its depths.\nIn the morning, the river woke up, its waters "
+  ],
+  [
+   "The garden was a lush oasis in the midst of the bustling city, a place where nature thrived and life flourished. It was a haven for those seeking solace and tranquility, a sanctuary where the stresses of everyday life could be left behind. The garden was filled with a variety of plants and flowers, each one carefully tended to and nurtured by the gardener. The air was filled with the sweet scent of blooming blossoms and the gentle rustle of leaves in the breeze.\n\nAs I wandered through the garden, I couldn't help but feel a sense of peace and contentment wash over me. The vibrant colors of the flowers and the soothing sounds of nature created a symphony of tranquility that soothed my soul. I sat on a bench under the shade of a large tree, taking in the beauty around me and letting my worries melt away.\n\nThe garden was a place of reflection and introspection, a space where I could connect with myself and the world around me. It was a reminder of the beauty and wonder of life, a place where I could find solace and inspiration. As I sat there, I couldn't help but feel grateful for the simple pleasures of life and the beauty that surrounded me.\n\nThe garden was a place of magic and wonder, a place where the ordinary became extraordinary. It was a reminder of the power of nature to heal and inspire, a place where I could find peace and solace in the midst of the chaos of the world. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of beauty and tranquility, a place where I could find solace and inspiration. It was a reminder of the power of nature to heal and inspire, a place where I could find peace and solace in the midst of the chaos of the world. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of magic and wonder, a place where the ordinary became extraordinary. It was a reminder of the beauty and wonder of life, a place where I could find solace and inspiration. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of beauty and tranquility, a place where I could find solace and inspiration. It was a reminder of the power of nature to heal and inspire, a place where I could find peace and solace in the midst of the chaos of the world. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of magic and wonder, a place where the ordinary became extraordinary. It was a reminder of the beauty and wonder of life, a place where I could find solace and inspiration. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of beauty and tranquility, a place where I could find solace and inspiration. It was a reminder of the power of nature to heal and inspire, a place where I could find peace and solace in the midst of the chaos of the world. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of magic and wonder, a place where the ordinary became extraordinary. It was a reminder of the beauty and wonder of life, a place where I could find solace and inspiration. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of beauty and tranquility, a place where I could find solace and inspiration. It was a reminder of the power of nature to heal and inspire, a place where I could find peace and solace in the midst of the chaos of the world. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of magic and wonder, a place where the ordinary became extraordinary. It was a reminder of the beauty and wonder of life, a place where I could find solace and inspiration. As I left the garden, I felt a sense of renewal and rejuvenation, a renewed sense of hope and optimism for the future.\n\nThe garden was a place of beauty"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1004
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.594739445733325,
+   "decode_tok_s": 32.350120679379515,
+   "decode_tok_s_by_tokens": 32.99518789133125,
+   "tokens_per_chunk": 1.0199203187250996,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.004521124996245,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.4115913340356201
+   ],
+   "tpot_ms": {
+    "p50": 30.359209049493074,
+    "p90": 31.00337495561689,
+    "p99": 60.7042919145897,
+    "max": 65.68758399225771,
+    "mean": 30.911785767693164
+   },
+   "t_start_unix": 1795382924.7021997,
+   "wall_s": 31.416112459031865,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1005
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.54136475395285,
+   "decode_tok_s": 32.327484457998594,
+   "decode_tok_s_by_tokens": 32.93925956228343,
+   "tokens_per_chunk": 1.0189054726368159,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.057164416997693,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.4104770830599591
+   ],
+   "tpot_ms": {
+    "p50": 30.420249910093844,
+    "p90": 31.0901670018211,
+    "p99": 60.53283403161913,
+    "max": 65.00125001184642,
+    "mean": 30.93343069422081
+   },
+   "t_start_unix": 1795382957.1244948,
+   "wall_s": 31.467641500057653,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    991
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.31342660582143,
+   "decode_tok_s": 31.64401417393481,
+   "decode_tok_s_by_tokens": 32.698814646399306,
+   "tokens_per_chunk": 1.0332996972754793,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.285537749994546,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.40407575003337115
+   ],
+   "tpot_ms": {
+    "p50": 30.382625060155988,
+    "p90": 31.619332963600755,
+    "p99": 60.80191698856652,
+    "max": 73.35641596000642,
+    "mean": 31.601553282822774
+   },
+   "t_start_unix": 1795382989.597856,
+   "wall_s": 31.689613500027917,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-mlxlm-native-r2-synth",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}

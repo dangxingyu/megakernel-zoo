@@ -1,0 +1,71 @@
+diff --git a/engine/mk_draft.py b/engine/mk_draft.py
+index a92f99d..f16b980 100644
+--- a/engine/mk_draft.py
++++ b/engine/mk_draft.py
+@@ -26,7 +26,8 @@ def rms(x, w=None, eps=1e-6):
+ def ngram(hist, min_match: int, n: int = NB - 1, max_match: int = 24):
+     """Copy proposal from the sequence's own history: the longest earlier occurrence (>= min_match tokens, the most
+     recent among the longest) of the suffix that ends at the anchor hist[-1]; its continuation, read periodically when
+-    it runs into the end of the history, is the proposal. Returns a list of n tokens or None."""
++    it runs into the end of the history, is the proposal. Returns (list of n tokens, index of the matched anchor) or
++    None."""
+     L = len(hist)
+     if L < min_match + 1:
+         return None
+@@ -45,8 +46,14 @@ def ngram(hist, min_match: int, n: int = NB - 1, max_match: int = 24):
+                 break
+     if best < min_match:
+         return None
+-    period = L - 1 - bj
+-    return [int(h[bj + 1 + (i % period)]) for i in range(n)]
++    return copy_from(hist, bj, n), bj
++
++
++def copy_from(hist, src: int, n: int):
++    """The n tokens that followed hist[src], read periodically (period = distance from src to the anchor hist[-1])
++    when they run into the end of the history."""
++    period = len(hist) - 1 - src
++    return [int(hist[src + 1 + (i % period)]) for i in range(n)]
+ 
+ 
+ class Draft:
+@@ -67,6 +74,8 @@ class Draft:
+         self.skip_n = int(os.environ.get("MK_SKIP_N", "0"))
+         self.ng_min = int(os.environ.get("MK_NGRAM", "5"))
+         self.ng_wide = os.environ.get("MK_WIDE", "1") == "1"
++        self.follow = os.environ.get("MK_FOLLOW", "1") == "1"
++        self.follow_min = int(os.environ.get("MK_FOLLOW_MIN", "2"))
+         w = mx.load(str(Path(model_dir) / "mtp.safetensors"))
+         u16 = lambda a: mx.contiguous(a).view(mx.uint16)  # noqa: E731
+         f32 = lambda k: w[k].astype(F32)  # noqa: E731
+@@ -254,7 +263,18 @@ class Draft:
+         t0 = time.perf_counter()
+         # copy proposals: 7 drafts, or 15 (a 16-row pass) while the previous copy cycle was accepted in full
+         wide = self.ng_wide and act.get("ng_full", False) and left - 1 >= 15
+-        cont = ngram(act["hist"], self.ng_min, 15 if wide else nd) if self.ng_min > 0 else None
++        hist = act["hist"]
++        r = ngram(hist, self.ng_min, 15 if wide else nd) if self.ng_min > 0 else None
++        cont, src = r if r is not None else (None, None)
++        if cont is None and self.follow and act.get("copy_src") is not None:
++            # the last copy pass was accepted in part: a repeat with a changed token. Keep reading the same earlier
++            # occurrence past the changed token instead of waiting for 5 new tokens to line up.
++            src = act["copy_src"]
++            cont = copy_from(hist, src, nd)
++            eng.counters["follow_cycles"] = eng.counters.get("follow_cycles", 0) + 1
++            follow = True
++        else:
++            follow = False
+         if cont is not None:
+             d = np.asarray(cont, dtype=np.int64)
+             kd = len(cont)
+@@ -300,6 +320,10 @@ class Draft:
+         eng.counters["verify_s"] = eng.counters.get("verify_s", 0.0) + (time.perf_counter() - t1)
+         eng.counters["host_syncs"] += 2
+         act["ng_full"] = cont is not None and a == kd and kd >= nd
++        # where the same occurrence continues after this cycle's tokens (one token replaced at the miss)
++        act["copy_src"] = src + a + 1 if (cont is not None and a >= self.follow_min and a < kd) else None
++        if follow:
++            eng.counters["follow_tokens"] = eng.counters.get("follow_tokens", 0) + n_acc
+         if cont is not None:
+             eng.counters["ngram_tokens"] = eng.counters.get("ngram_tokens", 0) + n_acc
+             if K == 16:

@@ -1,0 +1,4 @@
+{"turn": 1, "prompt_tokens": 1452, "cached_tokens": 0, "ttft_ms": 1599, "seconds": 2.87, "completion_tokens": 134, "reply": "Most of the error comes from BF16 expert-routing flips—near-tied 8th/9"}
+{"turn": 2, "prompt_tokens": 1511, "cached_tokens": 1408, "ttft_ms": 204, "seconds": 1.26, "completion_tokens": 130, "reply": "The unembedding contributes least—essentially 0 median error."}
+{"turn": 3, "prompt_tokens": 1541, "cached_tokens": 1472, "ttft_ms": 197, "seconds": 1.21, "completion_tokens": 103, "reply": "Unembedding contributes the least error"}
+{"turn": 4, "prompt_tokens": 1559, "cached_tokens": 1536, "ttft_ms": 175, "seconds": 2.29, "completion_tokens": 200, "reply": ""}

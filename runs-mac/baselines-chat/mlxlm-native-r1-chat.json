@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 512,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "chat",
+ "one_chunk_per_token": false,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 175,
+ "prompt_tokens_seen": [
+  43,
+  66,
+  89
+ ],
+ "e2e_tok_s": {
+  "median": 31.913899927760834,
+  "min": 31.247777254808845,
+  "max": 32.09822914434733
+ },
+ "decode_tok_s": {
+  "median": 31.635394713743345,
+  "min": 28.216129566411347,
+  "max": 32.11182173381672
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 34.61986591315309,
+  "min": 33.9618855374111,
+  "max": 34.96870758230466
+ },
+ "tokens_per_chunk": 1.09375,
+ "tpot_p50_ms": 29.37762497458607,
+ "tpot_p99_ms": 59.482375043444335,
+ "ttft_median_s": 0.5169451249530539,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 579,
+ "wall_total_s": 18.20859820698388,
+ "tok_s_by_tokens": 31.79816443958467,
+ "tok_s_by_tokens_per_repeat": [
+  32.09822914434733,
+  31.913899927760834,
+  31.247777254808845
+ ],
+ "prompts": "natural text (prompts file)",
+ "texts": [
+  [
+   "<|message_model|><|content_thinking|>The user asks: Given a 7-day week, how much does Alex charge for 2 weeks of tutoring if she charges $12 per day?\n\nNeed interpret: 7-day week means 7 days per week. 2 weeks = 14 days. $12 per day * 14 = $168. Need answer concise. But consider ambiguity: tutoring per day maybe per day of week? Given 7-day week, yes 7 days/week. 2 weeks = 14 days. 14*12=168. Provide calculation.\n\nNeed final only. Ensure no extra. Could mention assuming she tutors every day. Answer: $168.<|end_message|><|message_model|><|content_text|>2 weeks \u00d7 7 days/week = 14 days.  \n14 days \u00d7 $12/day = **$168**.<|end_message|>"
+  ],
+  [
+   "<|message_model|><|content_thinking|>The user asks: \"A family of parents and a child go to the cinema. The cost of an adult ticket is $12 and a child ticket is $8. Then they buy 2 popcorns for $3 each. How many dollars do they pay in total?\"\n\nNeed parse ambiguity: \"A family of parents and a child\" likely means two parents and one child. Adult tickets: 2 adults * $12 = $24. Child ticket: 1 * $8 = $8. Popcorns: 2 * $3 = $6. Total = 24+8+6 = $38.\n\nNeed answer concise. Could mention assumption. Ensure no hidden trick: \"parents\" plural = 2 parents. \"a child\" singular = 1 child. Total family = 3 people. Yes.\n\nNeed final only. No need for more tools. Provide calculation.<|end_message|><|message_model|><|content_text|>Assuming 2 parents and 1 child:\n\n- Adult tickets: 2 \u00d7 $12 = $24  \n- Child ticket: 1 \u00d7 $8 = $8  \n- Popcorns: 2 \u00d7 $3 = $6  \n\nTotal: $24 + $8 + $6 = **$38**<|end_message|>"
+  ],
+  [
+   "<|message_model|><|content_thinking|>First bag: 300 M&Ms\nSecond bag: 300 + 12 = 312 M&Ms\nThird bag: 300 / 2 = 150 M&Ms\n\nTotal: 300 + 312 + 150 = 762\n\nLet me compute: 300 + 312 = 612; 612 + 150 = 762.<|end_message|><|message_model|><|content_text|>**First bag:** 300 M&Ms\n\n**Second bag:** 300 + 12 = 312 M&Ms\n\n**Third bag:** 300 \u00f7 2 = 150 M&Ms\n\n**Total:** 300 + 312 + 150 = **762 M&Ms**<|end_message|>"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    175
+   ],
+   "chunks": [
+    160
+   ],
+   "prompt_tokens": [
+    43
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 32.09822914434733,
+   "decode_tok_s": 31.635394713743345,
+   "decode_tok_s_by_tokens": 34.61986591315309,
+   "tokens_per_chunk": 1.09375,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 5.026016000076197,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.4259981659706682
+   ],
+   "tpot_ms": {
+    "p50": 29.37762497458607,
+    "p90": 30.25449998676777,
+    "p99": 59.482375043444335,
+    "max": 59.73333399742842,
+    "mean": 31.610163522491806
+   },
+   "t_start_unix": 1795385138.1248734,
+   "wall_s": 5.452014166046865,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    258
+   ],
+   "chunks": [
+    244
+   ],
+   "prompt_tokens": [
+    66
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 31.913899927760834,
+   "decode_tok_s": 32.11182173381672,
+   "decode_tok_s_by_tokens": 33.9618855374111,
+   "tokens_per_chunk": 1.0573770491803278,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 7.567306583048776,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.5169451249530539
+   ],
+   "tpot_ms": {
+    "p50": 29.640499968081713,
+    "p90": 30.519000021740794,
+    "p99": 60.501958010718226,
+    "max": 64.13612503092736,
+    "mean": 31.14117935411019
+   },
+   "t_start_unix": 1795385163.608297,
+   "wall_s": 8.08425170800183,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    146
+   ],
+   "chunks": [
+    118
+   ],
+   "prompt_tokens": [
+    89
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 31.247777254808845,
+   "decode_tok_s": 28.216129566411347,
+   "decode_tok_s_by_tokens": 34.96870758230466,
+   "tokens_per_chunk": 1.2372881355932204,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 4.146564457914792,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.5257678750203922
+   ],
+   "tpot_ms": {
+    "p50": 29.13525002077222,
+    "p90": 57.78037500567734,
+    "p99": 58.74637491069734,
+    "max": 58.82925004698336,
+    "mean": 35.44072186251959
+   },
+   "t_start_unix": 1795385191.729967,
+   "wall_s": 4.672332332935184,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-mlxlm-native-r1-chat",
+ "extra_body": {}
+}

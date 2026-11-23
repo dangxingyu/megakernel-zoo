@@ -1,0 +1,6 @@
+{"question": "Write a short story about a ", "sampling": "temperature 0", "tokens": 400, "tokens_per_s": 76.4, "same_text_again": true, "text": "The user asks for a short story about a lighthouse keeper wh"}
+{"question": "Write a short story about a ", "sampling": "temperature 0.7", "tokens": 400, "tokens_per_s": 79.8, "same_text_again": true, "text": "The user asks for a short story about a lighthouse keeper wh"}
+{"question": "Write a short story about a ", "sampling": "temperature 1.0, top_p 0.95", "tokens": 400, "tokens_per_s": 67.5, "same_text_again": true, "text": "The user asks for a short story about a lighthouse keeper wh"}
+{"question": "Explain how a hash table wor", "sampling": "temperature 0", "tokens": 400, "tokens_per_s": 102.4, "same_text_again": true, "text": "The user asks for explanation of hash table with small Pytho"}
+{"question": "Explain how a hash table wor", "sampling": "temperature 0.7", "tokens": 400, "tokens_per_s": 112.6, "same_text_again": true, "text": "The user asks explain how hash table works with small Python"}
+{"question": "Explain how a hash table wor", "sampling": "temperature 1.0, top_p 0.95", "tokens": 400, "tokens_per_s": 86.4, "same_text_again": true, "text": "The user asks explain how hash table works with small Python"}

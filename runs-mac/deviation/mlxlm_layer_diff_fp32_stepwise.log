@@ -1,0 +1,50 @@
+applications: mlx-lm 48, reference 48; routers: mlx-lm 48
+{"app": 0, "rel_median": 0.000232, "rel_max": 0.000641, "pos_of_max": 61, "route_rows_differ": 0}
+{"app": 1, "rel_median": 0.000215, "rel_max": 0.000422, "pos_of_max": 62, "route_rows_differ": 0}
+{"app": 2, "rel_median": 0.000219, "rel_max": 0.000414, "pos_of_max": 20, "route_rows_differ": 0}
+{"app": 3, "rel_median": 0.000206, "rel_max": 0.000386, "pos_of_max": 20, "route_rows_differ": 0}
+{"app": 4, "rel_median": 0.000236, "rel_max": 0.000495, "pos_of_max": 22, "route_rows_differ": 0}
+{"app": 5, "rel_median": 0.000194, "rel_max": 0.000441, "pos_of_max": 22, "route_rows_differ": 0}
+{"app": 6, "rel_median": 0.000152, "rel_max": 0.000315, "pos_of_max": 22, "route_rows_differ": 0}
+{"app": 7, "rel_median": 0.000168, "rel_max": 0.000339, "pos_of_max": 22, "route_rows_differ": 0}
+{"app": 8, "rel_median": 0.000184, "rel_max": 0.000377, "pos_of_max": 22, "route_rows_differ": 0}
+{"app": 9, "rel_median": 0.000198, "rel_max": 0.000412, "pos_of_max": 22, "route_rows_differ": 0}
+{"app": 10, "rel_median": 0.000178, "rel_max": 0.000374, "pos_of_max": 22, "route_rows_differ": 0}
+{"app": 11, "rel_median": 0.00019, "rel_max": 0.000455, "pos_of_max": 13, "route_rows_differ": 0}
+{"app": 12, "rel_median": 0.000293, "rel_max": 0.000598, "pos_of_max": 31, "route_rows_differ": 0}
+{"app": 13, "rel_median": 0.000295, "rel_max": 0.00062, "pos_of_max": 31, "route_rows_differ": 0}
+{"app": 14, "rel_median": 0.000278, "rel_max": 0.000557, "pos_of_max": 31, "route_rows_differ": 0}
+{"app": 15, "rel_median": 0.000257, "rel_max": 0.000504, "pos_of_max": 13, "route_rows_differ": 0}
+{"app": 16, "rel_median": 0.000219, "rel_max": 0.000493, "pos_of_max": 13, "route_rows_differ": 0}
+{"app": 17, "rel_median": 0.000138, "rel_max": 0.000351, "pos_of_max": 8, "route_rows_differ": 0}
+{"app": 18, "rel_median": 0.000134, "rel_max": 0.00031, "pos_of_max": 60}
+{"app": 19, "rel_median": 0.000146, "rel_max": 0.000471, "pos_of_max": 13}
+{"app": 20, "rel_median": 0.000163, "rel_max": 0.000462, "pos_of_max": 60}
+{"app": 21, "rel_median": 0.000169, "rel_max": 0.000665, "pos_of_max": 24}
+{"app": 22, "rel_median": 0.000171, "rel_max": 0.000601, "pos_of_max": 24}
+{"app": 23, "rel_median": 0.000182, "rel_max": 0.000809, "pos_of_max": 24}
+{"app": 24, "rel_median": 0.000255, "rel_max": 0.000746, "pos_of_max": 24}
+{"app": 25, "rel_median": 0.000249, "rel_max": 0.00072, "pos_of_max": 24}
+{"app": 26, "rel_median": 0.00024, "rel_max": 0.000685, "pos_of_max": 24}
+{"app": 27, "rel_median": 0.000214, "rel_max": 0.000639, "pos_of_max": 24}
+{"app": 28, "rel_median": 0.000196, "rel_max": 0.000481, "pos_of_max": 13}
+{"app": 29, "rel_median": 0.000127, "rel_max": 0.000344, "pos_of_max": 42}
+{"app": 30, "rel_median": 0.00013, "rel_max": 0.000589, "pos_of_max": 8}
+{"app": 31, "rel_median": 0.000131, "rel_max": 0.001066, "pos_of_max": 8}
+{"app": 32, "rel_median": 0.000133, "rel_max": 0.001278, "pos_of_max": 8}
+{"app": 33, "rel_median": 0.000139, "rel_max": 0.001366, "pos_of_max": 8}
+{"app": 34, "rel_median": 0.000144, "rel_max": 0.00163, "pos_of_max": 8}
+{"app": 35, "rel_median": 0.00016, "rel_max": 0.002011, "pos_of_max": 8}
+{"app": 36, "rel_median": 0.000224, "rel_max": 0.071166, "pos_of_max": 34}
+{"app": 37, "rel_median": 0.000294, "rel_max": 0.057315, "pos_of_max": 16}
+{"app": 38, "rel_median": 0.000458, "rel_max": 0.041563, "pos_of_max": 16}
+{"app": 39, "rel_median": 0.000385, "rel_max": 0.034903, "pos_of_max": 41}
+{"app": 40, "rel_median": 0.000412, "rel_max": 0.024049, "pos_of_max": 41}
+{"app": 41, "rel_median": 0.000379, "rel_max": 0.019778, "pos_of_max": 41}
+{"app": 42, "rel_median": 0.000319, "rel_max": 0.017778, "pos_of_max": 41}
+{"app": 43, "rel_median": 0.000262, "rel_max": 0.011732, "pos_of_max": 41}
+{"app": 44, "rel_median": 0.00024, "rel_max": 0.008353, "pos_of_max": 41}
+{"app": 45, "rel_median": 0.000256, "rel_max": 0.007966, "pos_of_max": 41}
+{"app": 46, "rel_median": 0.000282, "rel_max": 0.008493, "pos_of_max": 41}
+{"app": 47, "rel_median": 0.000313, "rel_max": 0.021123, "pos_of_max": 16}
+{"logits_rel_median": 0.00030642396570793176, "max": 0.02422899252186524, "top1": 1.0}

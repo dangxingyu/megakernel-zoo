@@ -1,0 +1,16 @@
+# The record of a run is progress.md, src/, notes/, PROMPT.md, run.json and the ledgers (scripts/export_run.py).
+# Not in the repository: the agent transcripts, the workspaces and the raw submission folders they were exported from.
+agent-*.jsonl
+workspace/
+submissions/
+bin/
+*.pid
+*.out
+*.launch.log
+launch.log
+/make_reference_fp32.log
+/fable-c-m5max-0-standin-stopped/
+/seed-r1-s0014/
+# server logs of the baseline runs (megabytes of progress bars); their results and per-request records stay
+/baselines-*/logs/
+/baselines-mlx/obsolete-chat-ignore-eos/

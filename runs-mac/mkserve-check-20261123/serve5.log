@@ -1,0 +1,4 @@
+mkserve: engine offline-c (track C, run fable-c-m5max-2, submission s0019 (engine of s0011)), building in ~/.cache/mkserve/thinkingmachines--Inkling-2-Mini_m5max_offline-c_7f0af25af0e7
+MKSERVE engine ready: mode=native max_batch=1 max_context=4096
+MKSERVE serving thinkingmachines/Inkling-2-Mini on http://127.0.0.1:18700 (engine offline-c, native mode): OpenAI /v1/chat/completions /v1/completions /v1/responses, Anthropic /v1/messages, Ollama /api/chat /api/generate
+MKSERVE warning: sampling parameters are ignored in native mode (greedy decoding); use --mode step for sampling

@@ -1,0 +1,7 @@
+turn 2 = turn 1 + reply + 120 new: prompt 1716, kept 1536; first token 199 ms with the cache, 1683 ms without; tokens identical: False (first difference at 51)
+same prompt again: prompt 1500, kept 1472; first token 933 ms with the cache, 1158 ms without; tokens identical: True
+prefix of the cached prompt (700): prompt 700, kept 640; first token 95 ms with the cache, 564 ms without; tokens identical: False (first difference at 32)
+diverges after 1000 tokens: prompt 1400, kept 960; first token 431 ms with the cache, 1045 ms without; tokens identical: False (first difference at 52)
+nothing shared: prompt 800, kept 0; first token 638 ms with the cache, 7858 ms without; tokens identical: True
+3,000-token prompt, then + reply + 60: prompt 3156, kept 3072; first token 733 ms with the cache, 2799 ms without; tokens identical: False (first difference at 22)
+ALL IDENTICAL {'cycles': 723, 'tokens': 1805, 'rows': 2590, 'host_syncs': 1055, 'prefix_hits': 5, 'prefix_tokens': 7680, 'draft_alone': 96, 'draft_s': 1.4429425792768598, 'verify_s': 36.9803965294268, 'gap_s': 2.8171292428160086, 

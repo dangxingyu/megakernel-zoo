@@ -1,0 +1,49 @@
+{
+ "model": "thinkingmachines/Inkling-2-Mini",
+ "card": "m5max",
+ "hours": 6.0,
+ "track": "C",
+ "eval": "kernel",
+ "started_at": 1795420350.620097,
+ "reference_lines": [
+  {
+   "name": "llamacpp-q4",
+   "value": 25130,
+   "note": "natural text at batch 1: 25030 us per token"
+  },
+  {
+   "name": "llamacpp-q4-ds",
+   "value": 20556,
+   "note": "natural text at batch 1: 16323 us per token"
+  },
+  {
+   "name": "llamacpp-q4-pr",
+   "value": 25016,
+   "note": "natural text at batch 1: 25082 us per token"
+  },
+  {
+   "name": "mlxlm-native",
+   "value": 30359,
+   "note": "natural text at batch 1: 30486 us per token"
+  },
+  {
+   "name": "omlx-oq4e",
+   "value": 16744,
+   "note": "natural text at batch 1: 16779 us per token"
+  },
+  {
+   "name": "omlx-oq4e-ds",
+   "value": 13767,
+   "note": "natural text at batch 1: 8307 us per token"
+  },
+  {
+   "name": "target: 1.10x the fastest general engine",
+   "value": 12515,
+   "note": "at batch 1"
+  }
+ ],
+ "model_dir": "~/models/Inkling-2-Mini",
+ "ref_dir": "~/mk-ref/inkling-2-mini-m5max-fp32",
+ "eval_timeout_s": 10800,
+ "continues": "runs-mac/fable-c-m5max-1 (seed engine: its s0014)"
+}

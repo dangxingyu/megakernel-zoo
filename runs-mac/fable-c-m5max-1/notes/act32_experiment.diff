@@ -1,0 +1,333 @@
+diff --git a/engine/mk_kernels.py b/engine/mk_kernels.py
+index 099e9e0..474629b 100644
+--- a/engine/mk_kernels.py
++++ b/engine/mk_kernels.py
+@@ -8,8 +8,31 @@ from __future__ import annotations
+ 
+ import os
+ 
++import re
++
+ import mlx.core as mx
+ 
++# Activations between kernels: float32 (MK_ACT32=1, default) or IEEE half bits in uint16 buffers (MK_ACT32=0). The
++# kernel sources below are written for half; with float32 the loads, stores and pointer types are rewritten here.
++ACT32 = os.environ.get("MK_ACT32", "1") == "1"
++ADT = mx.float32 if ACT32 else mx.uint16
++
++
++def _act32(src: str) -> str:
++    src = src.replace("(const device half4*)", "(const device float4*)").replace("(device half4*)", "(device float4*)")
++    src = re.sub(r"\bhalf4\b", "float4", src)
++    src = re.sub(r"const device ushort\* (xr\d*|xq|xp|kp|vp)\b", r"const device float* \1", src)
++    src = src.replace("return as_type<ushort>(half(f));", "return f;").replace("inline ushort to_bf16(float f)", "inline float to_bf16(float f)")
++    return src
++
++
++def _metal_kernel(name, input_names, output_names, source, header=""):
++    if ACT32:
++        source, header = _act32(source), _act32(header)
++    return mx.fast.metal_kernel(name=name, input_names=input_names, output_names=output_names, source=source, header=header)
++
++
++
+ _BF = "as_type<float4>(uint4(*((const device vec<ushort,4>*)(%s))) << 16)"
+ 
+ 
+@@ -45,7 +68,7 @@ _GEMV = f"""
+         if (lane == 0) out[k * N + n] = s;
+     }}
+ """
+-_gemv = mx.fast.metal_kernel(name="mk_gemv", input_names=["w", "x"], output_names=["out"], source=_GEMV)
++_gemv = _metal_kernel(name="mk_gemv", input_names=["w", "x"], output_names=["out"], source=_GEMV)
+ 
+ 
+ def gemv(w16: mx.array, x16: mx.array, n_out: int | None = None) -> mx.array:
+@@ -60,7 +83,7 @@ def gemv(w16: mx.array, x16: mx.array, n_out: int | None = None) -> mx.array:
+ 
+ def bits(x: mx.array) -> mx.array:
+     """float -> IEEE half bits: the activation format the kernels read (11 significant bits; BF16 has 8)."""
+-    return x.astype(mx.float16).view(mx.uint16)
++    return x.astype(mx.float32) if ACT32 else x.astype(mx.float16).view(mx.uint16)
+ 
+ 
+ # small float GEMV: out[k, n] = sum_d W[n, d] x[k, d], any D, one thread per output
+@@ -71,7 +94,7 @@ _GEMV_S = """
+     for (int d = 0; d < D; d += 4) acc = fma(*((const device float4*)(w + n * D + d)), *((const device float4*)(x + k * D + d)), acc);
+     out[g] = (acc.x + acc.y) + (acc.z + acc.w);
+ """
+-_gemv_s = mx.fast.metal_kernel(name="mk_gemv_small", input_names=["w", "x"], output_names=["out"], source=_GEMV_S)
++_gemv_s = _metal_kernel(name="mk_gemv_small", input_names=["w", "x"], output_names=["out"], source=_GEMV_S)
+ 
+ 
+ def gemv_small(w: mx.array, x: mx.array) -> mx.array:
+@@ -120,7 +143,7 @@ _ROUTER = """
+         }
+     }
+ """
+-_router = mx.fast.metal_kernel(name="mk_router", input_names=["logits", "bias"], output_names=["idx", "wts"], source=_ROUTER)
++_router = _metal_kernel(name="mk_router", input_names=["logits", "bias"], output_names=["idx", "wts"], source=_ROUTER)
+ 
+ 
+ def router(logits: mx.array, bias: mx.array):
+@@ -221,7 +244,7 @@ def _make_up(fmt: str):
+         out[g0] = to_bf16(gc * sg * uc);
+     }}
+ """
+-    return mx.fast.metal_kernel(name=f"mk_up_{fmt}", input_names=["codes", "scales", "gsc", "x", "idx"], output_names=["out"],
++    return _metal_kernel(name=f"mk_up_{fmt}", input_names=["codes", "scales", "gsc", "x", "idx"], output_names=["out"],
+                                 source=src, header=_HDR)
+ 
+ 
+@@ -244,7 +267,7 @@ def _make_down(fmt: str):
+     }}
+     if (lane == 0) out[g0] = y;
+ """
+-    return mx.fast.metal_kernel(name=f"mk_down_{fmt}", input_names=["codes", "scales", "gsc", "h", "idx", "wts"],
++    return _metal_kernel(name=f"mk_down_{fmt}", input_names=["codes", "scales", "gsc", "h", "idx", "wts"],
+                                 output_names=["out"], source=src, header=_HDR)
+ 
+ 
+@@ -257,7 +280,7 @@ def experts(fmt: str, w13, s13, g13, w2, s2, g2, x16: mx.array, idx: mx.array, w
+     the 8 chosen experts (gate/up rows interleaved, soft-capped SwiGLU, BF16 between the two matrices)."""
+     K = x16.shape[0]
+     h = _up[fmt](inputs=[w13, s13, g13, x16, idx], grid=(K * 8 * 1152 * 32, 1, 1), threadgroup=(256, 1, 1),
+-                 output_shapes=[(K * 8, 1152)], output_dtypes=[mx.uint16])[0]
++                 output_shapes=[(K * 8, 1152)], output_dtypes=[ADT])[0]
+     return _down[fmt](inputs=[w2, s2, g2, h, idx, wts], grid=(K * 2304 * 32, 1, 1), threadgroup=(256, 1, 1),
+                       output_shapes=[(K, 2304)], output_dtypes=[mx.float32])[0]
+ 
+@@ -350,10 +373,10 @@ _ATT = f"""
+         GATE_WRITE
+     }}
+ """
+-_att = mx.fast.metal_kernel(name="mk_attention", input_names=["q", "kc", "vc", "krec", "vrec", "knew", "vnew", "rel", "proj", "sinks", "meta", "app"],
++_att = _metal_kernel(name="mk_attention", input_names=["q", "kc", "vc", "krec", "vrec", "knew", "vnew", "rel", "proj", "sinks", "meta", "app"],
+                             output_names=["out"], source=_ATT.replace("GATE_WRITE", "*((device float4*)(out + grp * 128 + d4)) = o;"))
+ # the same with the output gate folded in: out = half(att * sigmoid(gate)), the input of o_proj
+-_attg = mx.fast.metal_kernel(name="mk_attention_gate", input_names=["q", "kc", "vc", "krec", "vrec", "knew", "vnew", "rel", "proj", "sinks", "meta", "app", "gate"],
++_attg = _metal_kernel(name="mk_attention_gate", input_names=["q", "kc", "vc", "krec", "vrec", "knew", "vnew", "rel", "proj", "sinks", "meta", "app", "gate"],
+                              output_names=["out"], source=_ATT.replace("GATE_WRITE", """float4 gv = *((const device float4*)(gate + grp * 128 + d4));
+         float4 sgm = 1.0f / (1.0f + metal::precise::exp(-gv));
+         *((device half4*)(out + grp * 128 + d4)) = half4(o * sgm);"""))
+@@ -366,7 +389,7 @@ def attention_gate(q, kc, vc, krec, vrec, knew, vnew, rel, proj, sinks, meta, ap
+     vt, atg = att_layout(K, smax)
+     return _attg(inputs=[q, kc, vc, krec, vrec, knew, vnew, rel, proj, sinks, meta, app, gate],
+                  template=[("SMAX", smax), ("TT", kc.shape[1]), ("RR", krec.shape[1]), ("VT", vt), ("TG", atg)], grid=(K * 24 * atg, 1, 1),
+-                 threadgroup=(atg, 1, 1), output_shapes=[(K, 3072)], output_dtypes=[mx.uint16])[0]
++                 threadgroup=(atg, 1, 1), output_shapes=[(K, 3072)], output_dtypes=[ADT])[0]
+ 
+ 
+ ATT_VT = int(os.environ.get("MK_ATT_VT", "1024"))
+@@ -420,7 +443,7 @@ _PLAN = """
+         for (uint i = 0; i < M; i++) slot_p[s * M + i] = 0xFFFFFFFFu;
+     }
+ """
+-_plan = mx.fast.metal_kernel(name="mk_plan", input_names=["idx"], output_names=["slot_e", "slot_p"], source=_PLAN)
++_plan = _metal_kernel(name="mk_plan", input_names=["idx"], output_names=["slot_e", "slot_p"], source=_PLAN)
+ 
+ 
+ def _decode_src(fmt: str, cp: str, g: str) -> str:
+@@ -501,7 +524,7 @@ def _make_up2(fmt: str, M: int, R: int):
+     float gs = gsc[e];
+     {fin}
+ """
+-    return mx.fast.metal_kernel(name=f"mk_up2_{fmt}_{M}_{R}", input_names=["codes", "scales", "gsc", "x", "slot_e", "slot_p"],
++    return _metal_kernel(name=f"mk_up2_{fmt}_{M}_{R}", input_names=["codes", "scales", "gsc", "x", "slot_e", "slot_p"],
+                                 output_names=["out"], source=src, header=_HDR)
+ 
+ 
+@@ -534,7 +557,7 @@ def _make_down2(fmt: str, M: int, R: int):
+     float gs = gsc[e];
+     {fin}
+ """
+-    return mx.fast.metal_kernel(name=f"mk_down2_{fmt}_{M}_{R}", input_names=["codes", "scales", "gsc", "h", "slot_e", "slot_p"],
++    return _metal_kernel(name=f"mk_down2_{fmt}_{M}_{R}", input_names=["codes", "scales", "gsc", "h", "slot_e", "slot_p"],
+                                 output_names=["out"], source=src, header=_HDR)
+ 
+ 
+@@ -545,7 +568,7 @@ _COMB = """
+     for (int j = 0; j < 8; j++) y = fma(o[(row * 8 + j) * 2304 + n], wts[row * 8 + j], y);
+     out[g] = y;
+ """
+-_comb = mx.fast.metal_kernel(name="mk_comb", input_names=["o", "wts"], output_names=["out"], source=_COMB)
++_comb = _metal_kernel(name="mk_comb", input_names=["o", "wts"], output_names=["out"], source=_COMB)
+ _up2, _down2 = {}, {}
+ 
+ 
+@@ -558,7 +581,7 @@ def experts2(fmt: str, w13, s13, g13, w2, s2, g2, x16, idx, wts, M: int, RU: int
+     ku = _up2.get((fmt, M, RU)) or _up2.setdefault((fmt, M, RU), _make_up2(fmt, M, RU))
+     kd = _down2.get((fmt, M, RD)) or _down2.setdefault((fmt, M, RD), _make_down2(fmt, M, RD))
+     h = ku(inputs=[w13, s13, g13, x16, slot_e, slot_p], grid=(S * (1152 // RU) * 32, 1, 1), threadgroup=(256, 1, 1),
+-           output_shapes=[(K * 8, 1152)], output_dtypes=[mx.uint16])[0]
++           output_shapes=[(K * 8, 1152)], output_dtypes=[ADT])[0]
+     o = kd(inputs=[w2, s2, g2, h, slot_e, slot_p], grid=(S * (2304 // RD) * 32, 1, 1), threadgroup=(256, 1, 1),
+            output_shapes=[(K * 8, 2304)], output_dtypes=[mx.float32])[0]
+     return _comb(inputs=[o, wts], grid=(K * 2304, 1, 1), threadgroup=(256, 1, 1), output_shapes=[(K, 2304)],
+@@ -611,7 +634,7 @@ inline float tgsum(float v, threadgroup float* buf, uint lane, uint sg) {
+     return t;
+ }
+ """
+-    return mx.fast.metal_kernel(name=f"mk_mix_{N}_{Q}", input_names=names + ["qs"], output_names=["out"], source=src, header=hdr)
++    return _metal_kernel(name=f"mk_mix_{N}_{Q}", input_names=names + ["qs"], output_names=["out"], source=src, header=hdr)
+ 
+ 
+ _mix = {}
+@@ -697,7 +720,7 @@ def _make_qkv(full: bool, qthr: float, rthr: float):
+         if (lane < 4) *((device float4*)(rel + (row * 24 + hh) * 16 + d4)) = sv * f;
+     }}
+ """
+-    return mx.fast.metal_kernel(name=f"mk_qkv_{int(full)}", input_names=["o", "kk", "vv", "kst", "vst", "ktaps", "vtaps", "q_scale", "r_scale"],
++    return _metal_kernel(name=f"mk_qkv_{int(full)}", input_names=["o", "kk", "vv", "kst", "vst", "ktaps", "vtaps", "q_scale", "r_scale"],
+                                 output_names=["q", "rel", "knew", "vnew", "wk", "wv"], source=src)
+ 
+ 
+@@ -712,7 +735,7 @@ def qkv_post(full: bool, o, kk, vv, kst, vst, ktaps, vtaps, q_scale, r_scale, qt
+     return k(inputs=[o, kk, vv, kst, vst, ktaps, vtaps, q_scale, r_scale],
+              template=[("W", kk.shape[1]), ("KR", K)], grid=((K + 3) * 64 * 32, 1, 1),
+              threadgroup=(32, 1, 1), output_shapes=[(K, 3072), (K, 384), (K, 1024), (K, 1024), (K + 3, 1024), (K + 3, 1024)],
+-             output_dtypes=[mx.float32, mx.float32, mx.uint16, mx.uint16, mx.float32, mx.float32])
++             output_dtypes=[mx.float32, mx.float32, ADT, ADT, mx.float32, mx.float32])
+ 
+ 
+ # static short convolution + residual over [K, C] (post-attention and post-MLP): out = (sum_j win[t + j] taps[j] + x) / sqrt(5)
+@@ -729,7 +752,7 @@ _SCONV = """
+     float4 y = (acc + *((const device float4*)(x + row * C + c))) * 0.4472135954999579f;
+     *((device float4*)(out + row * C + c)) = y;
+ """
+-_sconv = mx.fast.metal_kernel(name="mk_sconv", input_names=["x", "st", "taps"], output_names=["out"], source=_SCONV)
++_sconv = _metal_kernel(name="mk_sconv", input_names=["x", "st", "taps"], output_names=["out"], source=_SCONV)
+ 
+ 
+ def sconv(x, st, taps):
+@@ -763,7 +786,7 @@ _GEMV8 = f"""
+         if (lane == 0) out[k * N + n] = s * sc;
+     }}
+ """
+-_gemv8 = mx.fast.metal_kernel(name="mk_gemv8", input_names=["w", "scale", "x"], output_names=["out"], source=_GEMV8)
++_gemv8 = _metal_kernel(name="mk_gemv8", input_names=["w", "scale", "x"], output_names=["out"], source=_GEMV8)
+ 
+ 
+ def quant8(w: mx.array):
+@@ -854,7 +877,7 @@ def _make_mix2(N: int, Q: int, norm_in: bool, pout: bool, wout: bool):
+ {outs}
+ """
+     onames = ([] if wout else ["out"]) + (["pn"] if pout else []) + (["y"] if wout else [])
+-    return mx.fast.metal_kernel(name=f"mk_mix2_{N}_{Q}_{int(norm_in)}{int(pout)}{int(wout)}", input_names=names + ["qs"] + (["wt"] if wout else []),
++    return _metal_kernel(name=f"mk_mix2_{N}_{Q}_{int(norm_in)}{int(pout)}{int(wout)}", input_names=names + ["qs"] + (["wt"] if wout else []),
+                                 output_names=onames, source=src, header=_TGHDR)
+ 
+ 
+@@ -872,7 +895,7 @@ def mix2(sources: list, queries: mx.array, norm_in: bool = False, pout: bool = F
+     if pout:
+         shapes.append((K, 2304)); dts.append(mx.float32)
+     if wt is not None:
+-        shapes.append((K, Q, 2304)); dts.append(mx.uint16)
++        shapes.append((K, Q, 2304)); dts.append(ADT)
+     o = k(inputs=list(sources) + [queries] + ([wt] if wt is not None else []), grid=(K * 576, 1, 1), threadgroup=(576, 1, 1),
+           output_shapes=shapes, output_dtypes=dts)
+     if wt is not None and pout:
+@@ -899,7 +922,7 @@ def _make_gate_pre(G: int, QH: int, M0: int):
+     half4 mo = half4(mv * metal::precise::rsqrt(mm * (1.0f / 2304.0f) + 1e-6f));
+ """ + "".join(f"""
+     if (g == {i}) {{ *((device half4*)(st{i} + row * 4608 + d4)) = ho; *((device half4*)(st{i} + row * 4608 + 2304 + d4)) = mo; }}""" for i in range(G))
+-    return mx.fast.metal_kernel(name=f"mk_gate_pre_{G}_{QH}_{M0}", input_names=["h", "msgs"], output_names=[f"st{i}" for i in range(G)],
++    return _metal_kernel(name=f"mk_gate_pre_{G}_{QH}_{M0}", input_names=["h", "msgs"], output_names=[f"st{i}" for i in range(G)],
+                                 source=src, header=_TGHDR)
+ 
+ 
+@@ -925,7 +948,7 @@ def _make_gate_post(G: int, QH: int, M0: int):
+     half4 o = half4(v * metal::precise::rsqrt(vv * (1.0f / 2304.0f) + 1e-6f) * *((const device float4*)(wt + g * 2304 + d4)));
+ """ + "".join(f"""
+     if (g == {i}) *((device half4*)(y{i} + row * 2304 + d4)) = o;""" for i in range(G))
+-    return mx.fast.metal_kernel(name=f"mk_gate_post_{G}_{QH}_{M0}", input_names=["h", "msgs", "wt"] + [f"fg{i}" for i in range(G)],
++    return _metal_kernel(name=f"mk_gate_post_{G}_{QH}_{M0}", input_names=["h", "msgs", "wt"] + [f"fg{i}" for i in range(G)],
+                                 output_names=[f"y{i}" for i in range(G)], source=src, header=_TGHDR)
+ 
+ 
+@@ -942,10 +965,10 @@ def gates(h, msgs, downs: list, fgs: list, wt, m0: int) -> list:
+     kp = _gpre.get(key) or _gpre.setdefault(key, _make_gate_pre(*key))
+     kq = _gpost.get(key) or _gpost.setdefault(key, _make_gate_post(*key))
+     st = kp(inputs=[h, msgs], grid=(K * G * 576, 1, 1), threadgroup=(576, 1, 1), output_shapes=[(K, 4608)] * G,
+-            output_dtypes=[mx.uint16] * G)
++            output_dtypes=[ADT] * G)
+     fg = [gemv_small(fgs[i], gemv(downs[i], st[i])) for i in range(G)]
+     return kq(inputs=[h, msgs, wt] + fg, grid=(K * G * 576, 1, 1), threadgroup=(576, 1, 1), output_shapes=[(K, 2304)] * G,
+-              output_dtypes=[mx.uint16] * G)
++              output_dtypes=[ADT] * G)
+ 
+ 
+ # static short convolution + residual (+ block residual) and the conv window for the next pass, one kernel
+@@ -966,7 +989,7 @@ _SCONV2 = """
+     if (ADD) y += *((const device float4*)(add + row * C + c));
+     *((device float4*)(out + row * C + c)) = y;
+ """
+-_sconv2 = mx.fast.metal_kernel(name="mk_sconv2", input_names=["x", "st", "taps", "add"], output_names=["out", "win"], source=_SCONV2)
++_sconv2 = _metal_kernel(name="mk_sconv2", input_names=["x", "st", "taps", "add"], output_names=["out", "win"], source=_SCONV2)
+ 
+ 
+ def sconv2(x, st, taps, add=None):
+@@ -1027,7 +1050,7 @@ def _make_gate_all(G: int, QH: int, M0: int):
+     half4 o = half4(v * metal::precise::rsqrt(vv * (1.0f / 2304.0f) + 1e-6f) * *((const device float4*)(wt + g * 2304 + d4)));
+ {wr}
+ """
+-    return mx.fast.metal_kernel(name=f"mk_gate_all_{G}_{QH}_{M0}",
++    return _metal_kernel(name=f"mk_gate_all_{G}_{QH}_{M0}",
+                                 input_names=["h", "msgs", "wt"] + [f"dw{i}" for i in range(G)] + [f"ft{i}" for i in range(G)],
+                                 output_names=[f"y{i}" for i in range(G)], source=src, header=_TGHDR)
+ 
+@@ -1042,7 +1065,7 @@ def gates2(h, msgs, downs: list, fts: list, wt, m0: int) -> list:
+     key = (G, QH, m0)
+     k = _gall.get(key) or _gall.setdefault(key, _make_gate_all(*key))
+     return k(inputs=[h, msgs, wt] + list(downs) + list(fts), grid=(K * G * 576, 1, 1), threadgroup=(576, 1, 1),
+-             output_shapes=[(K, 2304)] * G, output_dtypes=[mx.uint16] * G)
++             output_shapes=[(K, 2304)] * G, output_dtypes=[ADT] * G)
+ 
+ 
+ # ------------------------------------------------------------------------------------------------- exact argmax, short list
+@@ -1056,7 +1079,7 @@ _GEMV_FLAG = _GEMV.replace("    float4 acc[K];", """    if (flag[n] == 0) {
+     }
+     float4 acc[K];""")
+ assert _GEMV_FLAG != _GEMV
+-_gemv_flag = mx.fast.metal_kernel(name="mk_gemv_flag", input_names=["w", "x", "flag"], output_names=["out"], source=_GEMV_FLAG)
++_gemv_flag = _metal_kernel(name="mk_gemv_flag", input_names=["w", "x", "flag"], output_names=["out"], source=_GEMV_FLAG)
+ 
+ 
+ def argmax_short(w16, w8, x16: mx.array, n_out: int, cap: float):
+@@ -1064,7 +1087,7 @@ def argmax_short(w16, w8, x16: mx.array, n_out: int, cap: float):
+     -> (tokens uint32 [K] = first index of the maximum of cap * tanh(z / cap) over the exact z, candidates int32 [])."""
+     K, D = x16.shape
+     approx = gemv8(w8, x16)                                                    # [K, n_out]
+-    l1 = mx.abs(x16.view(mx.float16).astype(mx.float32)).sum(axis=-1, keepdims=True)
++    l1 = mx.abs(x16 if ACT32 else x16.view(mx.float16).astype(mx.float32)).sum(axis=-1, keepdims=True)
+     eps = (0.51 * l1) * w8[1][None, :] + 0.02                                  # rigorous bound + slop (see above)
+     lo = (approx - eps).max(axis=-1, keepdims=True)
+     flag = ((approx + eps) >= lo).any(axis=0).astype(mx.uint8)                 # [n_out]
+diff --git a/engine/mk_target.py b/engine/mk_target.py
+index 002875a..4d45592 100644
+--- a/engine/mk_target.py
++++ b/engine/mk_target.py
+@@ -155,10 +155,10 @@ class Target:
+         # base .. pos - 1 in a small one (a commit rewrites only the small one; MLX slice updates copy the array).
+         # conv windows (the last 3 inputs) per kind, stacked over the applications: k, v (1024), post-attention,
+         # post-MLP (2304)
+-        self.kc = mx.zeros((self.napp, T, 1024), dtype=mx.uint16)
+-        self.vc = mx.zeros((self.napp, T, 1024), dtype=mx.uint16)
+-        self.kr = mx.zeros((self.napp, self.RECENT, 1024), dtype=mx.uint16)
+-        self.vr = mx.zeros((self.napp, self.RECENT, 1024), dtype=mx.uint16)
++        self.kc = mx.zeros((self.napp, T, 1024), dtype=kn.ADT)
++        self.vc = mx.zeros((self.napp, T, 1024), dtype=kn.ADT)
++        self.kr = mx.zeros((self.napp, self.RECENT, 1024), dtype=kn.ADT)
++        self.vr = mx.zeros((self.napp, self.RECENT, 1024), dtype=kn.ADT)
+         self.cw = [mx.zeros((self.napp, 3, d), dtype=F32) for d in (1024, 1024, 2304, 2304)]
+         self.pos = 0
+         self.base = 0
+@@ -298,7 +298,7 @@ class Target:
+         else:
+             z = kn.gemv(self.unembed, fo16, self.vocab)
+             logits = mx.tanh(z * (1.0 / self.cap)) * self.cap
+-        feats.append(fo16.view(mx.float16).astype(F32))
++        feats.append(fo16 if kn.ACT32 else fo16.view(mx.float16).astype(F32))
+         return logits, feats, mx.stack(knew), mx.stack(vnew), [mx.stack([w[j] for w in wins]) for j in range(4)]
+ 
+     def _pure_tok(self, tokens, m_full, m_loc, kc, vc, kr, vr, cw):

@@ -1,0 +1,5 @@
+MK_RESULT system=ollama-q4 round=1 ok=false (server did not come up: runs-mac/baselines-20261123-ollama/logs/ollama-q4-r1.log)
+MK_RESULT system=ollama-mlx round=1 workload=synth tok_s=32.0 us_per_tok=31291 chunk_tok_s=32.0 tok_per_chunk=1.00 ttft_s=0.376 clean=3/3
+MK_RESULT system=ollama-mlx round=1 workload=natural tok_s=32.5 us_per_tok=30748 chunk_tok_s=32.5 tok_per_chunk=1.00 ttft_s=0.384 clean=3/3
+# ollama-q4: Ollama 0.40.17's bundled llama-server: "unknown model architecture: 'inkling2_loop'" (no result)
+# ollama-mlx-ds: ollama create: "unsupported MLX architecture: draft model Inkling2LoopForConditionalGeneration" (no result)

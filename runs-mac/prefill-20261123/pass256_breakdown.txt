@@ -1,0 +1,8 @@
+fast no= K=256 pos=768: 172.7 ms = 0.675 ms/token
+fast no=experts K=256 pos=768: 76.6 ms = 0.299 ms/token
+fast no=dense K=256 pos=768: 178.3 ms = 0.696 ms/token
+fast no=experts,dense K=256 pos=768: 60.5 ms = 0.236 ms/token
+exact no= K=256 pos=768: 666.9 ms = 2.605 ms/token
+exact no=experts K=256 pos=768: 195.3 ms = 0.763 ms/token
+exact no=dense K=256 pos=768: 518.6 ms = 2.026 ms/token
+exact no=experts,dense K=256 pos=768: 94.3 ms = 0.368 ms/token

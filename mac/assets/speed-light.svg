@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 366" width="860" height="366" role="img" font-family='system-ui, -apple-system, "Segoe UI", sans-serif' aria-label="Tokens per second of Inkling-2-Mini on an Apple M5 Max: megakernel 123 on synthetic prompts and 194 on natural text; oMLX with DSpark 73 and 120; llama.cpp with DSpark 49 and 61; mlx-lm 33 and 33">
+<text x="232" y="20" font-size="14" font-weight="600" fill="#0b0b0b">Synthetic prompts</text>
+<text x="232" y="38" font-size="12" fill="#52514e">tokens per second, one sequence</text>
+<line x1="232" y1="52" x2="232" y2="346" stroke="#c3c2b7" stroke-width="1"/>
+<text x="546" y="20" font-size="14" font-weight="600" fill="#0b0b0b">Natural text</text>
+<text x="546" y="38" font-size="12" fill="#52514e">tokens per second, one sequence</text>
+<line x1="546" y1="52" x2="546" y2="346" stroke="#c3c2b7" stroke-width="1"/>
+<text x="218" y="67.0" text-anchor="end" font-size="13" font-weight="600" fill="#0b0b0b">megakernel (this repo)</text>
+<text x="218" y="81.0" text-anchor="end" font-size="10.5" fill="#52514e">the checkpoint's own formats</text>
+<path d="M232.0,58.0 H382.3 a4.0,4.0 0 0 1 4.0,4.0 V74.0 a4.0,4.0 0 0 1 -4.0,4.0 H232.0 Z" fill="#2a78d6"/>
+<text x="393.3" y="72.5" font-size="13" font-weight="600" fill="#0b0b0b">123</text>
+<path d="M546.0,58.0 H785.0 a4.0,4.0 0 0 1 4.0,4.0 V74.0 a4.0,4.0 0 0 1 -4.0,4.0 H546.0 Z" fill="#2a78d6"/>
+<text x="796.0" y="72.5" font-size="13" font-weight="600" fill="#0b0b0b">194</text>
+<text x="218" y="109.0" text-anchor="end" font-size="13" font-weight="400" fill="#0b0b0b">oMLX + DSpark</text>
+<text x="218" y="123.0" text-anchor="end" font-size="10.5" fill="#52514e">oQ4e requantization</text>
+<path d="M232.0,100.0 H318.8 a4.0,4.0 0 0 1 4.0,4.0 V116.0 a4.0,4.0 0 0 1 -4.0,4.0 H232.0 Z" fill="#898781"/>
+<text x="329.8" y="114.5" font-size="13" font-weight="400" fill="#0b0b0b">73</text>
+<path d="M546.0,100.0 H692.5 a4.0,4.0 0 0 1 4.0,4.0 V116.0 a4.0,4.0 0 0 1 -4.0,4.0 H546.0 Z" fill="#898781"/>
+<text x="703.5" y="114.5" font-size="13" font-weight="400" fill="#0b0b0b">120</text>
+<text x="218" y="151.0" text-anchor="end" font-size="13" font-weight="400" fill="#0b0b0b">oMLX</text>
+<text x="218" y="165.0" text-anchor="end" font-size="10.5" fill="#52514e">oQ4e requantization</text>
+<path d="M232.0,142.0 H302.7 a4.0,4.0 0 0 1 4.0,4.0 V158.0 a4.0,4.0 0 0 1 -4.0,4.0 H232.0 Z" fill="#898781"/>
+<text x="313.7" y="156.5" font-size="13" font-weight="400" fill="#0b0b0b">60</text>
+<path d="M546.0,142.0 H616.5 a4.0,4.0 0 0 1 4.0,4.0 V158.0 a4.0,4.0 0 0 1 -4.0,4.0 H546.0 Z" fill="#898781"/>
+<text x="627.5" y="156.5" font-size="13" font-weight="400" fill="#0b0b0b">60</text>
+<text x="218" y="193.0" text-anchor="end" font-size="13" font-weight="400" fill="#0b0b0b">llama.cpp + DSpark</text>
+<text x="218" y="207.0" text-anchor="end" font-size="10.5" fill="#52514e">Q4_K_M GGUF</text>
+<path d="M232.0,184.0 H288.8 a4.0,4.0 0 0 1 4.0,4.0 V200.0 a4.0,4.0 0 0 1 -4.0,4.0 H232.0 Z" fill="#898781"/>
+<text x="299.8" y="198.5" font-size="13" font-weight="400" fill="#0b0b0b">49</text>
+<path d="M546.0,184.0 H618.6 a4.0,4.0 0 0 1 4.0,4.0 V200.0 a4.0,4.0 0 0 1 -4.0,4.0 H546.0 Z" fill="#898781"/>
+<text x="629.6" y="198.5" font-size="13" font-weight="400" fill="#0b0b0b">61</text>
+<text x="218" y="235.0" text-anchor="end" font-size="13" font-weight="400" fill="#0b0b0b">llama.cpp</text>
+<text x="218" y="249.0" text-anchor="end" font-size="10.5" fill="#52514e">Q4_K_M GGUF</text>
+<path d="M232.0,226.0 H277.7 a4.0,4.0 0 0 1 4.0,4.0 V242.0 a4.0,4.0 0 0 1 -4.0,4.0 H232.0 Z" fill="#898781"/>
+<text x="288.7" y="240.5" font-size="13" font-weight="400" fill="#0b0b0b">40</text>
+<path d="M546.0,226.0 H591.9 a4.0,4.0 0 0 1 4.0,4.0 V242.0 a4.0,4.0 0 0 1 -4.0,4.0 H546.0 Z" fill="#898781"/>
+<text x="602.9" y="240.5" font-size="13" font-weight="400" fill="#0b0b0b">40</text>
+<text x="218" y="277.0" text-anchor="end" font-size="13" font-weight="400" fill="#0b0b0b">mlx-lm</text>
+<text x="218" y="291.0" text-anchor="end" font-size="10.5" fill="#52514e">the checkpoint's own formats</text>
+<path d="M232.0,268.0 H269.2 a4.0,4.0 0 0 1 4.0,4.0 V284.0 a4.0,4.0 0 0 1 -4.0,4.0 H232.0 Z" fill="#898781"/>
+<text x="280.2" y="282.5" font-size="13" font-weight="400" fill="#0b0b0b">33</text>
+<path d="M546.0,268.0 H583.0 a4.0,4.0 0 0 1 4.0,4.0 V284.0 a4.0,4.0 0 0 1 -4.0,4.0 H546.0 Z" fill="#898781"/>
+<text x="594.0" y="282.5" font-size="13" font-weight="400" fill="#0b0b0b">33</text>
+<text x="218" y="319.0" text-anchor="end" font-size="13" font-weight="400" fill="#0b0b0b">Ollama (MLX)</text>
+<text x="218" y="333.0" text-anchor="end" font-size="10.5" fill="#52514e">the checkpoint's own formats</text>
+<path d="M232.0,310.0 H267.9 a4.0,4.0 0 0 1 4.0,4.0 V326.0 a4.0,4.0 0 0 1 -4.0,4.0 H232.0 Z" fill="#898781"/>
+<text x="278.9" y="324.5" font-size="13" font-weight="400" fill="#0b0b0b">32</text>
+<path d="M546.0,310.0 H582.7 a4.0,4.0 0 0 1 4.0,4.0 V326.0 a4.0,4.0 0 0 1 -4.0,4.0 H546.0 Z" fill="#898781"/>
+<text x="593.7" y="324.5" font-size="13" font-weight="400" fill="#0b0b0b">33</text>
+</svg>

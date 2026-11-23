@@ -1,0 +1,8 @@
+MK_RESULT system=llamacpp-q4-ds round=1 ok=false (server did not come up: runs-mac/baselines-llamacpp/logs/llamacpp-q4-ds-r1.log)
+MK_RESULT system=llamacpp-q4 round=1 workload=synth tok_s=39.6 us_per_tok=25243 chunk_tok_s=39.6 tok_per_chunk=1.00 ttft_s=0.236 clean=3/3
+MK_RESULT system=llamacpp-q4 round=1 workload=natural tok_s=39.9 us_per_tok=25035 chunk_tok_s=39.9 tok_per_chunk=1.00 ttft_s=0.238 clean=3/3
+MK_RESULT system=llamacpp-q4 round=1 workload=chat tok_s=58.1 us_per_tok=17225 chunk_tok_s=39.4 tok_per_chunk=1.47 ttft_s=0.413 clean=3/3
+MK_RESULT system=llamacpp-q4-ds round=2 ok=false (server did not come up: runs-mac/baselines-llamacpp/logs/llamacpp-q4-ds-r2.log)
+MK_RESULT system=llamacpp-q4 round=2 workload=synth tok_s=40.0 us_per_tok=25019 chunk_tok_s=40.0 tok_per_chunk=1.00 ttft_s=0.236 clean=3/3
+MK_RESULT system=llamacpp-q4 round=2 workload=natural tok_s=40.0 us_per_tok=25024 chunk_tok_s=40.0 tok_per_chunk=1.00 ttft_s=0.240 clean=3/3
+MK_RESULT system=llamacpp-q4 round=2 workload=chat tok_s=58.2 us_per_tok=17190 chunk_tok_s=39.5 tok_per_chunk=1.47 ttft_s=0.357 clean=3/3

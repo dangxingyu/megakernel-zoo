@@ -1,0 +1,5 @@
+max_context 4096: load 7.0 s; decode 12.27 ms/token (11.32, 13.01, 12.49); memory active 22.1 GB, peak 23.3 GB, cache 6.4 GB
+max_context 8192: load 8.2 s; decode 12.15 ms/token (11.22, 13.06, 12.16); memory active 23.0 GB, peak 24.1 GB, cache 6.3 GB
+max_context 32768: load 8.2 s; decode 12.91 ms/token (11.52, 13.93, 13.28); memory active 27.7 GB, peak 28.8 GB, cache 6.4 GB
+max_context 4096: load 6.9 s; decode 12.40 ms/token (11.57, 13.64, 12.00); memory active 22.2 GB, peak 23.3 GB, cache 6.2 GB
+max_context 16384: load 7.1 s; decode 11.94 ms/token (11.23, 12.96, 11.64); memory active 24.6 GB, peak 25.6 GB, cache 6.4 GB

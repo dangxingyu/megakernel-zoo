@@ -1,0 +1,21 @@
+notes, 300 tokens | greedy: online == stepwise True; same seed again True; 5.32 ms/token, 5.54 tokens/cycle, 36 distinct
+notes, 300 tokens | T 0.7: online == stepwise True; same seed again True; 8.40 ms/token, 3.11 tokens/cycle, 63 distinct
+notes, 300 tokens | T 1.0 top_p 0.95: online == stepwise True; same seed again True; 11.25 ms/token, 1.98 tokens/cycle, 111 distinct
+notes, 300 tokens | T 0.8 top_k 40: online == stepwise True; same seed again True; 12.57 ms/token, 1.82 tokens/cycle, 114 distinct
+notes, 300 tokens | T 0.3: online == stepwise True; same seed again True; 6.21 ms/token, 5.20 tokens/cycle, 37 distinct
+python source, 200 tokens | greedy: online == stepwise True; same seed again True; 9.31 ms/token, 2.55 tokens/cycle, 108 distinct
+python source, 200 tokens | T 0.7: online == stepwise True; same seed again True; 12.59 ms/token, 1.70 tokens/cycle, 154 distinct
+python source, 200 tokens | T 1.0 top_p 0.95: online == stepwise True; same seed again True; 12.14 ms/token, 1.86 tokens/cycle, 137 distinct
+python source, 200 tokens | T 0.8 top_k 40: online == stepwise True; same seed again True; 9.87 ms/token, 2.55 tokens/cycle, 108 distinct
+python source, 200 tokens | T 0.3: online == stepwise True; same seed again True; 9.20 ms/token, 2.80 tokens/cycle, 104 distinct
+evaluator prompt, 64 tokens | greedy: online == stepwise True; same seed again True; 11.80 ms/token, 1.70 tokens/cycle, 137 distinct
+evaluator prompt, 64 tokens | T 0.7: online == stepwise True; same seed again True; 14.79 ms/token, 1.33 tokens/cycle, 162 distinct
+evaluator prompt, 64 tokens | T 1.0 top_p 0.95: online == stepwise True; same seed again True; 11.27 ms/token, 1.89 tokens/cycle, 110 distinct
+evaluator prompt, 64 tokens | T 0.8 top_k 40: online == stepwise True; same seed again True; 13.73 ms/token, 1.57 tokens/cycle, 139 distinct
+evaluator prompt, 64 tokens | T 0.3: online == stepwise True; same seed again True; 14.15 ms/token, 1.62 tokens/cycle, 133 distinct
+story request | greedy: online == stepwise True; same seed again True; 11.68 ms/token, 1.77 tokens/cycle, 113 distinct
+story request | T 0.7: online == stepwise True; same seed again True; 12.82 ms/token, 1.61 tokens/cycle, 133 distinct
+story request | T 1.0 top_p 0.95: online == stepwise True; same seed again True; 15.13 ms/token, 1.31 tokens/cycle, 149 distinct
+story request | T 0.8 top_k 40: online == stepwise True; same seed again True; 14.26 ms/token, 1.62 tokens/cycle, 134 distinct
+story request | T 0.3: online == stepwise True; same seed again True; 13.82 ms/token, 1.72 tokens/cycle, 118 distinct
+ALL EXACT

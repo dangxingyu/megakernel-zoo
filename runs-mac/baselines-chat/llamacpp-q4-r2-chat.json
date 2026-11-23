@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 512,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "chat",
+ "one_chunk_per_token": false,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 181,
+ "prompt_tokens_seen": [
+  43,
+  66,
+  89
+ ],
+ "e2e_tok_s": {
+  "median": 38.38097931371013,
+  "min": 38.081930810951484,
+  "max": 38.59313123355615
+ },
+ "decode_tok_s": {
+  "median": 39.513767388525835,
+  "min": 39.49037310127895,
+  "max": 39.69622634864099
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 41.18627869458541,
+  "min": 40.78255808448767,
+  "max": 41.30243203904843
+ },
+ "tokens_per_chunk": 1.0402298850574712,
+ "tpot_p50_ms": 24.895832990296185,
+ "tpot_p99_ms": 26.241375016979873,
+ "ttft_median_s": 0.3577807090478018,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 578,
+ "wall_total_s": 15.0621604580665,
+ "tok_s_by_tokens": 38.37430902486858,
+ "tok_s_by_tokens_per_repeat": [
+  38.38097931371013,
+  38.59313123355615,
+  38.081930810951484
+ ],
+ "prompts": "natural text (prompts file)",
+ "texts": [
+  [
+   "2 weeks \u00d7 7 days/week = 14 days.  \n14 days \u00d7 $12/day = **$168**."
+  ],
+  [
+   "**Total cost: $38**\n\nBreakdown:\n- Adult tickets: 2 parents \u00d7 $12 = $24\n- Child ticket: 1 child \u00d7 $8 = $8\n- Popcorns: 2 \u00d7 $3 = $6\n\n$24 + $8 + $6 = **$38**"
+  ],
+  [
+   "**Step 1:** First bag = 300 M&Ms\n\n**Step 2:** Second bag = 300 + 12 = 312 M&Ms\n\n**Step 3:** Third bag = 300 \u00f7 2 = 150 M&Ms\n\n**Total:** 300 + 312 + 150 = **762 M&Ms**"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    181
+   ],
+   "chunks": [
+    174
+   ],
+   "prompt_tokens": [
+    43
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 38.38097931371013,
+   "decode_tok_s": 39.69622634864099,
+   "decode_tok_s_by_tokens": 41.30243203904843,
+   "tokens_per_chunk": 1.0402298850574712,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 4.358096875017509,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.3577807090478018
+   ],
+   "tpot_ms": {
+    "p50": 24.855458992533386,
+    "p90": 25.200249976478517,
+    "p99": 26.241375016979873,
+    "max": 99.21279200352728,
+    "mean": 25.19131141628618
+   },
+   "t_start_unix": 1795385564.6931794,
+   "wall_s": 4.715877584065311,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    226
+   ],
+   "chunks": [
+    219
+   ],
+   "prompt_tokens": [
+    66
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 38.59313123355615,
+   "decode_tok_s": 39.513767388525835,
+   "decode_tok_s_by_tokens": 40.78255808448767,
+   "tokens_per_chunk": 1.0319634703196348,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 5.517064415966161,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.3388999169692397
+   ],
+   "tpot_ms": {
+    "p50": 24.966708035208285,
+    "p90": 25.321500026620924,
+    "p99": 26.13316709175706,
+    "max": 99.7993340715766,
+    "mean": 25.30763493562459
+   },
+   "t_start_unix": 1795385589.4640129,
+   "wall_s": 5.8559643329354,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    171
+   ],
+   "chunks": [
+    164
+   ],
+   "prompt_tokens": [
+    89
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 38.081930810951484,
+   "decode_tok_s": 39.49037310127895,
+   "decode_tok_s_by_tokens": 41.18627869458541,
+   "tokens_per_chunk": 1.0426829268292683,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 4.127588249975815,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.36273029108997434
+   ],
+   "tpot_ms": {
+    "p50": 24.895832990296185,
+    "p90": 25.23158397525549,
+    "p99": 27.781957993283868,
+    "max": 99.59529095795006,
+    "mean": 25.322627300465125
+   },
+   "t_start_unix": 1795385615.3741314,
+   "wall_s": 4.49031854106579,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-llamacpp-q4-r2-chat",
+ "extra_body": {}
+}

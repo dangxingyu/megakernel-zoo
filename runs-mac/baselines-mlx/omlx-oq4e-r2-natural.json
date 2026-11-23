@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": false,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 60.356850297200374,
+  "min": 60.13178079411903,
+  "max": 60.45674554748525
+ },
+ "decode_tok_s": {
+  "median": 7.782796553924835,
+  "min": 7.754646870111992,
+  "max": 7.795543696784561
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 60.31667329291747,
+  "min": 60.09851324336794,
+  "max": 60.41546365008035
+ },
+ "tokens_per_chunk": 7.6992481203007515,
+ "tpot_p50_ms": 130.860541947186,
+ "tpot_p99_ms": 133.70204193051904,
+ "ttft_median_s": 0.005278249969705939,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 50.93275666702539,
+ "tok_s_by_tokens": 60.31481900897891,
+ "tok_s_by_tokens_per_repeat": [
+  60.45674554748525,
+  60.356850297200374,
+  60.13178079411903
+ ],
+ "prompts": "natural text (prompts file)",
+ "texts": [
+  [
+   "):\n        return open_read(f)\n    elif mode in ('w', 'wb'):\n        return open_write(f)\n    elif mode in ('a', 'ab'):\n        return open_append(f)\n    else:\n        raise ValueError(f'Unsupported mode: {mode}')\n\n\ndef open_read(f):\n    if hasattr(f, 'read'):\n        return f\n    return open_file(f, 'rb')\n\n\ndef open_write(f):\n    if hasattr(f, 'write'):\n        return f\n    return open_file(f, 'wb')\n\n\ndef open_append(f):\n    if hasattr(f, 'write'):\n        return f\n    return open_file(f, 'ab')\n\n\ndef open_file(f, mode):\n    import os\n    if isinstance(f, str):\n        return open_file_path(f, mode)\n    elif hasattr(f, '__fspath__'):\n        return open_file_path(f.__fspath__(), mode)\n    else:\n        raise TypeError(f'Unsupported file type: {type(f)}')\n\n\ndef open_file_path(path, mode):\n    import os\n    os.makedirs(os.path.dirname(path), exist_ok=True)\n    return open(path, mode)\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n# %%\n"
+  ],
+  [
+   "day? Not the question you're searching for? + Ask your question Ask your question\n\n \nText solution\nVerified Step 1. Calculate the number of eggs Janet uses for breakfast and muffins: Janet uses 3 eggs for breakfast and 4 eggs for muffins, so she uses a total of 3 + 4 = 7 eggs per day. Step 2. Calculate the number of eggs Janet sells: Janet has 16 eggs per day and uses 7 eggs, so she has 16 - 7 = 9 eggs left to sell. Step 3. Calculate the amount of money Janet makes: Janet sells each egg for$2, so she makes 9 * $2 =$18 per day.\n\nAsk your next question\nOliver Discussed\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 9 mins ago Discuss this question LIVE 9 mins ago \n Question Text Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\nTopicAll Topics\nSubjectAlgebra 1\nLanguagEnglish\nAnswer Type Text solution\nDMCA\nReviews\n  \u2022 \n    2022-08-17\n    Tata\n    Thanks a lot, I really appreciat it\n  \u2022 \n    2022-08-16\n    Lily\n    Thank you for the detailed solution. I'm satisfied with the help!\n  \u2022 \n    2022-08-15\n    Lily\n    Thank you for the detailed solution. I'm satisfied with the help!\n  \u2022 \n    2022-08-14\n    Lily\n    Thank you for the detailed solution. I'm satisfied with the help!\nView more\nQuestion Text\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for \\$2 per fresh duck egg. How much in dollars does she make every day?\nTopicAll Topics\nSubjectAlgebra 1\nLanguagEnglish\nAnswer Type Text solution\nDMCA\nReviews\n  \u2022 \n    2022-08-17\n    Tata\n    Thanks a lot, I really appreciat it\n  \u2022 \n    2022-08-16\n    Lily\n    Thank you for the detailed solution. I'm satisfied with the help!\n  \u2022 \n    2022-08-15\n    Lily\n    Thank you for the detailed solution. I'm satisfied with the help!\n  \u2022 \n    2022-08-14\n    Lily\n    Thank you for the detailed solution. I'm satisfied with the help!\nView more\nStudents who ask this question also asked\nQuestion 1\n\n\nViews: 5,288\n\nThe ducks lay 16 eggs per day. Janet eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? \n\n Topic All Topics Question Text The ducks lay 16 eggs per day. Janet eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\nTopicAll Topics\nSubjectAlgebra 1\nLanguagEnglish\nAnswer Type Text solution\nDMCA\nQuestion 2\n\n\nViews: 5,288\n\nThe ducks lay 16 eggs per day. Janet eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? \n\n Topic All Topics Question Text The ducks lay 16 eggs per day. Janet eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?"
+  ],
+  [
+   "the carriage into a request that she would not go.\n\n\"I am sure I cannot stay,\" said Elizabeth. \"I have no business here.\"\n\n\"You have no business anywhere,\" said Miss Bingley, \"but to be with us.\"\n\n\"I am sure I cannot stay,\" repeated Elizabeth, \"and I am sure I shall not.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" repeated Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said Miss Bingley, \"and I shall not be able to bear it.\"\n\n\"I am sure I shall not be able to bear it either,\" said Elizabeth, \"and I shall go.\"\n\n\"You are very rude,\" said"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    133
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 60.45674554748525,
+   "decode_tok_s": 7.795543696784561,
+   "decode_tok_s_by_tokens": 60.41546365008035,
+   "tokens_per_chunk": 7.6992481203007515,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 16.932750958018005,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.004978500073775649
+   ],
+   "tpot_ms": {
+    "p50": 130.71029202546924,
+    "p90": 132.88795796688646,
+    "p99": 133.6568749975413,
+    "max": 134.57229197956622,
+    "mean": 128.27841634862125
+   },
+   "t_start_unix": 1795382805.3283083,
+   "wall_s": 16.93772945809178,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    133
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 60.356850297200374,
+   "decode_tok_s": 7.782796553924835,
+   "decode_tok_s_by_tokens": 60.31667329291747,
+   "tokens_per_chunk": 7.6992481203007515,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 16.960484458948486,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.005278249969705939
+   ],
+   "tpot_ms": {
+    "p50": 130.90062502305955,
+    "p90": 133.04883299861103,
+    "p99": 133.70204193051904,
+    "max": 139.1534999711439,
+    "mean": 128.48851862839763
+   },
+   "t_start_unix": 1795382823.2701702,
+   "wall_s": 16.96576270891819,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    133
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 60.13178079411903,
+   "decode_tok_s": 7.754646870111992,
+   "decode_tok_s_by_tokens": 60.09851324336794,
+   "tokens_per_chunk": 7.6992481203007515,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 17.02205170795787,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.007212792057543993
+   ],
+   "tpot_ms": {
+    "p50": 130.860541947186,
+    "p90": 132.99399998504668,
+    "p99": 134.04687505681068,
+    "max": 136.7108749691397,
+    "mean": 128.95493718149902
+   },
+   "t_start_unix": 1795382841.239088,
+   "wall_s": 17.029264500015415,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-omlx-oq4e-r2-natural",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}

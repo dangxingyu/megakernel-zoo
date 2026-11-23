@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": true,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 59.329906080801806,
+  "min": 55.88237144443402,
+  "max": 68.25700261249612
+ },
+ "decode_tok_s": {
+  "median": 60.12048824659196,
+  "min": 56.60978261021421,
+  "max": 69.32594344509417
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 60.12048824659196,
+  "min": 56.60978261021421,
+  "max": 69.32594344509417
+ },
+ "tokens_per_chunk": 1.0,
+ "tpot_p50_ms": 0.037334044463932514,
+ "tpot_p99_ms": 70.26920898351818,
+ "ttft_median_s": 0.24574325000867248,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 50.585752125945874,
+ "tok_s_by_tokens": 60.72856231042069,
+ "tok_s_by_tokens_per_repeat": [
+  68.25700261249612,
+  55.88237144443402,
+  59.329906080801806
+ ],
+ "prompts": "natural text (prompts file)",
+ "texts": [
+  [
+   "):\n        return _open_read(f)\n    elif mode in ('w', 'wb'):\n        return _open_write(f)\n    elif mode in ('a', 'ab'):\n        return _open_append(f)\n    else:\n        raise ValueError(f'Unsupported mode: {mode}')\n\n\ndef _open_read(f):\n    if hasattr(f, 'read'):\n        return f\n    with open(f, 'rb') as fh:\n        return fh.read()\n\n\ndef _open_write(f):\n    if hasattr(f, 'write'):\n        return f\n    return open(f, 'wb')\n\n\ndef _open_append(f):\n    if hasattr(f, 'write'):\n        return f\n    return open(f, 'ab')\n#!/usr/bin/env python3\n\"\"\"\nTest script for the new OCR pipeline.\n\"\"\"\n\nimport sys\nimport os\nfrom pathlib import Path\n\n# Add src to path\nsys.path.insert(0, str(Path(__file__).parent / 'src'))\n\nfrom ocr_pipeline import OCRPipeline\n\n\ndef test_pipeline():\n    \"\"\"Test the OCR pipeline with a sample image.\"\"\"\n    print(\"=\" * 60)\n    print(\"OCR Pipeline Test\")\n    print(\"=\" * 60)\n    \n    # Check if sample image exists\n    sample_image = Path(__file__).parent / 'sample_image.png'\n    if not sample_image.exists():\n        print(f\"\\n\u26a0\ufe0f  Sample image not found: {sample_image}\")\n        print(\"Please add a sample image to test the pipeline.\")\n        print(\"\\nYou can:\")\n        print(\"1. Add a sample image to the project root\")\n        print(\"2. Or modify this script to use your own image\")\n        return\n    \n    # Initialize pipeline\n    print(\"\\nInitializing OCR pipeline...\")\n    pipeline = OCRPipeline()\n    \n    # Process image\n    print(f\"\\nProcessing image: {sample_image}\")\n    try:\n        result = pipeline.process(str(sample_image))\n        \n        # Display results\n        print(\"\\n\" + \"=\" * 60)\n        print(\"RESULTS\")\n        print(\"=\" * 60)\n        print(f\"\\nText:\\n{result['text']}\")\n        print(f\"\\nConfidence: {result['confidence']:.2f}\")\n        print(f\"\\nBounding Boxes: {len(result['bounding_boxes'])}\")\n        for i, box in enumerate(result['bounding_boxes'][:5]):  # Show first 5\n            print(f\"  Box {i+1}: {box}\")\n        if len(result['bounding_boxes']) > 5:\n            print(f\"  ... and {len(result['bounding_boxes']) - 5} more\")\n        \n        print(\"\\n\" + \"=\" * 60)\n        print(\"\u2705 Pipeline test completed successfully!\")\n        print(\"=\" * 60)\n        \n    except Exception as e:\n        print(f\"\\n\u274c Error during processing: {e}\")\n        import traceback\n        traceback.print_exc()\n\n\nif __name__ == '__main__':\n    test_pipeline()\n#!/usr/bin/env python3\n\"\"\"\nTest script for the OCR pipeline with a sample image.\n\"\"\"\n\nimport sys\nfrom pathlib import Path\n\n# Add src to path\nsys.path.insert(0, str(Path(__file__).parent / 'src'))\n\nfrom ocr_pipeline import OCRPipeline\n\n\ndef test_pipeline():\n    \"\"\"Test the OCR pipeline with a sample image.\"\"\"\n    print(\"=\" * 60)\n    print(\"OCR Pipeline Test\")\n    print(\"=\" * 60)\n    \n    # Initialize pipeline\n"
+  ],
+  [
+   " day? Not the question you're searching for? + Ask your question Ask your question\n\n \nText solution\nVerified Step 1. Calculate the number of eggs Janet uses for breakfast and muffins: Janet uses 3 eggs for breakfast and 4 eggs for muffins, so she uses a total of 3 + 4 = 7 eggs. Step 2. Calculate the number of eggs Janet sells: Janet has 16 eggs per day and uses 7 eggs, so she has 16 - 7 = 9 eggs left to sell. Step 3. Calculate the amount of money Janet makes: Janet sells each egg for$2, so she makes 9 * $2 =$18 per day.\n\nAsk your next question\nOliver Discussed\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 9 mins ago Discuss this question LIVE 9 mins ago \n Question Text Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\nTopicAll Topics\nSubjectAlgebra 1\nLanguagene\nAnswer Number: 18\nFinal Answer: $18$\n\nSimilar Questions\n\nKnowledge Check\n\n  \u2022 Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 1.$18\n  2. $20 3.$22\n  4. $24 View solution Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\n\n    A$18 B$20\n    C$22 D$24\n\n  \u2022 Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 1.$18\n  2. $20 3.$22\n  4. $24 View solution Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\n\n    A$18 B$20\n    C$22 D$24\n\n  \u2022 Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 1.$18\n  2. $20 3.$22\n  4. $24 View solution Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\n\n    A$18 B$20\n    C$22 D$24\n\n  \u2022 Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 1.$18\n  2. $20 3.$22\n  4. $24 View solution Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the"
+  ],
+  [
+   " the carriage into a request that she would stay.\n\n\"I am sure I cannot,\" said Elizabeth. \"I have a great deal to do, and I am sure I shall be wanted at home.\"\n\n\"You are not wanted at home,\" said Miss Bingley, \"and you are not going to be wanted at home.\"\n\n\"I am sure I am,\" said Elizabeth.\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are not going to be.\"\n\n\"I am sure I am,\" said Elizabeth, \"and I am sure I shall be.\"\n\n\"You are not,\" said Miss Bingley, \"and you are"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 68.25700261249612,
+   "decode_tok_s": 69.32594344509417,
+   "decode_tok_s_by_tokens": 69.32594344509417,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 14.756380500039086,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.24574325000867248
+   ],
+   "tpot_ms": {
+    "p50": 0.03550003748387098,
+    "p90": 64.65745798777789,
+    "p99": 70.26920898351818,
+    "max": 74.63587494567037,
+    "mean": 14.424614369539674
+   },
+   "t_start_unix": 1795383987.0550478,
+   "wall_s": 15.002123750047758,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 55.88237144443402,
+   "decode_tok_s": 56.60978261021421,
+   "decode_tok_s_by_tokens": 56.60978261021421,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 18.071081583970226,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.2531228750012815
+   ],
+   "tpot_ms": {
+    "p50": 0.044291955418884754,
+    "p90": 65.89029193855822,
+    "p99": 69.89837496075779,
+    "max": 73.76237493008375,
+    "mean": 17.664791382180084
+   },
+   "t_start_unix": 1795384003.0626283,
+   "wall_s": 18.324204458971508,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 59.329906080801806,
+   "decode_tok_s": 60.12048824659196,
+   "decode_tok_s_by_tokens": 60.12048824659196,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 17.0158298749011,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.2435940420255065
+   ],
+   "tpot_ms": {
+    "p50": 0.037334044463932514,
+    "p90": 64.34254196938127,
+    "p99": 70.28074993286282,
+    "max": 72.91483308654279,
+    "mean": 16.633264784849562
+   },
+   "t_start_unix": 1795384022.39136,
+   "wall_s": 17.259423916926607,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-llamacpp-q4-ds-r1-natural",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}
