@@ -1,0 +1,274 @@
+{
+ "model": "thinkingmachines/Inkling-2-Mini",
+ "gpu": "Apple M5 Max (40-core GPU, 48 GB)",
+ "hw": "m5max",
+ "track": "c",
+ "provisional": true,
+ "machine": [
+  "Apple M5 Max",
+  "51539607552"
+ ],
+ "calibre": "server end to end over HTTP, client clock (eval/client.py steady through baselines/mac/bench.sh), B=1, greedy, ignore_eos, text prompts; 1 warm-up + 3 repeats per server start, 2 starts per system in turns. b1: synthetic 64-token prompts, 1,024 new tokens, token-based decode rate; b1_natural: eval/natural_prompts.py, same rate; b1_chat: GSM8K through the chat template, 256 new tokens, end-to-end rate (see baselines/mac/summarize.py). Microseconds per token.",
+ "systems": {
+  "llamacpp-q4": {
+   "tok_s": {
+    "natural": 40.0,
+    "synth": 39.8,
+    "chat": 41.1
+   },
+   "tokens_per_chunk": {
+    "natural": 1.0,
+    "synth": 1.0,
+    "chat": 1.04
+   },
+   "per_start_tok_s": {
+    "natural": [
+     39.9,
+     40.0
+    ],
+    "synth": [
+     39.6,
+     40.0
+    ],
+    "chat": [
+     41.1,
+     41.1
+    ]
+   },
+   "starts": {
+    "natural": 2,
+    "synth": 2,
+    "chat": 2
+   },
+   "b1_natural": 25030,
+   "b1": 25130,
+   "ttft_s": {
+    "chat": 0.358
+   },
+   "tokens_per_stream": {
+    "chat": 181.0
+   },
+   "b1_chat": 24352,
+   "short": "llama.cpp master 5bacb7c, Q4_K_M (bartowski, 76d5702)",
+   "general_engine": true,
+   "flags": "llama-server -ngl 999 -fa on -c 8192 --parallel 1 --no-cache-prompt --jinja",
+   "weights": "Q4_K_M GGUF, 18.7 GB: not the checkpoint's formats"
+  },
+  "llamacpp-q4-ds": {
+   "tok_s": {
+    "natural": 61.3,
+    "synth": 48.6,
+    "chat": 80.0
+   },
+   "tokens_per_chunk": {
+    "natural": 1.0,
+    "synth": 1.0,
+    "chat": 1.04
+   },
+   "per_start_tok_s": {
+    "natural": [
+     60.1,
+     62.4
+    ],
+    "synth": [
+     48.0,
+     49.3
+    ],
+    "chat": [
+     80.1,
+     80.0
+    ]
+   },
+   "starts": {
+    "natural": 2,
+    "synth": 2,
+    "chat": 2
+   },
+   "b1_natural": 16323,
+   "b1": 20556,
+   "ttft_s": {
+    "chat": 0.38
+   },
+   "tokens_per_stream": {
+    "chat": 181.0
+   },
+   "b1_chat": 12494,
+   "short": "llama.cpp #32218 (e4b1cb5) + DSpark, Q4_K_M",
+   "general_engine": true,
+   "flags": "as llamacpp-q4 plus -md Inkling-2-Mini-DSpark-bf16.gguf -ngld 999 --spec-type draft-dspark --spec-draft-n-max 7",
+   "draft": "mtp.safetensors of the checkpoint (b85c3cf) converted by #32218: convert_hf_to_gguf.py --dspark --outtype bf16"
+  },
+  "llamacpp-q4-pr": {
+   "tok_s": {
+    "natural": 39.9,
+    "synth": 40.0
+   },
+   "tokens_per_chunk": {
+    "natural": 1.0,
+    "synth": 1.0
+   },
+   "per_start_tok_s": {
+    "natural": [
+     39.9
+    ],
+    "synth": [
+     40.0
+    ]
+   },
+   "starts": {
+    "natural": 1,
+    "synth": 1
+   },
+   "b1_natural": 25082,
+   "b1": 25016,
+   "short": "llama.cpp #32218 (e4b1cb5), Q4_K_M, no draft",
+   "general_engine": true,
+   "note": "check that #32218 leaves plain decode as master (it does: 40.0 tok/s)"
+  },
+  "mlxlm-native": {
+   "tok_s": {
+    "natural": 32.8,
+    "synth": 32.9,
+    "chat": 34.6
+   },
+   "tokens_per_chunk": {
+    "natural": 1.03,
+    "synth": 1.02,
+    "chat": 1.09
+   },
+   "per_start_tok_s": {
+    "natural": [
+     32.8
+    ],
+    "synth": [
+     32.9
+    ],
+    "chat": [
+     34.4,
+     34.8
+    ]
+   },
+   "starts": {
+    "natural": 1,
+    "synth": 1,
+    "chat": 2
+   },
+   "b1_natural": 30486,
+   "b1": 30359,
+   "ttft_s": {
+    "chat": 0.513
+   },
+   "tokens_per_stream": {
+    "chat": 175.0
+   },
+   "b1_chat": 28900,
+   "short": "mlx-lm #2086 (e2b5bbd), the checkpoint as stored (NVFP4/MXFP8/BF16)",
+   "general_engine": true,
+   "flags": "mlx_lm.server --model <checkpoint>",
+   "weights": "the checkpoint's own formats: the like-for-like (track A/C) reference",
+   "note": "no ignore_eos in mlx_lm.server: synth/natural streams may stop early (--allow-short, all streams ran >=64 tokens); one server start for synth and natural (the first start failed on the model name)"
+  },
+  "omlx-oq4e": {
+   "tok_s": {
+    "natural": 59.6,
+    "synth": 59.7,
+    "chat": 60.5
+   },
+   "tokens_per_chunk": {
+    "natural": 7.53,
+    "synth": 7.56,
+    "chat": 7.57
+   },
+   "per_start_tok_s": {
+    "natural": [
+     58.9,
+     60.3
+    ],
+    "synth": [
+     58.9,
+     60.6
+    ],
+    "chat": [
+     60.3,
+     60.7
+    ]
+   },
+   "starts": {
+    "natural": 2,
+    "synth": 2,
+    "chat": 2
+   },
+   "b1_natural": 16779,
+   "b1": 16744,
+   "ttft_s": {
+    "chat": 0.009
+   },
+   "tokens_per_stream": {
+    "chat": 174.0
+   },
+   "b1_chat": 16529,
+   "short": "oMLX v0.8.3, oQ4e (mlx-community/Inkling-2-Mini-oQ4e-mtp, 3eea042)",
+   "general_engine": true,
+   "flags": "omlx serve --max-concurrent-requests 1, mtp_enabled false",
+   "weights": "oQ4e: NVFP4 experts of layers 0-19 as stored, layers 20-23 experts MXFP8 -> affine 4-bit, attention/embeddings affine 8-bit"
+  },
+  "omlx-oq4e-ds": {
+   "tok_s": {
+    "natural": 120.4,
+    "synth": 72.6,
+    "chat": 82.4
+   },
+   "tokens_per_chunk": {
+    "natural": 14.23,
+    "synth": 9.23,
+    "chat": 9.16
+   },
+   "per_start_tok_s": {
+    "natural": [
+     119.0,
+     121.8
+    ],
+    "synth": [
+     71.2,
+     74.1
+    ],
+    "chat": [
+     82.1,
+     82.6
+    ]
+   },
+   "starts": {
+    "natural": 2,
+    "synth": 2,
+    "chat": 2
+   },
+   "b1_natural": 8307,
+   "b1": 13767,
+   "ttft_s": {
+    "chat": 0.011
+   },
+   "tokens_per_stream": {
+    "chat": 174.0
+   },
+   "b1_chat": 12141,
+   "short": "oMLX v0.8.3 + DSpark (Lightning MTP), oQ4e",
+   "general_engine": true,
+   "flags": "as omlx-oq4e with mtp_enabled true (bundled BF16 DSpark draft, block 8, adaptive depth up to 7)",
+   "note": "streams one SSE chunk per ~128 ms (9-15 tokens) without per-chunk counts: the token-based rate spreads each stream's tokens evenly over its chunks"
+  }
+ },
+ "versions": {
+  "macOS": "26.6.2",
+  "mlx": "0.32.4",
+  "llama.cpp_master": "5bacb7c (2026-11-22)",
+  "llama.cpp_pr32218": "e4b1cb5 (2026-11-22)",
+  "omlx": "v0.8.3 (mlx-lm 0.32.3.dev8, mlx-vlm 0.7.11)",
+  "mlx-lm_pr2086": "e2b5bbd",
+  "checkpoint": "thinkingmachines/Inkling-2-Mini b85c3cf"
+ },
+ "notes": [
+  "No general engine here runs the checkpoint's formats with speculation: mlx-lm #2086 has no DSpark; oMLX and llama.cpp speculate on re-quantized weights (oQ4e, Q4_K_M). A track-C engine on the checkpoint's own formats is compared with mlxlm-native (same formats) and with the fastest practical engine (omlx-oq4e-ds).",
+  "Unsloth's Inkling GGUFs (UD-*, dspark-*-Q8_0) do not load in llama.cpp master or #32218 (arch inkling2 with 48 blocks; DSpark head without markov_w2, padded vocabulary).",
+  "Memory bandwidth floor and DSpark acceptance are measured in the starter/evaluator port, not here."
+ ]
+}

@@ -16,6 +16,10 @@ What it does, on the card the evaluation has:
 The server uses the engine's submit()/poll() when it has them (an engine that keeps its loop on the device can then
 still stream), else step() through a cohort adapter. Standard library only in this file; the client and the front end
 run under the tools Python (aiohttp, tokenizers).
+
+Track C adds `sequential_check`: the same reference prompts again, one request at a time (`tokens_b1`), so that the
+single-sequence path (where a speculative engine drafts and verifies) is checked too. On Apple silicon (macOS) the
+client samples no NVML, and kernel_eval.py passes batches=(1,) with the all-at-once check off unless B=8 is asked for.
 """
 
 from __future__ import annotations
@@ -24,11 +28,13 @@ import argparse
 import http.client
 import json
 import os
+import platform
 import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -128,15 +134,43 @@ def check_tokens(port: int, prompts: list[list[int]], expect: list[list[int]], t
             "note": "tokens streamed by the HTTP server for the reference prompts, all at once, against the engine's own step-by-step greedy tokens"}
 
 
+def check_tokens_sequential(port: int, prompts: list[list[int]], expect: list[list[int]], timeout: float) -> dict:
+    """The check of check_tokens with one request at a time: each prompt alone on the server (batch 1), the next one
+    sent when the previous one has finished."""
+    got: list = []
+    errors: list[str] = []
+    for p, e in zip(prompts, expect):
+        try:
+            got.append(stream_ids(port, p, len(e), timeout))
+        except Exception as error:
+            errors.append(f"{type(error).__name__}: {str(error)[:200]}")
+            break
+    if errors or len(got) != len(expect):
+        return {"pass": False, "errors": errors[:3]}
+    prefix, identical, lengths = [], 0, True
+    for g, e in zip(got, expect):
+        lengths = lengths and len(g) == len(e)
+        same = next((i for i, (a, b) in enumerate(zip(g, e)) if a != b), min(len(g), len(e)))
+        prefix.append(same / max(1, len(e)))
+        identical += int(g == e)
+    mean = sum(prefix) / len(prefix)
+    return {"pass": bool(lengths and mean >= 0.75 and identical * 2 >= len(expect)), "mean_matching_prefix": mean,
+            "sequences_identical": identical, "of": len(expect), "lengths_ok": lengths,
+            "first_difference": [next((i for i, (a, b) in enumerate(zip(g, e)) if a != b), None) for g, e in zip(got, expect)],
+            "note": "tokens streamed by the HTTP server for the reference prompts, one request at a time (batch 1), against "
+                    "the engine's own step-by-step greedy tokens"}
+
+
 def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch: Path, server_cpus: str | None = None,
             client_cpus: str | None = None, batches=(1, 8), max_tokens: int = 1024, repeats: int = 3, warmup: int = 1,
             prompt_tokens: int = 64, startup_s: float = 1800.0, run_s: float = 3600.0, read_s: float = 300.0, prompts: list | None = None,
             expect: list | None = None, max_batch: int = 8, max_context: int = 2048, rate: str = "chunks",
-            natural_prompts: str | None = None) -> dict:
+            natural_prompts: str | None = None, concurrent_check: bool = True, sequential_check: bool = False) -> dict:
     """rate "chunks": time per step = 1e6 * B / decode_tok_s (one SSE chunk per token, tracks A and B); "tokens" (track
     C): 1e6 * B / decode_tok_s_by_tokens, every chunk weighted by the tokens it carries (eval/client.py chunk_weights;
     the same number when every chunk carries one token). natural_prompts: a prompts file (eval/natural_prompts.py)
-    measured as a second workload, reported as natural_b1 / natural_b8."""
+    measured as a second workload, reported as natural_b1 / natural_b8. concurrent_check: the token check with every
+    prompt sent at once (`tokens`); sequential_check: the same prompts one request at a time (`tokens_b1`)."""
     scratch.mkdir(parents=True, exist_ok=True)
     sock, port = scratch / "http.sock", free_port()
     sock.unlink(missing_ok=True)
@@ -172,7 +206,7 @@ def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch
             out["error"] = "the HTTP server did not come up"
             out["engine_log"], out["frontend_log"] = tail(logs["engine"]), tail(logs["frontend"])
             return out
-        if prompts and expect:
+        if prompts and expect and concurrent_check:
             # a server that sends nothing for read_s seconds counts as hung (the engine's first token of a request
             # needs the prompt's steps, nothing more)
             out["tokens"] = check_tokens(port, prompts, expect, timeout=read_s)
@@ -181,13 +215,22 @@ def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch
                 out["error"] = "the server died or hung during the token check (the check's eight prompts sent at once)"
                 out["engine_log"], out["frontend_log"] = tail(logs["engine"]), tail(logs["frontend"])
                 return out
+        if prompts and expect and sequential_check:
+            t1 = time.time()
+            out["tokens_b1"] = check_tokens_sequential(port, prompts, expect, timeout=read_s)
+            out["tokens_b1_seconds"] = round(time.time() - t1, 1)
+            if engine.poll() is not None or frontend.poll() is not None or out["tokens_b1"].get("errors"):
+                out["error"] = "the server died or hung during the one-request-at-a-time token check"
+                out["engine_log"], out["frontend_log"] = tail(logs["engine"]), tail(logs["frontend"])
+                return out
         out["rate"] = rate
         workloads = [("", None)] + ([("natural_", natural_prompts)] if natural_prompts else [])
         for (wname, pfile), batch in [(w, b) for w in workloads for b in batches]:
             result_path = scratch / f"http-{wname}b{batch}.json"
             cmd = pin(client_cpus) + [tools_py, str(HERE / "client.py"), "steady", "--base", f"http://127.0.0.1:{port}", "--model", "m", "--model-dir", model_dir,
                                       "--batch", str(batch), "--prompt-tokens", str(prompt_tokens), "--max-tokens", str(max_tokens), "--repeats", str(repeats),
-                                      "--warmup", str(warmup), "--nvml", "--read-timeout", str(read_s), "--extra-body", '{"ignore_eos": true}',
+                                      "--warmup", str(warmup)] + (["--nvml"] if platform.system() != "Darwin" else []) + [
+                                      "--read-timeout", str(read_s), "--extra-body", '{"ignore_eos": true}',
                                       "--label", "eval-http", "--out", str(result_path)] + (["--prompts-file", pfile] if pfile else [])
             burst_stats(port, reset=True)
             try:
@@ -222,7 +265,8 @@ def measure(workspace: str, model_dir: str, eval_py: str, tools_py: str, scratch
                 out["error"] = f"the server died during the batch-{batch} measurement"
                 out["engine_log"] = tail(logs["engine"])
                 return out
-        out["ok"] = all(f"{w}b{b}" in out and "step_us" in out[f"{w}b{b}"] for w, _ in workloads for b in batches) and (not (prompts and expect) or out["tokens"]["pass"])
+        out["ok"] = all(f"{w}b{b}" in out and "step_us" in out[f"{w}b{b}"] for w, _ in workloads for b in batches) and \
+            all(out[k]["pass"] for k in ("tokens", "tokens_b1") if prompts and expect and k in out)
         return out
     finally:
         kill(frontend)
@@ -237,16 +281,18 @@ def main() -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--python", default=os.environ.get("MK_EVAL_PY") or sys.executable)
     parser.add_argument("--tools-python", default=os.environ.get("MK_TOOLS_PY") or sys.executable)
-    parser.add_argument("--scratch", default=os.environ.get("MK_EVAL_SCRATCH", "/dev/shm"))
+    parser.add_argument("--scratch", default=os.environ.get("MK_EVAL_SCRATCH") or ("/dev/shm" if os.path.isdir("/dev/shm") else tempfile.gettempdir()))
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--batches", default="1,8")
+    parser.add_argument("--batches", default=os.environ.get("MK_EVAL_BATCHES") or ("1" if platform.system() == "Darwin" else "1,8"))
     args = parser.parse_args()
     scratch = Path(args.scratch) / f"mk-http-{os.getpid()}"
+    batches = [int(b) for b in args.batches.split(",")]
     result = measure(str(Path(args.workspace).resolve()), args.model_dir, args.python, args.tools_python, scratch,
-                     os.environ.get("MK_SERVER_CPUS"), os.environ.get("MK_CLIENT_CPUS"), [int(b) for b in args.batches.split(",")],
-                     args.max_tokens, args.repeats, args.warmup)
+                     os.environ.get("MK_SERVER_CPUS"), os.environ.get("MK_CLIENT_CPUS"), batches,
+                     args.max_tokens, args.repeats, args.warmup, max_batch=max(batches) if platform.system() == "Darwin" else 8,
+                     concurrent_check=True, sequential_check=False)
     shutil.rmtree(scratch, ignore_errors=True)
     Path(args.out).write_text(json.dumps(result, indent=1) + "\n")
     print("MK_HTTP " + json.dumps(result)[:3000], flush=True)

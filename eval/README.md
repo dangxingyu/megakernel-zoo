@@ -48,3 +48,40 @@ An engine passes when, on every checked position, its deviation from the FP64 re
 standard BF16 implementation's (Hugging Face `transformers`): 2× on the median and 99th percentile of the logit error,
 4× on the KL divergence of the next-token distribution, and top-1 agreement within one point. The multiples are per
 model, so they follow its numerics. See the write-up's [validation section](https://dangxingyu.github.io/megakernel/#validation).
+
+## On Apple silicon
+
+The evaluator also runs on a Mac (tested on an M5 Max, 48 GB, macOS 26, MLX 0.32; no CUDA, no NVML, no Xcode). The GPU
+path is unchanged; `eval/_device.py` picks the device (`MK_DEVICE=cuda | metal`, default `metal` on macOS) and holds the
+only difference in the engine contract: on `metal`, `step()` takes a NumPy int64 array `[B]` and returns an `mx.array` or
+NumPy array `[B, vocab]` (float32 / bf16 / fp16, possibly lazy: the harness `mx.async_eval`s every step and
+`mx.eval` + `mx.synchronize()`s before reading a clock); `generate()` returns integers `[B, n]`; `submit` / `poll` are as
+on the GPU. No torch is needed.
+
+```bash
+bash scripts/eval_setup_mac.sh                     # checks .venv-mac and the checkpoint; writes /tmp/mk/eval_env.json (track c, card m5max)
+MK_REF_DIR=~/mk-ref/thinkingmachines-inkling-2-mini \
+  .venv-mac/bin/python eval/kernel_eval.py --workspace starter_mac --out /tmp/result.json --track c
+python3 autoresearch/start.py RUN --model thinkingmachines/Inkling-2-Mini --card m5max --track C --hours 12
+```
+
+What differs on a Mac:
+
+- **Batch 1 only by default** (`MK_EVAL_BATCHES` / `--batches`, default `1`). The correctness check runs the eight
+  reference sequences one at a time, so `batch` becomes a repeatability check and the slot-order `invariance` gate (bit
+  for bit, batches > 1 only) is skipped; `MK_EVAL_BATCHES=1,8` restores the batch-8 check and measurement for an engine
+  that serves eight. The HTTP stage measures batch 1 (synthetic and, in track C, natural text) and checks the server's
+  tokens one request at a time (gate `http_tokens_b1`; in track C this check also runs on the GPU, so that the
+  single-request speculative path is gated there too).
+- **No trace stage** (no CUPTI / nsys): `single_launch` and `gpu_never_waits` are not judged. **No NVML** in the
+  client (`http_stage.py` does not pass `--nvml` on macOS); the runner reports MLX's peak allocation instead.
+- **Scratch** in `$TMPDIR` (no `/dev/shm`); **time limits** x4 (`eval_timeout_scale` of the card; `MK_EVAL_TIMEOUT_SCALE`
+  overrides).
+- **MBU** uses the bandwidth measured on this Mac by `scripts/mac_membw.py`: `CARDS["m5max"]` in `modelinfo.py`, 565 GB/s.
+- **The reference** is not built here: copy the float64 reference made on a GPU machine (`make_reference.py`; `ids.npy`,
+  `meta.json`, `logits64.npy`, `long_positions.npy`, `long_logits64.npy`) and point `MK_REF_DIR` or `--ref` at it. Without
+  it the evaluation stops at once with status `error` naming the missing files.
+- `release_check.py` checks batch sizes up to `--max-batch` (default 1 on metal); `spec_check.py gen` takes `--max-batch 1`
+  for an engine that serves one sequence.
+- The starting engine is `starter_mac/` (mlx-lm's `inkling2` model behind the contract, track C, one token per step);
+  the run's prompt is `autoresearch/prompts/first_C_mac.md` and its skill `autoresearch/skills/megakernel/SKILL_mac.md`.

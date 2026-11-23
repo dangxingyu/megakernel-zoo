@@ -35,6 +35,8 @@ import threading
 import time
 from pathlib import Path
 
+from mkserve.output import ResponseParser, load_response_template
+
 
 # ---------------------------------------------------------------------------------------------- the engine worker
 
@@ -70,7 +72,6 @@ def sample_rows(torch, logits, temp, top_p, top_k, kmax, u):
 
 def engine_main(args) -> int:
     import numpy as np
-    import torch
 
     os.chdir(args.workspace)
     engine = load_engine(args.workspace, args.model_dir, args.max_batch, args.max_context)
@@ -85,7 +86,8 @@ def engine_main(args) -> int:
     server.listen(1)
     print(f"MKSERVE engine ready: mode={mode} max_batch={args.max_batch} max_context={args.max_context}", flush=True)
     conn, _ = server.accept()
-    conn.sendall((json.dumps({"hello": {"mode": mode, "max_batch": args.max_batch, "max_context": args.max_context}}) + "\n").encode())
+    conn.sendall((json.dumps({"hello": {"mode": mode, "max_batch": args.max_batch, "max_context": args.max_context,
+                                        "native_sampling": mode == "native" and bool(getattr(engine, "native_sampling", False))}}) + "\n").encode())
     inbox: queue.Queue = queue.Queue()
     cancelled: set[int] = set()
 
@@ -95,6 +97,8 @@ def engine_main(args) -> int:
                 msg = json.loads(line)
                 if "cancel" in msg:
                     cancelled.add(int(msg["cancel"]))
+                    if mode == "native":  # an engine with cancel(rid) stops the row; the call is made from the loop below
+                        inbox.put(msg)
                 else:
                     inbox.put(msg)
         inbox.put(None)  # the front end is gone
@@ -113,13 +117,30 @@ def engine_main(args) -> int:
                     break
                 if req is None:
                     return 0
-                engine.submit(req["rid"], req["ids"], req["n"])
+                if "cancel" in req:
+                    if hasattr(engine, "cancel"):
+                        engine.cancel(req["cancel"])
+                    continue
+                samp = {k: req[k] for k in ("temperature", "top_p", "top_k", "seed") if k in req}
+                if samp and getattr(engine, "native_sampling", False):  # the engine draws tokens inside its own path
+                    engine.submit(req["rid"], req["ids"], req["n"], sampling=samp)
+                else:
+                    engine.submit(req["rid"], req["ids"], req["n"])
             events = engine.poll()
             if events:
-                send([[int(rid), [int(t) for t in tokens], bool(finished)] for rid, tokens, finished in events])
+                info = getattr(engine, "request_info", None) or {}  # optional: per-request facts (prompt tokens kept from a prefix cache)
+                send([[int(rid), [int(t) for t in tokens], bool(finished)] + ([info.pop(rid)] if rid in info else [])
+                      for rid, tokens, finished in events])
             else:
                 time.sleep(0.0002)
 
+    try:
+        import torch
+        cuda = torch.cuda.is_available()
+    except ImportError:
+        cuda = False
+    if not cuda:  # Apple silicon: the engine takes NumPy int64 tokens and returns mx.array or NumPy logits
+        return step_loop_host(engine, args, inbox, cancelled, send)
     waiting: list[dict] = []
     with torch.no_grad():
         while True:
@@ -188,6 +209,65 @@ def engine_main(args) -> int:
             cancelled.difference_update(r["rid"] for r in cohort)
 
 
+def sample_host(logits, temp: float, top_p: float, top_k: int, u: float) -> int:
+    """sample_rows for one row on the host (NumPy): temperature, top-k, top-p, inverse CDF with the uniform number u."""
+    import numpy as np
+    x = np.asarray(logits, dtype=np.float32)
+    if top_k and top_k < x.size:
+        idx = np.argpartition(-x, top_k)[:top_k]
+    else:
+        idx = np.arange(x.size)
+    idx = idx[np.argsort(-x[idx], kind="stable")]
+    v = x[idx] / temp
+    p = np.exp(v - v.max())
+    p /= p.sum()
+    keep = (np.cumsum(p) - p) < top_p
+    p = np.where(keep, p, 0.0)
+    cdf = np.cumsum(p / p.sum())
+    j = min(int(np.searchsorted(cdf, u)), int(keep.sum()) - 1)
+    return int(idx[j])
+
+
+def step_loop_host(engine, args, inbox, cancelled, send) -> int:
+    """Step mode for engines whose logits are host-readable (MLX on Apple silicon): requests one after another
+    (batch 1 is what these engines are built for), the prompt in one step() call when the engine takes several
+    tokens per row, sampling on the host."""
+    import numpy as np
+    while True:
+        req = inbox.get()
+        if req is None:
+            return 0
+        if "cancel" in req:
+            continue
+        rid, ids, n = req["rid"], req["ids"], req["n"]
+        temp = float(req.get("temperature") or 0.0)
+        rng = np.random.default_rng(int(req["seed"]) if req.get("seed") is not None else None)
+        eos = set(req.get("eos") or ())
+        engine.reset()
+        kept = 0
+        if hasattr(engine, "prefill"):         # optional: the prompt in the engine's own wide passes (and its prefix cache)
+            kept = int(engine.prefill(ids[:-1]) or 0)
+        else:
+            for t in ids[:-1]:
+                engine.step(np.array([t], dtype=np.int64))
+        token = ids[-1]
+        for k in range(n):
+            logits = engine.step(np.array([token], dtype=np.int64))
+            if not isinstance(logits, np.ndarray):  # an mx.array (NumPy has no bfloat16)
+                import mlx.core as mx
+                logits = np.array(logits.astype(mx.float32))
+            row = logits.reshape(-1, logits.shape[-1])[0]
+            if temp > 0:
+                token = sample_host(row, temp, float(req.get("top_p") or 1.0), int(req.get("top_k") or 0), float(rng.random()))
+            else:
+                token = int(row.argmax())
+            last = k == n - 1 or token in eos or rid in cancelled
+            send([[rid, [token], last] + ([{"cached_tokens": kept}] if k == 0 and kept else [])])
+            if last:
+                break
+        cancelled.discard(rid)
+
+
 # ------------------------------------------------------------------------------------------------- the front end
 
 def load_chat_template(model_dir: Path):
@@ -221,7 +301,10 @@ def load_chat_template(model_dir: Path):
 
     # the extensions transformers compiles chat templates with: `break` / `continue` and the generation marker
     env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True, extensions=[loopcontrols, Generation])
-    env.filters["tojson"] = lambda x, ensure_ascii=False, indent=None, **kw: json.dumps(x, ensure_ascii=ensure_ascii, indent=indent)
+    # transformers' tojson: templates pass sort_keys and separators (Inkling 2 declares its tools with both), and the
+    # bytes the model was trained on depend on them
+    env.filters["tojson"] = lambda x, ensure_ascii=False, indent=None, separators=None, sort_keys=False: json.dumps(
+        x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
     env.globals["raise_exception"] = raise_exception
     env.globals["strftime_now"] = lambda fmt: datetime.datetime.now().strftime(fmt)
     special = {}
@@ -256,9 +339,175 @@ def eos_ids(model_dir: Path, tok) -> list[int]:
     return sorted(int(i) for i in ids)
 
 
+class Core:
+    """What every API shares: the tokenizer, the chat template, the model's answer format, and one request's run
+    through the engine worker (token ids in; per token, the pieces of reasoning, text and tool calls it completed)."""
+
+    def __init__(self, args, tok, template, special, eos, vocab, hello, writer, rt):
+        self.args, self.tok, self.template, self.special, self.eos, self.vocab = args, tok, template, special, eos, vocab
+        self.hello, self.writer, self.rt = hello, writer, rt
+        self.native = hello["mode"] == "native"
+        self.name = args.name
+        self.queues: dict[int, asyncio.Queue] = {}
+        self.extra = {}  # rid -> facts the engine reported about the request (cached_tokens)
+        self.counter = itertools.count(1)
+        self.warned = False
+        # Prometheus-style counters (GET /metrics): what a user needs to see the engine at work
+        self.stats = {"requests_total": 0, "requests_running": 0, "requests_failed_total": 0, "prompt_tokens_total": 0, "cached_prompt_tokens_total": 0,
+                      "generation_tokens_total": 0, "time_to_first_token_seconds_sum": 0.0, "time_to_first_token_seconds_count": 0,
+                      "time_per_output_token_seconds_sum": 0.0, "time_per_output_token_seconds_count": 0}
+
+    def check(self, ids: list[int], n: int) -> str | None:
+        """The engines do not check their inputs (an out-of-range token id is an out-of-bounds read on the GPU):
+        every limit is enforced here. Returns the reason a request is refused, or None."""
+        if not ids:
+            return "the prompt is empty"
+        if n < 1:
+            return "max_tokens must be at least 1"
+        if any(t < 0 or t >= self.vocab for t in ids):
+            return f"token ids must be in [0, {self.vocab})"
+        if len(ids) + n > self.hello["max_context"]:
+            return (f"prompt ({len(ids)} tokens) plus max_tokens ({n}) exceeds this engine's context of "
+                    f"{self.hello['max_context']} tokens")
+        return None
+
+    def render(self, messages: list, tools=None, **kwargs) -> list[int]:
+        """A conversation through the model's own chat template, as token ids (raises ValueError if it is refused)."""
+        if self.template is None:
+            raise ValueError("this model has no chat template; use /v1/completions")
+        try:
+            text = self.template.render(messages=messages, tools=tools or None, add_generation_prompt=True,
+                                        **self.special, **{k: v for k, v in kwargs.items() if v is not None})
+        except Exception as exc:  # the template rejects the conversation (an unknown role, a malformed tool call)
+            raise ValueError(f"chat template: {exc}") from exc
+        return self.tok.encode(text, add_special_tokens=False).ids
+
+    def sampling(self, temperature, top_p=None, top_k=None, seed=None):
+        """(sampling parameters or None for greedy, refusal or None)."""
+        if temperature is None or float(temperature) <= 0:
+            return None, None
+        if self.native and not self.hello.get("native_sampling"):
+            if self.args.strict_sampling:
+                return None, "this engine decodes greedily in native mode; send temperature 0, or start the server with --mode step"
+            if not self.warned:
+                self.warned = True
+                print("MKSERVE warning: sampling parameters are ignored in native mode (greedy decoding); use --mode step for sampling", flush=True)
+            return None, None
+        return {"temperature": float(temperature), "top_p": float(top_p or 1.0), "top_k": int(top_k or 0), "seed": seed}, None
+
+    def _decode(self, ids, parse):
+        return self.tok.decode(ids, skip_special_tokens=not parse)
+
+    async def run(self, ids: list[int], n: int, sampling=None, stops=(), ignore_eos=False, parse=True):
+        """Yields one dict per generated token: {"content": str, "reasoning": str, "tool_calls": [...]} (any may be
+        empty: a client can time tokens by them), then {"done": True, "finish": "stop"|"length", "prompt_tokens",
+        "completion_tokens", "stop_sequence"}. parse: read the answer's structure (response_template) instead of
+        returning its text with the special tokens left out. Stop strings apply to the text (content) only; text that
+        could still turn into one is held back."""
+        stops = [s for s in stops if s]
+        hold = max((len(s) for s in stops), default=1) - 1
+        stop_ids = set() if ignore_eos else set(self.eos)
+        parser = ResponseParser(self.rt) if parse and self.rt else None
+        rid = next(self.counter)
+        q: asyncio.Queue = asyncio.Queue()
+        self.queues[rid] = q
+        msg = {"rid": rid, "ids": ids, "n": n, "eos": sorted(stop_ids)}
+        if sampling:
+            msg.update(sampling)
+        self.writer.write((json.dumps(msg, separators=(",", ":")) + "\n").encode())
+        st = self.stats
+        t_start, t_first = time.perf_counter(), None
+        st["requests_total"] += 1; st["requests_running"] += 1; st["prompt_tokens_total"] += len(ids)
+        out: list[int] = []
+        prefix = read = 0  # incremental detokenization: text is released when it is whole
+        content, sent, finish, stop_seq, done = "", 0, None, None, False
+
+        def take(pieces, step) -> bool:
+            """Sorts parsed pieces into the step; True when a stop string ended the answer."""
+            nonlocal content, finish, stop_seq
+            for field, value in pieces:
+                if field == "tool_calls":
+                    step["tool_calls"].append(value)
+                elif field == "reasoning_content":
+                    step["reasoning"] += value
+                else:
+                    content += value
+                    hits = [(content.find(s), s) for s in stops if s in content]
+                    if hits:
+                        cut, stop_seq = min(hits)
+                        content, finish = content[:cut], "stop"
+                        return True
+            return False
+
+        def release(step, final=False) -> None:
+            nonlocal sent
+            upto = len(content) if final else max(sent, len(content) - hold)
+            step["content"] += content[sent:upto]
+            sent = upto
+
+        try:
+            ended = False
+            while not done and not ended:
+                tokens, done = await q.get()
+                if t_first is None and tokens:
+                    t_first = time.perf_counter()
+                    st["time_to_first_token_seconds_sum"] += t_first - t_start; st["time_to_first_token_seconds_count"] += 1
+                for token in tokens:
+                    if token in stop_ids:
+                        finish, ended = "stop", True
+                        break
+                    out.append(token)
+                    step = {"content": "", "reasoning": "", "tool_calls": []}
+                    before = self._decode(out[prefix:read], parse)
+                    now = self._decode(out[prefix:], parse)
+                    piece = ""
+                    if len(now) > len(before) and not now.endswith("\ufffd"):
+                        piece = now[len(before):]
+                        prefix, read = read, len(out)
+                    stopped = take(parser.feed(piece) if parser else ([("content", piece)] if piece else []), step)
+                    release(step)
+                    if not stopped and len(out) >= n:
+                        finish = "length"
+                    ended = stopped or finish is not None
+                    yield step
+                    if ended:
+                        break
+            if finish is None:
+                finish = "length" if len(out) >= n else "stop"
+            tail = {"content": "", "reasoning": "", "tool_calls": []}
+            if finish == "length":  # nothing follows: release text that was waiting for more bytes
+                rest = self._decode(out[prefix:], parse)[len(self._decode(out[prefix:read], parse)):].rstrip("\ufffd")
+                if rest and not take(parser.feed(rest) if parser else [("content", rest)], tail) and parser:
+                    take(parser.close(), tail)
+            elif parser and stop_seq is None:
+                take(parser.close(), tail)
+            release(tail, final=True)
+            if tail["content"] or tail["reasoning"] or tail["tool_calls"]:
+                yield tail
+            cached = int(self.extra.get(rid, {}).get("cached_tokens", 0))
+            st["cached_prompt_tokens_total"] += cached
+            yield {"done": True, "finish": finish, "stop_sequence": stop_seq, "prompt_tokens": len(ids), "completion_tokens": len(out),
+                   "cached_tokens": cached}
+        except BaseException:
+            st["requests_failed_total"] += 1
+            raise
+        finally:
+            st["requests_running"] -= 1
+            st["generation_tokens_total"] += len(out)
+            if t_first is not None and len(out) > 1:
+                st["time_per_output_token_seconds_sum"] += (time.perf_counter() - t_first) / (len(out) - 1)
+                st["time_per_output_token_seconds_count"] += 1
+            self.queues.pop(rid, None)
+            self.extra.pop(rid, None)
+            if not done:  # ended early: a step-mode batch drops the row; a native engine cancels it if it can
+                self.writer.write((json.dumps({"cancel": rid}) + "\n").encode())
+
+
 async def frontend_main(args) -> int:
     from aiohttp import web
     from tokenizers import Tokenizer
+
+    from mkserve import protocols
 
     model_dir = Path(args.model_dir)
     tok = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
@@ -267,205 +516,45 @@ async def frontend_main(args) -> int:
     vocab = tok.get_vocab_size(with_added_tokens=True)   # ids a request may carry: the model's embedding rows when its config says how many
     model_cfg = model_dir / "config.json"
     if model_cfg.exists():
-        vocab = int(json.loads(model_cfg.read_text()).get("vocab_size") or vocab)
+        cfg = json.loads(model_cfg.read_text())
+        vocab = int(cfg.get("vocab_size") or (cfg.get("text_config") or {}).get("vocab_size") or vocab)
     for _ in range(int(args.wait_s * 10)):  # the engine worker may still be loading
         if os.path.exists(args.sock):
             break
         await asyncio.sleep(0.1)
     reader, writer = await asyncio.open_unix_connection(args.sock, limit=1 << 24)
     hello = json.loads(await reader.readline())["hello"]
-    native = hello["mode"] == "native"
-    queues: dict[int, asyncio.Queue] = {}
-    counter = itertools.count(1)
-    warned = {"sampling": False}
-    # Prometheus-style counters (GET /metrics): what a user needs to see the engine at work
-    stats = {"requests_total": 0, "requests_running": 0, "requests_failed_total": 0, "prompt_tokens_total": 0,
-             "generation_tokens_total": 0, "time_to_first_token_seconds_sum": 0.0, "time_to_first_token_seconds_count": 0,
-             "time_per_output_token_seconds_sum": 0.0, "time_per_output_token_seconds_count": 0}
+    core = Core(args, tok, template, special, eos, vocab, hello, writer, load_response_template(model_dir))
 
     async def pump() -> None:
         while True:
             line = await reader.readline()
             if not line:
                 os._exit(3)  # the engine worker died: a server that answers nothing must not stay up
-            for rid, tokens, finished in json.loads(line):
-                q = queues.get(rid)
+            for rid, tokens, finished, *extra in json.loads(line):
+                q = core.queues.get(rid)
                 if q is not None:
+                    if extra:
+                        core.extra.setdefault(rid, {}).update(extra[0])
                     q.put_nowait((tokens, finished))
 
-    def error(message: str, status: int = 400):
-        return web.json_response({"error": {"message": message, "type": "invalid_request_error"}}, status=status)
-
-    async def models(_request):
-        return web.json_response({"object": "list", "data": [{"id": args.name, "object": "model", "owned_by": "mkserve",
-                                                                 "engine": args.engine_name, "mode": hello["mode"]}]})
-
-    async def metrics(_request):
-        lines = []
-        for key, value in stats.items():
-            name = "mkserve_" + key
-            kind = "gauge" if key == "requests_running" else "counter"
-            lines += [f"# TYPE {name} {kind}", f"{name} {value}"]
-        return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
-
     @web.middleware
-    async def auth(request, handler):  # --api-key: the OpenAI routes need "Authorization: Bearer KEY"; /health and /metrics stay open
-        if args.api_key and request.path.startswith("/v1/") and request.headers.get("Authorization", "") != f"Bearer {args.api_key}":
-            return web.json_response({"error": {"message": "invalid or missing API key", "type": "authentication_error"}}, status=401)
+    async def auth(request, handler):
+        # --api-key: the model routes need "Authorization: Bearer KEY" (OpenAI, Ollama) or "x-api-key: KEY" (Anthropic);
+        # /health, /metrics and Ollama's version probe stay open
+        if args.api_key and (request.path.startswith("/v1/") or request.path.startswith("/api/")) and request.path != "/api/version":
+            given = request.headers.get("x-api-key") or request.headers.get("Authorization", "").removeprefix("Bearer ")
+            if given != args.api_key:
+                return web.json_response({"error": {"message": "invalid or missing API key", "type": "authentication_error"}}, status=401)
         return await handler(request)
 
-    async def health(_request):
-        return web.json_response({"status": "ok", "engine": args.engine_name, "mode": hello["mode"], "max_batch": hello["max_batch"],
-                                  "max_context": hello["max_context"]})
-
-    async def generate(request, body, ids: list[int], chat: bool):
-        """Run one request through the engine and answer in the completions or the chat format."""
-        stream = bool(body.get("stream"))
-        n = body.get("max_completion_tokens") or body.get("max_tokens") or args.default_max_tokens
-        n = int(n)
-        # The engines do not check their inputs (an out-of-range token id is an out-of-bounds read on the card): every limit is enforced here.
-        if not ids:
-            return error("the prompt is empty")
-        if n < 1:
-            return error("max_tokens must be at least 1")
-        if any(t < 0 or t >= vocab for t in ids):
-            return error(f"token ids must be in [0, {vocab})")
-        if len(ids) + n > hello["max_context"]:
-            return error(f"prompt ({len(ids)} tokens) plus max_tokens ({n}) exceeds this engine's context of {hello['max_context']} tokens")
-        temperature = body.get("temperature")
-        sampling = temperature is not None and float(temperature) > 0
-        if sampling and native:
-            if args.strict_sampling:
-                return error("this engine decodes greedily in native mode; send temperature 0, or start the server with --mode step")
-            if not warned["sampling"]:
-                warned["sampling"] = True
-                print("MKSERVE warning: sampling parameters are ignored in native mode (greedy decoding); use --mode step for sampling", flush=True)
-            sampling = False
-        stops = body.get("stop") or []
-        stops = [stops] if isinstance(stops, str) else [s for s in stops if s]
-        hold = max((len(s) for s in stops), default=1) - 1  # text that could still turn into a stop string is held back
-        stop_ids = set() if body.get("ignore_eos") else set(eos)
-        rid = next(counter)
-        q: asyncio.Queue = asyncio.Queue()
-        queues[rid] = q
-        msg = {"rid": rid, "ids": ids, "n": n, "eos": sorted(stop_ids)}
-        if sampling:
-            msg.update(temperature=float(temperature), top_p=float(body.get("top_p") or 1.0), top_k=int(body.get("top_k") or 0), seed=body.get("seed"))
-        writer.write((json.dumps(msg, separators=(",", ":")) + "\n").encode())
-        t_start, t_first = time.perf_counter(), None
-        stats["requests_total"] += 1; stats["requests_running"] += 1; stats["prompt_tokens_total"] += len(ids)
-        created, kind = int(time.time()), ("chat.completion" if chat else "text_completion")
-        head = {"id": f"{'chatcmpl' if chat else 'cmpl'}-{rid}", "object": kind + (".chunk" if chat and stream else ""), "created": created, "model": args.name}
-
-        def chunk(text: str, finish, first: bool = False) -> bytes:
-            if chat:
-                delta = {"role": "assistant", "content": text} if first else ({"content": text} if text else {})
-                choice = {"index": 0, "delta": delta, "finish_reason": finish}
-            else:
-                choice = {"index": 0, "text": text, "logprobs": None, "finish_reason": finish}
-            return b"data: " + json.dumps(dict(head, choices=[choice]), separators=(",", ":"), ensure_ascii=False).encode() + b"\n\n"
-
-        resp = None
-        if stream:
-            resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"})
-            await resp.prepare(request)
-        out: list[int] = []
-        text, sent, finish = "", 0, None
-        prefix = read = 0  # incremental detokenization: text is released when it is whole
-        first = True
-        try:
-            done = False
-            while not done and finish is None:
-                tokens, done = await q.get()
-                if t_first is None and tokens:
-                    t_first = time.perf_counter()
-                    stats["time_to_first_token_seconds_sum"] += t_first - t_start; stats["time_to_first_token_seconds_count"] += 1
-                for token in tokens:
-                    if token in stop_ids:
-                        finish = "stop"
-                        break
-                    out.append(token)
-                    before = tok.decode(out[prefix:read], skip_special_tokens=True)
-                    now = tok.decode(out[prefix:], skip_special_tokens=True)
-                    if len(now) > len(before) and not now.endswith("�"):
-                        text += now[len(before):]
-                        prefix, read = read, len(out)
-                    cut = min((text.find(s) for s in stops if s in text), default=-1)
-                    if cut >= 0:
-                        text, finish = text[:cut], "stop"
-                        break
-                    if len(out) >= n:
-                        finish = "length"
-                        break
-                    if stream:  # one chunk per token (its text may be empty), so that a client can time tokens
-                        upto = max(sent, len(text) - hold)
-                        await resp.write(chunk(text[sent:upto], None, first))
-                        sent, first = upto, False
-                if done and finish is None:
-                    finish = "length" if len(out) >= n else "stop"
-            if finish == "length":  # nothing follows: release text that was waiting for more bytes
-                tail = tok.decode(out[prefix:], skip_special_tokens=True)[len(tok.decode(out[prefix:read], skip_special_tokens=True)):]
-                text += tail.rstrip("�")
-            usage = {"prompt_tokens": len(ids), "completion_tokens": len(out), "total_tokens": len(ids) + len(out)}
-            if not stream:
-                choice = ({"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": finish} if chat
-                          else {"index": 0, "text": text, "logprobs": None, "finish_reason": finish})
-                return web.json_response(dict(head, choices=[choice], usage=usage), dumps=lambda o: json.dumps(o, ensure_ascii=False))
-            await resp.write(chunk(text[sent:], finish, first))
-            if (body.get("stream_options") or {}).get("include_usage"):
-                await resp.write(b"data: " + json.dumps(dict(head, choices=[], usage=usage)).encode() + b"\n\n")
-            await resp.write(b"data: [DONE]\n\n")
-            return resp
-        except BaseException:
-            stats["requests_failed_total"] += 1
-            raise
-        finally:
-            stats["requests_running"] -= 1
-            stats["generation_tokens_total"] += len(out)
-            if t_first is not None and len(out) > 1:
-                stats["time_per_output_token_seconds_sum"] += (time.perf_counter() - t_first) / (len(out) - 1)
-                stats["time_per_output_token_seconds_count"] += 1
-            queues.pop(rid, None)
-            if not done:  # ended early: a step-mode batch can drop the row; a native engine decodes it to the end
-                writer.write((json.dumps({"cancel": rid}) + "\n").encode())
-
-    async def completions(request):
-        body = await request.json()
-        prompt = body.get("prompt")
-        if isinstance(prompt, list) and len(prompt) == 1 and isinstance(prompt[0], str):
-            prompt = prompt[0]
-        if isinstance(prompt, str):
-            ids = tok.encode(prompt, add_special_tokens=False).ids
-        elif isinstance(prompt, list) and prompt and all(isinstance(t, int) for t in prompt):
-            ids = prompt
-        else:
-            return error("prompt must be one string or one list of token ids")
-        return await generate(request, body, ids, chat=False)
-
-    async def chat_completions(request):
-        body = await request.json()
-        messages = body.get("messages")
-        if not isinstance(messages, list) or not messages:
-            return error("messages must be a non-empty list")
-        if template is None:
-            return error("this model has no chat template; use /v1/completions")
-        for m in messages:  # content given as a list of text parts becomes one string
-            if isinstance(m.get("content"), list):
-                m["content"] = "".join(p.get("text", "") for p in m["content"] if isinstance(p, dict) and p.get("type") == "text")
-        try:
-            text = template.render(messages=messages, tools=body.get("tools"), add_generation_prompt=True, **special,
-                                   **(body.get("chat_template_kwargs") or {}))
-        except Exception as exc:  # the template rejects the conversation (for example an unknown role)
-            return error(f"chat template: {exc}")
-        return await generate(request, body, tok.encode(text, add_special_tokens=False).ids, chat=True)
-
     app = web.Application(client_max_size=1 << 26, middlewares=[auth])
-    app.add_routes([web.get("/v1/models", models), web.get("/health", health), web.get("/metrics", metrics),
-                    web.post("/v1/completions", completions), web.post("/v1/chat/completions", chat_completions)])
+    protocols.add_routes(app, core)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, args.host, args.port).start()
-    print(f"MKSERVE serving {args.name} on http://{args.host}:{args.port}/v1 (engine {args.engine_name}, {hello['mode']} mode)", flush=True)
+    print(f"MKSERVE serving {args.name} on http://{args.host}:{args.port} (engine {args.engine_name}, {hello['mode']} mode): "
+          f"OpenAI /v1/chat/completions /v1/completions /v1/responses, Anthropic /v1/messages, Ollama /api/chat /api/generate", flush=True)
     await pump()
     return 0
 
