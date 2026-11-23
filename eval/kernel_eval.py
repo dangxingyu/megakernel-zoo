@@ -5,8 +5,8 @@
 
 WS/engine/ holds the code under test (contract: eval/_engine_runner.py). Model, reference data and reference
 lines come from the environment: MK_MODEL_DIR, MK_REF_DIR, MK_BASELINES (a JSON file, optional), and the card from
-MK_HW (h100 | b200; default: what the baselines file says, else h100). The card decides the memory bandwidth of
-the MBU figure (eval/modelinfo.py CARDS; MK_HBM_GB_S overrides it). "float64" below is the reference's precision:
+MK_HW (h100 | b200 | m5max; default: what the baselines file says, else the Mac's chip on macOS, else h100). The card
+decides the memory bandwidth of the MBU figure (eval/modelinfo.py CARDS; MK_HBM_GB_S overrides it). "float64" below is the reference's precision:
 float32 for a model whose float64 copy does not fit the card (meta.json and result.reference say which).
 
 The engine runs in child processes; this process only compares and judges. Order: build, check, time, trace.
@@ -17,6 +17,13 @@ baselines' client and workload, time per step = 1e6 * B / decode tokens per seco
 against other systems use only that figure. Everything timed inside the engine's process (step, generate, trace, MBU)
 is a diagnostic. `--no-http` (or MK_EVAL_HTTP=0) gives the older evaluation whose headline is the in-process
 `step_us_b1`; a `--quick` evaluation has no HTTP stage either and is never ranked.
+
+On Apple silicon (MK_DEVICE=metal, the default on macOS; eval/_device.py has the contract's types there): scratch in
+$TMPDIR instead of /dev/shm, no trace stage (no CUPTI / nsys), no NVML, and the batch sizes come from --batches
+(MK_EVAL_BATCHES; default 1 on metal, 1,8 on cuda). Without 8 the correctness check runs the 8 reference sequences
+one at a time (B=1: the batch gate becomes a repeatability check, the slot-order invariance gate is skipped) and the
+HTTP stage measures B=1 only. A missing reference (MK_REF_DIR / --ref without meta.json and logits64.npy) ends the
+evaluation at once with status "error" and a message saying which files are missing.
 
 Result (the loop's contract; everything else is detail for the ledger and the figures):
   status     build_failed | error | incorrect | valid
@@ -36,10 +43,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import sqlite3
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -57,6 +66,7 @@ import numpy as np  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import _device  # noqa: E402
 import http_stage  # noqa: E402
 import modelinfo  # noqa: E402
 
@@ -115,16 +125,29 @@ def decode_bytes(model_dir: str, batch: int, context: float) -> dict:
     return modelinfo.decode_bytes(model_dir, batch, context)
 
 
+def mac_chip() -> str | None:
+    """The card tag of this Mac's chip (eval/modelinfo.py CARDS), from `sysctl machdep.cpu.brand_string`."""
+    if platform.system() != "Darwin":
+        return None
+    try:
+        brand = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return modelinfo.hw_of_gpu_name(brand)
+
+
 def card(baselines_path: str | None, setup: dict) -> dict:
     """Which card this evaluation runs on and its peak memory bandwidth: MK_HW, else the eval set-up, else the
-    baselines file, else H100. MK_HBM_GB_S (or `hbm_gb_s` in the baselines file) overrides the table's figure."""
+    baselines file, else this Mac's chip on macOS, else H100. MK_HBM_GB_S (or `hbm_gb_s` in the baselines file)
+    overrides the table's figure."""
     lines = json.loads(Path(baselines_path).read_text()) if baselines_path and Path(baselines_path).exists() else {}
-    hw = (os.environ.get("MK_HW") or setup.get("hw") or lines.get("hw") or "h100").lower()
+    hw = (os.environ.get("MK_HW") or setup.get("hw") or lines.get("hw") or mac_chip() or "h100").lower()
     known = modelinfo.CARDS.get(hw, {})
     rate = float(os.environ.get("MK_HBM_GB_S") or lines.get("hbm_gb_s") or known.get("hbm_gb_s") or 3350.0)
     # Stage time limits were sized for Qwen3-8B; a model whose Hugging Face starter is several times slower per step
-    # (many layers, an expert loop in Python, 80 GB to load) gets them multiplied.
-    scale = float(os.environ.get("MK_EVAL_TIMEOUT_SCALE") or lines.get("eval_timeout_scale") or 1.0)
+    # (many layers, an expert loop in Python, 80 GB to load) gets them multiplied. A card's own factor (a Mac: a
+    # starter at tens of ms per token) applies when neither the environment nor the baselines file sets one.
+    scale = float(os.environ.get("MK_EVAL_TIMEOUT_SCALE") or lines.get("eval_timeout_scale") or known.get("eval_timeout_scale") or 1.0)
     return {"hw": hw, "hbm_gb_s": rate, "hbm_source": known.get("hbm_source", ""), "timeout_scale": scale}
 
 
@@ -193,20 +216,42 @@ def main() -> int:
     parser.add_argument("--no-http", action="store_true", default=os.environ.get("MK_EVAL_HTTP") == "0",
                         help="no HTTP stage: the headline is the in-process step_us_b1 (the evaluation before 2026-11-10)")
     parser.add_argument("--tools-python", default=os.environ.get("MK_TOOLS_PY") or _SETUP.get("tools_python"))
-    parser.add_argument("--model-dir", default=os.environ.get("MK_MODEL_DIR"))
+    parser.add_argument("--model-dir", default=os.environ.get("MK_MODEL_DIR") or _SETUP.get("model_dir"))
     parser.add_argument("--ref", default=os.environ.get("MK_REF_DIR") or _SETUP.get("ref"))
     parser.add_argument("--ref-hidden", default=os.environ.get("MK_REF_HIDDEN") or _SETUP.get("ref_hidden"),
                         help="suite v2: a second reference (natural-text prompts, longer positions) the run never sees; only aggregates are reported")
     parser.add_argument("--baselines", default=os.environ.get("MK_BASELINES") or _SETUP.get("baselines"))
     parser.add_argument("--python", default=os.environ.get("MK_EVAL_PY") or _SETUP.get("python") or sys.executable)
-    parser.add_argument("--scratch", default=os.environ.get("MK_EVAL_SCRATCH", "/dev/shm"))
+    parser.add_argument("--scratch", default=os.environ.get("MK_EVAL_SCRATCH") or ("/dev/shm" if os.path.isdir("/dev/shm") else tempfile.gettempdir()),
+                        help="where the children's outputs go (default /dev/shm, else $TMPDIR: macOS has no /dev/shm)")
     parser.add_argument("--track", choices=["a", "b", "c"], default=(_SETUP.get("track") or os.environ.get("MK_TRACK") or "a").lower(),
                         help="c: exact draft-and-verify (speculative) engines: the generate and http_tokens gates require "
                              "the engine's step-by-step greedy tokens exactly, the HTTP rate is token-based, and a "
                              "natural-text workload is measured next to the synthetic one (TRACK_C below)")
+    parser.add_argument("--batches", default=os.environ.get("MK_EVAL_BATCHES") or ("1" if _device.device_name() == "metal" else "1,8"),
+                        help="batch sizes timed and served over HTTP (default 1,8; 1 on metal). Without 8 the check runs the "
+                             "reference sequences one at a time and the slot-order invariance gate is skipped")
     args = parser.parse_args()
     t_begin = time.time()
     workspace = str(Path(args.workspace).resolve())
+    device = _device.device_name()
+    batches = sorted({int(b) for b in str(args.batches).split(",") if b.strip()})
+    # cuda with the default 1,8: the children get exactly the arguments they always got
+    batch_args = [] if batches == [1, 8] else ["--batches", ",".join(map(str, batches)), "--max-batch", str(max(batches)),
+                                                "--check-batch", "0" if max(batches) >= 8 else "1"]
+    missing = [] if args.ref else ["(no reference directory: set MK_REF_DIR or pass --ref)"]
+    if args.ref:
+        missing = [name for name in ("ids.npy", "meta.json", "logits64.npy") if not (Path(args.ref) / name).exists()]
+        if (Path(args.ref) / "long_positions.npy").exists() and not (Path(args.ref) / "long_logits64.npy").exists():
+            missing.append("long_logits64.npy")
+    if missing:
+        message = (f"the reference is incomplete: {args.ref or '-'} lacks {', '.join(missing)}. The float64 reference of a "
+                   "model (eval/make_reference.py; logits64.npy, long_logits64.npy, long_positions.npy, meta.json next to "
+                   "ids.npy) is built once on a GPU machine and copied here; point MK_REF_DIR (or --ref) at its directory")
+        Path(args.out).write_text(json.dumps({"status": "error", "track": args.track, "device": device, "message": message,
+                                              "seconds": round(time.time() - t_begin, 1)}, indent=1) + "\n")
+        print("MK_EVAL " + json.dumps({"status": "error", "message": message}))
+        return 2
     scratch = Path(args.scratch) / f"mk-eval-{os.getpid()}"
     scratch.mkdir(parents=True, exist_ok=True)
     meta = json.loads((Path(args.ref) / "meta.json").read_text())
@@ -214,7 +259,8 @@ def main() -> int:
     on = card(args.baselines, _SETUP)
     HBM_GB_S = on["hbm_gb_s"]
     track_c = args.track == "c"
-    result: dict = {"status": "error", "quick": args.quick, "track": args.track, "build": {}, "gates": {}, "perf": {}, "trace": {},
+    result: dict = {"status": "error", "quick": args.quick, "track": args.track, "device": device, "batches": batches,
+                    "build": {}, "gates": {}, "perf": {}, "trace": {},
                     "milestones_passed": [], "reference": {"hf_bf16_rel_l2": meta["hf_bf16_rel_l2"],
                                                            "hf_bf16_top1_agreement": meta["hf_bf16_top1_agreement"],
                                                            "tolerance_factor": TOLERANCE, "hbm_gb_s": HBM_GB_S,
@@ -234,7 +280,7 @@ def main() -> int:
               name: str | None = None) -> tuple[dict, dict | None]:
         out = scratch / f"{name or mode}.json"
         cmd = (prefix or []) + [args.python, str(HERE / "_engine_runner.py"), "--workspace", workspace, "--model-dir", args.model_dir,
-                                "--ref", ref_dir or args.ref, "--mode", mode, "--out", str(out)] + extra
+                                "--ref", ref_dir or args.ref, "--mode", mode, "--out", str(out)] + extra + batch_args
         done = run(cmd, timeout * on["timeout_scale"], cwd=workspace)
         return done, (json.loads(out.read_text()) if done["rc"] == 0 and out.exists() else None)
 
@@ -254,7 +300,7 @@ def main() -> int:
     result["milestones_passed"].append("build")
 
     # ---- check
-    n_check = 2 if args.quick else 4
+    n_check = min(2 if args.quick else 4, len(np.load(Path(args.ref) / "ids.npy", mmap_mode="r")))  # a 1-sequence reference (m5max)
     done, report = child("check", ["--check-sequences", str(n_check)], 3600)
     if report is None:
         result["gates"]["run"] = {"pass": False, "rc": done["rc"], "tail": done["tail"][-2500:]}
@@ -281,9 +327,11 @@ def main() -> int:
         gates["tokens"] = {"pass": agree >= meta["hf_bf16_top1_agreement"] - 0.01, "top1_agreement_with_float64": agree,
                            "hf_bf16": meta["hf_bf16_top1_agreement"]}
         diff = np.abs(single - batched[:n_check])
+        check_batch = int(report.get("check_batch") or ref.shape[0])
         gates["batch"] = {"pass": bool(stats(rel_l2(single, batched[:n_check]))["p99"] <= limit["p99"]),
                           "bitwise_equal": bool((diff == 0).all()), "max_abs_logit_diff": float(diff.max()),
-                          "note": "same sequence alone and inside a batch of %d" % ref.shape[0]}
+                          "note": ("same sequence alone and inside a batch of %d" % ref.shape[0]) if check_batch > 1 else
+                                  "batch 1 only (no batch of 8 on this device): the same sequence alone twice, i.e. repeatability"}
         http_prompts, http_expect = ids[:, :P].tolist(), free.tolist()
         target = ids[:, P:T]
         match = (free == target)
@@ -435,7 +483,11 @@ def main() -> int:
     correct = correct and verified
 
     # ---- trace
-    if not (args.quick or args.no_trace):
+    if device == "metal" and not (args.quick or args.no_trace):
+        result["trace"] = {"skipped": "no CUPTI / nsys on Apple silicon: profile with Metal System Trace (xctrace) or "
+                                      "MTLCounterSampleBuffer timestamps yourself; the single_launch and gpu_never_waits "
+                                      "milestones are not judged on this device"}
+    elif not (args.quick or args.no_trace):
         trace_steps = 128
         trace_base = scratch / "trace"
         prefix = ["nsys", "profile", "--trace=cuda,nvtx", "--cuda-graph-trace=node", "--sample=none", "--cpuctxsw=none",
@@ -471,11 +523,17 @@ def main() -> int:
                                   os.environ.get("MK_SERVER_CPUS"), os.environ.get("MK_CLIENT_CPUS"),
                                   startup_s=1800 * on["timeout_scale"], run_s=2400 * on["timeout_scale"], read_s=120 * on["timeout_scale"],
                                   prompts=http_prompts, expect=http_expect, rate="tokens" if track_c else "chunks",
-                                  natural_prompts=natural)
+                                  natural_prompts=natural, batches=tuple(batches), max_batch=max(batches),
+                                  concurrent_check=8 in batches, sequential_check=track_c or 8 not in batches)
         result["http"] = http
         if http.get("tokens") is not None:
             gates["http_tokens"] = lossless(http["tokens"], http["tokens"].get("lengths_ok", False)) if track_c else http["tokens"]
             correct = correct and bool(gates["http_tokens"].get("pass"))
+        if http.get("tokens_b1") is not None:
+            # the same prompts one request at a time: track C (the single-sequence, speculative path is gated too), and
+            # every track when there is no batch of 8 (a Mac)
+            gates["http_tokens_b1"] = lossless(http["tokens_b1"], http["tokens_b1"].get("lengths_ok", False)) if track_c else http["tokens_b1"]
+            correct = correct and bool(gates["http_tokens_b1"].get("pass"))
         if track_c and natural is None and correct:
             result["status"] = "error"
             return finish("track C: the natural-text prompts could not be made (eval/natural_prompts.py failed)")
@@ -501,19 +559,20 @@ def main() -> int:
         result["in_process"] = {"metric": "step_us_b1", "value": best, "path": path}
         if use_http:
             result["headline"] = {"metric": "http_step_us_b1", "value": http["b1"]["step_us"], "lower_is_better": True,
-                                  "path": http.get("contract"), "b8": http["b8"]["step_us"]}
+                                  "path": http.get("contract"), "b8": (http.get("b8") or {}).get("step_us")}
             if track_c:
                 # time per token of one stream, counted in tokens; natural text next to the synthetic prompts, and the
                 # engine's tokens per event (per verification step for an engine that hands each step's tokens over at once)
                 result["headline"].update(rate="tokens", track="c",
-                                          natural_b1=http["natural_b1"]["step_us"], natural_b8=http["natural_b8"]["step_us"],
-                                          tokens_per_event={k: http[k].get("engine_tokens_per_event") for k in ("b1", "b8", "natural_b1", "natural_b8")})
+                                          natural_b1=http["natural_b1"]["step_us"], natural_b8=(http.get("natural_b8") or {}).get("step_us"),
+                                          tokens_per_event={k: http[k].get("engine_tokens_per_event")
+                                                            for k in ("b1", "b8", "natural_b1", "natural_b8") if k in http})
         else:
             result["headline"] = {"metric": "step_us_b1", "value": best, "lower_is_better": True, "path": path}
         if gates.get("generate", {}).get("pass"):
             passed.append("device_loop")
         trace = result.get("trace_generate") if gates.get("generate", {}).get("pass") and "error" not in (result.get("trace_generate") or {"error": 1}) else result["trace"]
-        if trace and "error" not in trace:
+        if trace and "error" not in trace and "skipped" not in trace:
             if trace["kernel_launches_per_step"] <= 1.5:
                 passed.append("single_launch")
             if trace["host_syncs_per_step"] <= 0.05 and trace["gaps_ge_20us_per_step"] <= 0.05:
@@ -528,22 +587,29 @@ def main() -> int:
             def figure(b: str) -> float:  # what is compared with the baselines: the HTTP figure when there is one
                 return result["perf"][b]["http_step_us"] if use_http else in_process(b)
 
-            speed = {name: {b: entry[b] / figure(b) for b in ("b1", "b8") if b in entry and b in result["perf"]}
+            measured = [b for b in ("b1", "b8") if b in result["perf"]]   # cuda: both; a Mac by default: b1
+            speed = {name: {b: entry[b] / figure(b) for b in measured if b in entry}
                      for name, entry in lines.get("systems", {}).items()}
+            if track_c and use_http:
+                # track C: the natural-text workload against the baselines' natural-text figures (b1_natural, ...)
+                result["speedup_natural"] = {name: {b: entry[f"{b}_natural"] / http[f"natural_{b}"]["step_us"] for b in measured
+                                                    if f"{b}_natural" in entry and "step_us" in (http.get(f"natural_{b}") or {})}
+                                             for name, entry in lines.get("systems", {}).items()}
             result["speedup"] = speed
             result["speedup_calibre"] = "http_step_us against the baselines' HTTP numbers" if use_http else \
                 "in-process step time against the baselines' HTTP numbers: an upper bound"
             if use_http:
-                result["speedup_in_process_diagnostic"] = {name: {b: entry[b] / in_process(b) for b in ("b1", "b8") if b in entry and b in result["perf"]}
+                result["speedup_in_process_diagnostic"] = {name: {b: entry[b] / in_process(b) for b in measured if b in entry}
                                                            for name, entry in lines.get("systems", {}).items()}
-            engines = [s for name, s in speed.items() if lines["systems"][name].get("general_engine")]
+            engines = [s for name, s in speed.items() if lines["systems"][name].get("general_engine") and all(b in s for b in measured)]
             # Other megakernels for the same model (MPK for Qwen3-8B, Cohere's hand-written one for North Mini Code).
             for name, entry in lines.get("systems", {}).items():
-                if not entry.get("general_engine") and len(speed.get(name, {})) == 2 and all(v >= 1.0 for v in speed[name].values()):
+                if not entry.get("general_engine") and all(b in speed.get(name, {}) for b in measured) \
+                        and all(speed[name][b] >= 1.0 for b in measured):
                     passed.append(f"beats_{name}")
-            if engines and all(min(s[b] for s in engines) >= 1.0 for b in ("b1", "b8")):
+            if engines and all(min(s[b] for s in engines) >= 1.0 for b in measured):
                 passed.append("parity")
-            if engines and all(min(s[b] for s in engines) >= 1.10 for b in ("b1", "b8")):
+            if engines and all(min(s[b] for s in engines) >= 1.10 for b in measured):
                 passed.append("h0_step")
             # The same comparison on the workload the baselines were measured on (sampling and a host read included).
             def w1_best(b: str) -> float | None:
@@ -553,14 +619,15 @@ def main() -> int:
                 values = [v for v in values if v]
                 return min(values) if values else None
 
-            w1 = {name: {b: lines["systems"][name][b] / w1_best(b) for b in ("b1", "b8") if b in lines["systems"][name] and w1_best(b)}
+            w1 = {name: {b: lines["systems"][name][b] / w1_best(b) for b in measured if b in lines["systems"][name] and w1_best(b)}
                   for name in lines.get("systems", {})}
             result["speedup_w1_like"] = w1
-            w1_engines = [s for name, s in w1.items() if lines["systems"][name].get("general_engine") and len(s) == 2]
-            if not use_http and w1_engines and all(min(s[b] for s in w1_engines) >= 1.10 for b in ("b1", "b8")):
+            w1_engines = [s for name, s in w1.items() if lines["systems"][name].get("general_engine") and len(s) == len(measured)]
+            if not use_http and w1_engines and all(min(s[b] for s in w1_engines) >= 1.10 for b in measured):
                 passed.append("h0_w1_like")
         if use_http:
-            return finish(f"valid: {http['b1']['step_us']:.0f} us/step at B=1 and {http['b8']['step_us']:.0f} at B=8 over HTTP "
+            at_b8 = f" and {http['b8']['step_us']:.0f} at B=8" if "step_us" in (http.get("b8") or {}) else ""
+            return finish(f"valid: {http['b1']['step_us']:.0f} us/step at B=1{at_b8} over HTTP "
                           f"({http.get('contract')}); in process {best:.0f} us/step at B=1 ({path}, MBU {b1['mbu']:.3f})")
         return finish(f"valid: {b1['step_us']:.0f} us/step at B=1 (MBU {b1['mbu']:.3f})"
                       + (f", {b8['step_us']:.0f} us/step at B=8" if b8 else ""))

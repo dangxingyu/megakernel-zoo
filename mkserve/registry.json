@@ -304,6 +304,27 @@
       "verified": "2026-11-22: valid in the evaluator with track C's rules (every gate, the hidden set included; megakernel-mini-rel2-rescore-c-1), every release check (megakernel-mini-rel2-relchk-c-1), lossless in eval/spec_check.py (natural text and the benchmark's prompts, 1 and 8 sequences, staggered requests: every sequence identical; megakernel-mini-rel2-lossless-c-1)"
      }
     }
+   },
+   "m5max": {
+    "default": "offline-c",
+    "engines": {
+     "offline-c": {
+      "track": "C",
+      "kind": "offline",
+      "source": "../engines/inkling-2-mini_m5max/offline-c",
+      "sha256": "8beea02a8a038e69",
+      "from": "run fable-c-m5max-2, submission s0019 (engine of s0011)",
+      "max_batch": 1,
+      "max_context": 16384,
+      "what": "Apple M5 Max (MLX + run-time Metal): exact speculative decoding with one sequence; drafts from the checkpoint's DSpark head (mtp.safetensors) and from n-gram copies of the prompt and output, verified in K-row passes whose every row has the bits of the one-token step; dense BF16 matrices in a lossless 12-bit code decoded to the stored bits (track C on the checkpoint's formats otherwise: NVFP4 / MXFP8 experts as stored); greedy or sampled (temperature, top_p, top_k, seed: a token is the argmax of logits / T plus Gumbel noise hashed from seed, position and token, so its tokens equal its own one-token-per-step tokens either way); prompts prefilled in wide passes of up to 256 rows, served with MK_PREFILL=fast (MLX GEMMs on the stored codes, fused attention: about 1,300 prompt tokens per second, not the step's bits; --prefill exact keeps them); a prefix cache (a request that starts like the cached sequence keeps its K/V); context 16,384 by default, up to 32,768 with --max-context; a request that arrives while another decodes waits for it; --mode step: one token per step",
+      "verified": "2026-11-23: the final source valid in the evaluator with track C's rules on this Mac (runs-mac/final-eval-20261123: every gate with the values of run fable-c-m5max-2's s0019, 8205 us per token synthetic, 5173 natural; the run's own evaluations 8040-8333 and 5124-5300), sampled tokens equal to step-by-step sampling in 16 of 16 cases, and 12 of 12 checks of scripts/mkserve_check.py on this card in native mode with MK_PREFILL=fast (a 1,630-token prompt: first token after 1.25 s; runs-mac/prefill-20261123)",
+      "env": {
+       "MK_PREFILL": "fast"
+      },
+      "max_context_limit": 32768
+     }
+    },
+    "min_memory_gb": 36
    }
   }
  }

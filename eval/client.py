@@ -248,7 +248,10 @@ async def steady(args) -> dict:
         for repeat in range(-args.warmup, args.repeats):
             # A different prompt for every stream of every repeat: no prefix cache hit can shorten a prefill.
             if natural is not None:   # fixed prompts of natural text, a different one for every stream of every repeat
-                batch = [{"ids": natural[((repeat + args.warmup) * args.batch + i) % len(natural)], "text": None, "exact_text": True} for i in range(args.batch)]
+                # an entry is a token-id list, or a string (a chat message, --api chat: the GSM8K workload)
+                picks = [natural[((repeat + args.warmup) * args.batch + i) % len(natural)] for i in range(args.batch)]
+                batch = [{"ids": None, "text": p, "exact_text": True} if isinstance(p, str) else
+                         {"ids": p, "text": None, "exact_text": True} for p in picks]
             else:
                 batch = [prompts.make(tok, args.prompt_tokens, args.seed + 10_000 * (repeat + args.warmup) + i)
                          for i in range(args.batch)]

@@ -51,7 +51,9 @@ def passages(text, k, min_chars=700):
 per, src = (count + 2) // 3, {}
 prose = []
 for book in (1342, 2701, 11, 84):  # Pride and Prejudice, Moby Dick, Alice in Wonderland, Frankenstein
-    text = fetch(f"https://www.gutenberg.org/cache/epub/{book}/pg{book}.txt")
+    # the same file from Project Gutenberg's own mirror when gutenberg.org rate-limits (HTTP 503)
+    text = (fetch(f"https://www.gutenberg.org/cache/epub/{book}/pg{book}.txt")
+            or (fetch(f"https://gutenberg.pglaf.org/cache/epub/{book}/pg{book}.txt") or "").replace("\r\n", "\n"))
     if text and len(text) > 50000:
         body = text[len(text) // 10: -len(text) // 10]  # away from the licence text at both ends
         prose += passages(body, (per + 3) // 4)

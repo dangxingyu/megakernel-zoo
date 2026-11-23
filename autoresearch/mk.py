@@ -7,7 +7,9 @@
 
 `mk submit` copies the workspace's engine/ to a sealed directory, runs the run's evaluator on the copy and appends the
 result to RUN/ledger.jsonl; the source and the full result are kept under RUN/submissions/<sid>/. The run directory is
-$MK_RUN (the wrapper RUN/bin/mk sets it). Standard library only.
+$MK_RUN (the wrapper RUN/bin/mk sets it). A track-C run (run.json "track": "C") runs the evaluator with MK_TRACK=c and
+--track c; run.json's "model_dir" / "ref_dir" become MK_MODEL_DIR / MK_REF_DIR when the environment has none (a Mac run
+from autoresearch/start.py --card m5max). Standard library only.
 """
 import argparse
 import json
@@ -49,10 +51,18 @@ def submit(args) -> int:
         tar.add(sealed / "engine", arcname="engine")
     evaluator = ZOO / "eval" / ("online_eval.py" if c.get("eval") == "online" else "kernel_eval.py")
     cmd = [sys.executable, str(evaluator), "--workspace", str(sealed), "--out", str(sub / "result.json")] + (["--quick"] if args.quick else [])
+    env = dict(os.environ)
+    if str(c.get("track", "")).upper() == "C":  # track C: the evaluator's lossless rules (eval/kernel_eval.py --track c)
+        env["MK_TRACK"] = "c"
+        if c.get("eval") != "online":
+            cmd += ["--track", "c"]
+    for key, name in (("model_dir", "MK_MODEL_DIR"), ("ref_dir", "MK_REF_DIR")):  # run.json's paths when the environment has none
+        if c.get(key) and not env.get(name):
+            env[name] = c[key]
     print(f"{sid}: evaluating (this takes minutes; log in {sub / 'eval.log'})", flush=True)
     t0 = time.time()
     with open(sub / "eval.log", "w") as log:
-        rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=ZOO, timeout=c.get("eval_timeout_s", 5400)).returncode
+        rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=ZOO, env=env, timeout=c.get("eval_timeout_s", 5400)).returncode
     result = json.loads((sub / "result.json").read_text()) if (sub / "result.json").exists() else {"status": "error", "message": f"the evaluator exited with {rc}; see eval.log"}
     head = result.get("headline") or {}
     row = {"sid": sid, "ts": time.time(), "hours": round(hours_used(c), 3), "title": args.title, "hypothesis": args.hypothesis, "category": args.category,

@@ -1,0 +1,305 @@
+"""Inkling-2-Mini on Apple silicon, track C: the target as K-row passes of our own Metal kernels (engine/target.py,
+engine/kernels.py), the checkpoint's DSpark head as the draft (engine/draft.py), exact draft-and-verify behind
+submit() / poll(). step() is the K = 1 pass; a verify pass gives every row the bits step() gives it.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+import mlx.core as mx
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mk_target  # noqa: E402
+from mk_target import Target  # noqa: E402
+
+SPEC = os.environ.get("MK_SPEC", "1") != "0"
+# prompts in wide passes of up to PF_CHUNK rows (mk_target.PREFILL: exact by default, the bits of one-row steps; fast:
+# MLX GEMMs and fused attention, what mkserve serves); a pass is padded to the next of PF_BUCKETS rows, so only those
+# shapes are ever compiled (all of them in _warm)
+PF_CHUNK = int(os.environ.get("MK_PF_CHUNK", "256"))
+PF_BUCKETS = [k for k in (32, 64, 128, 256, 512) if k <= PF_CHUNK]
+
+
+class Engine:
+    native_sampling = True      # submit() takes sampling parameters: drawn tokens through the same exact draft-and-verify
+
+    def __init__(self, model_dir: str, max_batch: int, max_context: int):
+        t0 = time.time()
+        self.max_batch, self.max_context = int(max_batch), int(max_context)
+        info = mx.device_info()
+        mx.set_wired_limit(info["max_recommended_working_set_size"])
+        self.tg = Target(model_dir, self.max_context)
+        self.vocab = self.tg.vocab
+        self.draft = None
+        if SPEC:
+            try:
+                from mk_draft import Draft
+                self.draft = Draft(model_dir, self.tg)
+            except ImportError:
+                self.draft = None
+        self.steps = 0
+        self.pending = []
+        self.active = None
+        self.counters = {"cycles": 0, "tokens": 0, "rows": 0, "host_syncs": 0, "prefix_hits": 0, "prefix_tokens": 0}
+        self.cached = []            # the tokens whose K/V the target holds, by position (valid up to tg.pos)
+        self._stale = False         # reset() was called: the state is kept until the next sequence shows its first tokens
+        self.request_info = {}      # rid -> {"cached_tokens": prompt tokens kept from the cache} (mkserve reads and removes it)
+        self.load_seconds = time.time() - t0
+        self._warm()
+
+    def _warm(self):
+        """Compile every kernel variant (K = 1..8) before anything is timed."""
+        for K in list(range(1, 9)) + [16]:
+            for tok_only in (False, True):
+                lg = self.tg.forward(mx.zeros((K,), dtype=mx.int32), tok_only=tok_only)
+                self.tg.commit(K)
+                mx.eval(lg)
+        if self.draft is not None:
+            self.draft.warm()
+        if mk_target.PREFILL != "off":
+            for K in PF_BUCKETS:
+                for _ in range(2):
+                    self._hard_reset()
+                    tok, f = self.tg.prefill([0] * K, K, want_feats=self.draft is not None)
+                    if self.draft is not None:
+                        self.draft.append(f, 0, K)
+                    mx.eval(tok, *self._state())
+        self._hard_reset()
+        mx.synchronize()
+
+    @staticmethod
+    def _tok(out):
+        """forward(tok_only=True) gives tokens [K]; without the 8-bit copy (MK_SHORT=0) it gives logits [K, vocab]."""
+        return out if out.ndim == 1 else mx.argmax(out, axis=-1).astype(mx.int32)
+
+    def _state(self):
+        return self.tg.state()
+
+    # ------------------------------------------------------------------------------------------ contract
+    def reset(self) -> None:
+        """A new sequence starts. The old one's state is dropped when the new one's first tokens are known: at once by
+        step() / generate(), after the comparison with the cached tokens by prefill() and poll() (prefix cache)."""
+        self._stale = True
+
+    def _hard_reset(self) -> None:
+        self.tg.reset()
+        if self.draft is not None:
+            self.draft.reset()
+        self.cached = []
+        self._stale = False
+
+    def _begin(self, prompt, need_last: bool) -> int:
+        """Start the sequence that begins with `prompt`: keep the longest prefix it shares with the cached sequence, cut
+        back to a snapshot position (need_last: at least the last prompt token is left to run, for its logits). Returns
+        the number of prompt tokens kept; the K/V they keep is what a prefill of them would write again in exact mode."""
+        tg, keep = self.tg, 0
+        if tg.snaps and self.cached is not None:
+            m = min(len(self.cached), tg.pos, len(prompt) - (1 if need_last else 0))
+            lcp = 0
+            while lcp < m and self.cached[lcp] == prompt[lcp]:
+                lcp += 1
+            keep = max((q for q in tg.snaps if q <= lcp), default=0)
+        if keep == 0:
+            self._hard_reset()
+            return 0
+        old_pos = tg.pos
+        tg.rollback(keep)
+        if self.draft is not None:
+            self.draft.rollback(old_pos)
+        self._stale = False
+        self.counters["prefix_hits"] += 1
+        self.counters["prefix_tokens"] += keep
+        return keep
+
+    def step(self, tokens) -> mx.array:
+        tokens = np.ascontiguousarray(np.asarray(tokens, dtype=np.int64))
+        if tokens.shape[0] != 1:
+            raise ValueError("this engine decodes one sequence (max_batch 1)")
+        if self._stale:
+            self._hard_reset()
+        if self.cached is not None:
+            self.cached.append(int(tokens.reshape(-1)[0]))
+        if self.tg.pos >= self.max_context:
+            raise ValueError(f"context limit {self.max_context} reached")
+        logits = self.tg.forward(mx.array(tokens.astype(np.int32)))
+        self.tg.commit(1)
+        mx.async_eval(logits, *self._state())
+        self.steps += 1
+        return logits
+
+    def generate(self, tokens, n_steps: int):
+        tokens = np.ascontiguousarray(np.asarray(tokens, dtype=np.int64))
+        if tokens.shape[0] != 1:
+            raise ValueError("this engine decodes one sequence (max_batch 1)")
+        tok = mx.array(tokens.astype(np.int32))
+        out = []
+        if self._stale:
+            self._hard_reset()
+        self.cached = None          # generate() does not track its tokens: no prefix reuse after it
+        for _ in range(int(n_steps)):
+            tok = self._tok(self.tg.forward(tok, tok_only=True))
+            self.tg.commit(1)
+            mx.async_eval(tok, *self._state())
+            out.append(tok)
+        res = mx.stack(out, axis=1)
+        mx.eval(res)
+        return res
+
+    # ------------------------------------------------------------------------------------------ serving
+    @staticmethod
+    def _sampling(sampling):
+        """{"temperature", "top_p", "top_k", "seed"} -> the request's sampler (None: greedy). Without a seed the
+        request takes a random one; with one, the same request gives the same tokens."""
+        if not sampling or float(sampling.get("temperature") or 0.0) <= 0.0:
+            return None
+        import types
+        top_p = float(sampling.get("top_p") or 1.0)
+        top_k = int(sampling.get("top_k") or 0)
+        seed = sampling.get("seed")
+        seed = int.from_bytes(os.urandom(4), "little") if seed is None else int(seed) & 0xFFFFFFFF
+        return types.SimpleNamespace(sp=mx.array([1.0 / float(sampling["temperature"]), top_p, float(top_k)], dtype=mx.float32),
+                                     seed=mx.array([seed], dtype=mx.uint32), filt=top_p < 1.0 or top_k > 0)
+
+    def sample(self, logits, q: int, sampling) -> int:
+        """The token a sampling request draws at position q from a step()'s logits [1, vocab] (what submit() / poll()
+        return for that request: tests compare the two)."""
+        s = sampling if hasattr(sampling, "sp") else self._sampling(sampling)
+        return int(mk_target.sample_rows(logits.reshape(1, -1), s.sp, s.seed, mx.array([q], dtype=mx.int32), s.filt)[0].item())
+
+    def submit(self, rid, prompt, n, sampling=None) -> None:
+        prompt, n = [int(t) for t in prompt], int(n)
+        if len(prompt) < 1 or n < 1 or len(prompt) + n - 1 > self.max_context:
+            raise ValueError(f"request {rid!r}: prompt {len(prompt)} + {n} new tokens exceeds {self.max_context} positions")
+        if min(prompt) < 0 or max(prompt) >= 201024:
+            raise ValueError(f"request {rid!r}: token id out of range")
+        self.pending.append((rid, prompt, n, self._sampling(sampling)))
+
+    def _prefill(self, prompt):
+        """The prompt in wide passes of up to PF_CHUNK rows (the last few tokens, if fewer than 9 remain, in a pass of
+        the step's kernels); returns the first new token (lazy)."""
+        tg = self.tg
+        i, last = 0, None
+        while mk_target.PREFILL != "off" and len(prompt) - i > 8:
+            n = min(PF_CHUNK, len(prompt) - i)
+            K = next(k for k in PF_BUCKETS if k >= n)
+            if tg.pos + K > tg.T + 8:          # at the end of the context: no padding past it
+                if n < PF_BUCKETS[0]:
+                    break
+                K = n = max(k for k in PF_BUCKETS if k <= n)
+            p = tg.pos
+            last, f = tg.prefill(prompt[i:i + n], K, want_feats=self.draft is not None)
+            self._last_row = n - 1
+            if self.draft is not None:
+                self.draft.append(f, p, n)
+            mx.async_eval(last, *self._state())
+            i += n
+        while i < len(prompt):
+            K = min(8, len(prompt) - i)
+            toks = mx.array(np.asarray(prompt[i:i + K], dtype=np.int32))
+            if self.draft is not None:
+                logits, f = tg.forward(toks, want_feats=True, tok_only=True)
+                self.draft.append(f, tg.pos, K)
+            else:
+                logits = tg.forward(toks, tok_only=True)
+            tg.commit(K)
+            self._last_row = K - 1
+            last = self._tok(logits)[K - 1:K]
+            mx.async_eval(last, *self._state())
+            i += K
+        return last
+
+    def prefill(self, tokens) -> int:
+        """Optional (mkserve's step mode): take these tokens at the next positions, as one step() call each would, in
+        wide passes. Returns how many of them were kept from the cache (after reset(): the prefix cache)."""
+        tokens = [int(t) for t in tokens]
+        keep = self._begin(tokens, need_last=False) if self._stale else 0
+        if keep:
+            self.cached = self.cached[:keep]
+        if self.cached is not None:
+            self.cached += tokens[keep:]
+        if tokens[keep:]:
+            if self.tg.pos + len(tokens) - keep > self.max_context:
+                raise ValueError(f"context limit {self.max_context} reached")
+            mx.eval(self._prefill(tokens[keep:]), *self._state())
+        return keep
+
+    def cancel(self, rid) -> None:
+        """Optional (mkserve): the client of request rid is gone. A waiting request is dropped; the running one stops
+        after its current cycle (its K/V stays as the cache of the next request)."""
+        self.pending = [r for r in self.pending if r[0] != rid]
+        if self.active is not None and self.active["rid"] == rid:
+            self.active = None
+
+    def poll(self):
+        events = []
+        act = self.active
+        if act is None:
+            if not self.pending:
+                return events
+            rid, prompt, n, samp = self.pending.pop(0)
+            keep = self._begin(prompt, need_last=True)
+            self.request_info[rid] = {"cached_tokens": keep}
+            first = self._prefill(prompt[keep:])
+            if samp is not None:    # the first token, drawn from the logits of the last prompt row
+                first = mk_target.sample_rows(self.tg.row_logits(self._last_row), samp.sp, samp.seed,
+                                              mx.array([len(prompt)], dtype=mx.int32), samp.filt)[0]
+            spec = self.draft is not None and len(prompt) + n + 16 <= self.tg.T
+            act = self.active = {"rid": rid, "n": n, "sent": 0, "tok": first, "spec": spec, "hist": list(prompt), "samp": samp}
+            self.cached = act["hist"]           # the prompt and every committed token after it, as the request goes on
+            if spec:
+                from mk_draft import Cal
+                act["cal"] = Cal()
+            t = int(first.item())
+            self.counters["host_syncs"] += 1
+            act["sent"] = 1
+            act["last"] = t
+            act["hist"].append(t)
+            events.append((rid, [t], n == 1))
+            if n == 1:
+                self.active = None
+            return events
+        left = act["n"] - act["sent"]
+        if act["spec"]:
+            toks = self.draft.cycle(self, act, left)
+        elif act["samp"] is not None:
+            samp = act["samp"]
+            logits = self.tg.forward(mx.array([act["last"]], dtype=mx.int32))
+            self.tg.commit(1)
+            tok = mk_target.sample_rows(logits, samp.sp, samp.seed, mx.array([self.tg.pos], dtype=mx.int32), samp.filt)[0]
+            mx.async_eval(tok, *self._state())
+            toks = [int(tok.item())]
+            act["hist"].extend(toks)
+            self.counters["host_syncs"] += 1
+        else:
+            tok = self._tok(self.tg.forward(mx.array([act["last"]], dtype=mx.int32), tok_only=True))
+            self.tg.commit(1)
+            toks = [int(tok.item())]
+            act["hist"].extend(toks)
+            self.counters["host_syncs"] += 1
+        toks = toks[:left]
+        act["sent"] += len(toks)
+        act["last"] = toks[-1]
+        self.counters["cycles"] += 1
+        self.counters["tokens"] += len(toks)
+        done = act["sent"] >= act["n"]
+        events.append((act["rid"], toks, done))
+        if done:
+            self.active = None
+        return events
+
+    def close(self) -> None:
+        self.tg = None
+        self.draft = None
+
+    def stats(self) -> dict:
+        c = dict(self.counters)
+        if c["cycles"]:
+            c["tokens_per_cycle"] = round(c["tokens"] / c["cycles"], 3)
+        return {"implementation": "own MLX / Metal K-row passes (engine/target.py); DSpark draft-and-verify in submit/poll"
+                if self.draft is not None else "own MLX / Metal K-row passes (engine/target.py); no speculation",
+                "steps": self.steps, "spec": c, "load_seconds": round(self.load_seconds, 1),
+                "peak_memory_gb": round(mx.get_peak_memory() / 1e9, 2)}

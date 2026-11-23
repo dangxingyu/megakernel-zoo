@@ -26,13 +26,21 @@ def doctor(args) -> int:
         print(f"  {'ok ' if good else 'NO '} {what}" + ("" if good or not fix else f"\n        fix: {fix}"))
 
     print("mkserve doctor")
+    from mkserve.__main__ import memory_gb, resolve_card
     card, name = detect_card()
-    line(card is not None, f"card: {name}" + (f" (engines are written for: {card})" if card else ""),
-         "an NVIDIA H100 or B200 is needed; engines are compiled for one card type")
-    nvcc = shutil.which("nvcc")
-    ver = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout.strip().splitlines()[-1] if nvcc else ""
-    line(bool(nvcc), f"CUDA toolkit: {ver or 'nvcc not on PATH'}", "install the CUDA toolkit (12.8 or newer) and put its bin/ on PATH")
-    for mod, why in (("torch", "the engines run under PyTorch"), ("numpy", ""), ("aiohttp", "the HTTP front end"),
+    mac = sys.platform == "darwin"
+    if mac:  # Apple silicon: MLX and run-time Metal, no CUDA toolkit and no torch
+        mem = memory_gb()
+        line(card is not None, f"chip: {name}" + (f", {mem:.0f} GB unified memory" if mem else ""), "an Apple-silicon Mac is needed")
+        runtime = ("mlx", "the Mac engines run on MLX and Metal")
+    else:
+        line(card is not None, f"card: {name}" + (f" (engines are written for: {card})" if card else ""),
+             "an NVIDIA H100 or B200 is needed; engines are compiled for one card type")
+        nvcc = shutil.which("nvcc")
+        ver = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout.strip().splitlines()[-1] if nvcc else ""
+        line(bool(nvcc), f"CUDA toolkit: {ver or 'nvcc not on PATH'}", "install the CUDA toolkit (12.8 or newer) and put its bin/ on PATH")
+        runtime = ("torch", "the engines run under PyTorch")
+    for mod, why in (runtime, ("numpy", ""), ("aiohttp", "the HTTP front end"),
                      ("tokenizers", "detokenization"), ("jinja2", "chat templates"), ("huggingface_hub", "downloading weights")):
         try:
             m = importlib.import_module(mod)
@@ -42,16 +50,26 @@ def doctor(args) -> int:
                 if not m.cuda.is_available():
                     line(False, f"torch {m.__version__}{extra}", "a CUDA build of torch is needed: pip install torch --index-url https://download.pytorch.org/whl/cu128")
                     continue
+            if mod == "mlx":
+                import mlx.core as mxc
+                v = tuple(int(x) for x in mxc.__version__.split(".")[:2])
+                line(v >= (0, 32), f"mlx {mxc.__version__}", "pip install -U 'mlx>=0.32' (NVFP4 / MXFP8 matmuls and masked fused attention)")
+                continue
             line(True, f"{mod} {getattr(m, '__version__', '')}{extra}")
         except ImportError:
             line(False, f"{mod} missing ({why})" if why else f"{mod} missing", f"pip install {mod.replace('_', '-')}")
     reg = json.loads((HERE / "registry.json").read_text())
-    here = [(m, n) for m, cards in reg["models"].items() if card in cards for n in cards[card]["engines"]]
+    here = [(m, n) for m, cards in reg["models"].items() for key in [resolve_card(cards, card)[0]] if key for n in cards[key]["engines"]]
     line(bool(here), f"engines for this card: {len(here)} ({', '.join(sorted({m for m, _ in here})) or 'none'})",
          "see `mkserve list` for the (model, card) pairs that have engines")
     if args.model:
         cards = reg["models"].get(args.model, {})
-        line(card in cards, f"{args.model} on this card: {'engine ' + cards[card]['default'] if card in cards else 'no engine'}")
+        key, note = resolve_card(cards, card)
+        line(key is not None, f"{args.model} on this card: {'engine ' + cards[key]['default'] if key else 'no engine'}" + (f" ({note})" if note else ""))
+        need = cards[key].get("min_memory_gb") if key else None
+        if need and mac and memory_gb():
+            line(memory_gb() >= need, f"memory for {args.model}: about {need} GB needed, {memory_gb():.0f} GB here",
+                 "a Mac with more unified memory is needed (the weights alone are larger than what is free here)")
         try:
             from huggingface_hub import try_to_load_from_cache
             cached = try_to_load_from_cache(args.model, "config.json")

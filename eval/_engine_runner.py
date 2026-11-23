@@ -14,11 +14,17 @@ The engine contract (WS/engine/api.py):
         def step(self, tokens):             # tokens: int64 CUDA tensor [B], the next input token of each sequence
             ...                             # (B is fixed between resets); appends them and returns the logits
             return logits                   # of the following token: CUDA tensor [B, vocab], bf16 or float32
+                                            # (MK_DEVICE=metal, Apple silicon: tokens are a NumPy int64 array [B] and
+                                            # logits an mx.array or NumPy array [B, vocab]; eval/_device.py)
         def close(self) -> None: ...        # optional
         def stats(self) -> dict: ...        # optional: counters the engine wants on the record
         def generate(self, tokens, n_steps): ...   # optional: greedy decode inside the engine. tokens int64 [B] is the
             return new_tokens                      # next input token; returns int64 cuda [B, n_steps] (the n_steps tokens
                                                    # chosen), sampling, feedback and the loop all on the device
+
+Batch sizes: the check runs the R reference sequences together (--check-batch R, the default) or in groups of
+--check-batch (1: each sequence alone; an engine for B=1 only, e.g. on a Mac), and the engine is built with
+max_batch = --max-batch (default R).
 """
 
 from __future__ import annotations
@@ -32,7 +38,9 @@ import time
 from pathlib import Path
 
 import numpy as np
-import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _device  # noqa: E402
 
 
 def load_engine(workspace: str, model_dir: str, max_batch: int, max_context: int):
@@ -91,70 +99,86 @@ def main() -> int:
     parser.add_argument("--batches", default="1,8")
     parser.add_argument("--max-context", type=int, default=2048)
     parser.add_argument("--w1-steps", type=int, default=1024, help="time mode: length of the W1-like greedy decode (0 = skip)")
+    parser.add_argument("--check-batch", type=int, default=0, help="check mode: sequences decoded together (0 = all R)")
+    parser.add_argument("--max-batch", type=int, default=0, help="max_batch the engine is built with (0 = R)")
     args = parser.parse_args()
+    D = _device.get()
     ref = Path(args.ref)
-    ids = torch.from_numpy(np.load(ref / "ids.npy")).cuda()  # [R, T_long]
+    ids = D.ids(np.load(ref / "ids.npy"))  # [R, T_long]
     meta = json.loads((ref / "meta.json").read_text())
     R, T = ids.shape[0], meta["check_tokens"]
+    K = args.check_batch if 0 < args.check_batch < R else R           # check: groups of K sequences
+    groups = [slice(g, min(g + K, R)) for g in range(0, R, K)]
     out = Path(args.out)
     t0 = time.time()
-    engine = load_engine(args.workspace, args.model_dir, max_batch=R, max_context=args.max_context)
+    engine = load_engine(args.workspace, args.model_dir, max_batch=args.max_batch or R, max_context=args.max_context)
     if float(os.environ.get("MK_EVAL_STALL_S") or 1200) > 0:
         watch_for_stall(engine, float(os.environ.get("MK_EVAL_STALL_S") or 1200))
-    report: dict = {"mode": args.mode, "load_seconds": time.time() - t0}
+    report: dict = {"mode": args.mode, "load_seconds": time.time() - t0, "device": D.name, "check_batch": K}
 
-    with torch.no_grad():
+    with D.no_grad():
         if args.mode == "check":
-            # (a) each of the first sequences alone, every position; (b) all R together, every position.
-            single = torch.empty(args.check_sequences, T, meta["vocab"], dtype=torch.float32)
+            # (a) each of the first sequences alone, every position; (b) all R together (or in groups of K), every position.
+            single = np.empty((args.check_sequences, T, meta["vocab"]), dtype=np.float32)
             for r in range(args.check_sequences):
                 engine.reset()
                 for t in range(T):
-                    single[r, t] = engine.step(ids[r:r + 1, t])[0].float().cpu()
-            engine.reset()
-            batched = torch.empty(R, T, meta["vocab"], dtype=torch.float32)
-            for t in range(T):
-                batched[:, t] = engine.step(ids[:, t]).float().cpu()
-            # (b'') all R together again with the slot order reversed: each sequence's logits must be bit for bit
-            # those of (b). This tests repeatability and slot-order invariance in one pass (suite v2).
-            permuted = None
-            if os.environ.get("MK_EVAL_INVARIANTS", "1") != "0" and R > 1:
-                perm = torch.arange(R - 1, -1, -1, device=ids.device)
+                    single[r, t] = D.host(engine.step(ids[r:r + 1, t]))[0]
+            batched = np.empty((R, T, meta["vocab"]), dtype=np.float32)
+            for g in groups:
                 engine.reset()
-                permuted = torch.empty(R, T, meta["vocab"], dtype=torch.float32)
                 for t in range(T):
-                    permuted[:, t] = engine.step(ids[perm, t]).float().cpu()
-            # (c) free-running greedy from the prompt, all R together: what a user would get.
-            engine.reset()
-            P = meta["prompt_tokens"]
-            for t in range(P - 1):
-                engine.step(ids[:, t])
-            token = ids[:, P - 1]
-            free = []
-            for _ in range(T - P):
-                token = engine.step(token).float().argmax(-1)
-                free.append(token.cpu())
-            if (ref / "long_positions.npy").exists():
-                # (b') all R together along the whole long sequence, logits kept at the reference's long positions.
-                wanted = {int(t): i for i, t in enumerate(np.load(ref / "long_positions.npy"))}
-                long = torch.empty(R, len(wanted), meta["vocab"], dtype=torch.float32)
+                    batched[g, t] = D.host(engine.step(ids[g, t]))
+            # (b'') all R together again with the slot order reversed: each sequence's logits must be bit for bit
+            # those of (b). This tests repeatability and slot-order invariance in one pass (suite v2). Batches > 1 only.
+            permuted = None
+            if os.environ.get("MK_EVAL_INVARIANTS", "1") != "0" and R > 1 and K == R:
+                perm = D.reverse(R, ids)
                 engine.reset()
-                for t in range(ids.shape[1]):
-                    logits = engine.step(ids[:, t])
-                    if t in wanted:
-                        long[:, wanted[t]] = logits.float().cpu()
-                np.save(out.with_suffix(".long.npy"), long.numpy())
-            np.save(out.with_suffix(".single.npy"), single.numpy())
-            np.save(out.with_suffix(".batched.npy"), batched.numpy())
-            if permuted is not None:
-                np.save(out.with_suffix(".permuted.npy"), permuted.numpy())
-            np.save(out.with_suffix(".free.npy"), torch.stack(free, dim=1).numpy())
-            if hasattr(engine, "generate"):
-                # (d) the same continuation produced inside the engine: must be what (c) produced step by step.
+                permuted = np.empty((R, T, meta["vocab"]), dtype=np.float32)
+                for t in range(T):
+                    permuted[:, t] = D.host(engine.step(ids[perm, t]))
+            # (c) free-running greedy from the prompt, all R together (or in groups of K): what a user would get.
+            P = meta["prompt_tokens"]
+            free = []
+            for g in groups:
                 engine.reset()
                 for t in range(P - 1):
-                    engine.step(ids[:, t])
-                np.save(out.with_suffix(".gen.npy"), engine.generate(ids[:, P - 1], T - P).cpu().numpy())
+                    D.launch(engine.step(ids[g, t]))
+                token = ids[g, P - 1]
+                chosen = []
+                for _ in range(T - P):
+                    token = D.argmax(engine.step(token))
+                    chosen.append(D.tokens_host(token))
+                free.append(np.stack(chosen, axis=1))
+            if (ref / "long_positions.npy").exists():
+                # (b') all R together (or in groups of K) along the whole long sequence, logits kept at the reference's
+                # long positions.
+                wanted = {int(t): i for i, t in enumerate(np.load(ref / "long_positions.npy"))}
+                long = np.empty((R, len(wanted), meta["vocab"]), dtype=np.float32)
+                for g in groups:
+                    engine.reset()
+                    for t in range(ids.shape[1]):
+                        logits = engine.step(ids[g, t])
+                        if t in wanted:
+                            long[g, wanted[t]] = D.host(logits)
+                        else:
+                            D.launch(logits)
+                np.save(out.with_suffix(".long.npy"), long)
+            np.save(out.with_suffix(".single.npy"), single)
+            np.save(out.with_suffix(".batched.npy"), batched)
+            if permuted is not None:
+                np.save(out.with_suffix(".permuted.npy"), permuted)
+            np.save(out.with_suffix(".free.npy"), np.concatenate(free, axis=0))
+            if hasattr(engine, "generate"):
+                # (d) the same continuation produced inside the engine: must be what (c) produced step by step.
+                gen = []
+                for g in groups:
+                    engine.reset()
+                    for t in range(P - 1):
+                        D.launch(engine.step(ids[g, t]))
+                    gen.append(D.tokens_host(engine.generate(ids[g, P - 1], T - P)))
+                np.save(out.with_suffix(".gen.npy"), np.concatenate(gen, axis=0))
                 report["has_generate"] = True
         else:
             batches = [1] if args.mode == "trace" else [int(b) for b in args.batches.split(",")]
@@ -172,28 +196,31 @@ def main() -> int:
                 # (the self-test's first segment took 2.4x the others).
                 for segment in range(segments + (0 if args.mode == "trace" else 1)):
                     engine.reset()
+                    last = None
                     for t in range(warm):
-                        engine.step(ids[:B, t])
-                    torch.cuda.synchronize()
+                        last = engine.step(ids[:B, t])
+                        D.launch(last)
+                    D.sync(last)
                     kept = {}
                     if args.mode == "trace":
-                        torch.cuda.nvtx.range_push("mk_timed")
+                        D.range_push("mk_timed")
                     start = time.perf_counter()
                     for t in range(warm, warm + timed):
                         logits = engine.step(ids[:B, t])
+                        D.launch(logits)  # metal: every step's logits are computed (CUDA: already queued)
                         if t in probe_steps:
                             kept[t] = logits  # compared by the parent after the clock stops: timed steps are real steps
-                    torch.cuda.synchronize()
+                    D.sync(logits)
                     wall = time.perf_counter() - start
                     if args.mode == "trace":
-                        torch.cuda.nvtx.range_pop()
+                        D.range_pop()
                     if args.mode == "trace" or segment > 0:
                         walls.append(wall)
                     if args.mode == "trace" or segment > 0:
                         for t, value in kept.items():  # every recorded segment is checked, not only the last
-                            np.save(out.with_suffix(f".probe.b{B}.s{segment}.t{t}.npy"), value.float().cpu().numpy())
+                            np.save(out.with_suffix(f".probe.b{B}.s{segment}.t{t}.npy"), D.host(value))
                     probes = {t: None for t in kept}
-                    finite = bool(torch.isfinite(logits.float()).all())
+                    finite = D.finite(logits)
                 report["timing"][str(B)] = {"walls_s": walls, "steps": timed, "warm_steps": warm, "last_logits_finite": finite,
                                             "context_start": warm, "context_end": warm + timed, "probe_steps": sorted(probes)}
                 report["timing"][str(B)]["probe_segments"] = list(range(1, segments + 1)) if args.mode != "trace" else [0]
@@ -201,17 +228,19 @@ def main() -> int:
                     walls = []
                     for segment in range(segments + (0 if args.mode == "trace" else 1)):
                         engine.reset()
+                        last = None
                         for t in range(warm):
-                            engine.step(ids[:B, t])
-                        torch.cuda.synchronize()
+                            last = engine.step(ids[:B, t])
+                            D.launch(last)
+                        D.sync(last)
                         if args.mode == "trace":
-                            torch.cuda.nvtx.range_push("mk_generate")
+                            D.range_push("mk_generate")
                         start = time.perf_counter()
                         produced = engine.generate(ids[:B, warm], timed)
-                        torch.cuda.synchronize()
+                        D.sync(produced)
                         elapsed = time.perf_counter() - start
                         if args.mode == "trace":
-                            torch.cuda.nvtx.range_pop()
+                            D.range_pop()
                         if args.mode == "trace" or segment > 0:
                             walls.append(elapsed)
                     report["timing"][str(B)]["generate_walls_s"] = walls
@@ -223,14 +252,16 @@ def main() -> int:
                     walls = []
                     for segment in range(2):
                         engine.reset()
+                        last = None
                         for t in range(63):
-                            engine.step(ids[:B, t])
+                            last = engine.step(ids[:B, t])
+                            D.launch(last)
                         token = ids[:B, 63]
-                        torch.cuda.synchronize()
+                        D.sync(last)
                         start = time.perf_counter()
                         for _ in range(args.w1_steps):
-                            token = engine.step(token).argmax(-1)
-                            token.cpu()
+                            token = D.argmax_raw(engine.step(token))
+                            D.to_host(token)
                         elapsed = time.perf_counter() - start
                         if segment > 0:
                             walls.append(elapsed)
@@ -240,11 +271,13 @@ def main() -> int:
                         walls = []
                         for segment in range(2):
                             engine.reset()
+                            last = None
                             for t in range(63):
-                                engine.step(ids[:B, t])
-                            torch.cuda.synchronize()
+                                last = engine.step(ids[:B, t])
+                                D.launch(last)
+                            D.sync(last)
                             start = time.perf_counter()
-                            produced = engine.generate(ids[:B, 63], args.w1_steps).cpu()
+                            produced = D.to_host(engine.generate(ids[:B, 63], args.w1_steps))
                             elapsed = time.perf_counter() - start
                             if segment > 0:
                                 walls.append(elapsed)
@@ -254,6 +287,7 @@ def main() -> int:
             report["engine_stats"] = engine.stats()
         except Exception as error:
             report["engine_stats_error"] = f"{type(error).__name__}: {error}"
+    report.update(D.memory())
     try:
         import pynvml
         pynvml.nvmlInit()

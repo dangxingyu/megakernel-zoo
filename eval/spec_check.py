@@ -3,7 +3,7 @@
 repetitive is the text it is measured on?
 
     python eval/spec_check.py gen --path step|online --workspace WS --model-dir D --out F.json [--n 1024] [--prompts 4]
-                                  [--prompts-file natural.json] [--batch B] [--stagger S]
+                                  [--prompts-file natural.json] [--batch B] [--stagger S] [--max-batch M]
     python eval/spec_check.py compare STEP.json ONLINE.json
 
 `gen` decodes the evaluation's own kind of prompt (eval/prompts.make, 64 tokens, seeds 0..) for n new tokens, one
@@ -21,13 +21,15 @@ from pathlib import Path
 
 
 def gen(args) -> int:
-    import torch
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _device
     import prompts
     from _engine_runner import load_engine
 
+    D = _device.get()  # cuda: torch tensors; metal (macOS): NumPy tokens, MLX logits (eval/_device.py)
+
     tok = prompts.load(args.model_dir)
-    engine = load_engine(args.workspace, args.model_dir, max(8, args.batch), 2048)
+    engine = load_engine(args.workspace, args.model_dir, args.max_batch or max(8, args.batch), 2048)
     if args.prompts_file:  # e.g. natural text (eval/natural_prompts.py): a JSON list of token-id lists
         plist = [list(map(int, p)) for p in json.loads(Path(args.prompts_file).read_text())][:args.prompts]
     else:
@@ -35,7 +37,7 @@ def gen(args) -> int:
     out = {"path": args.path, "n": args.n, "batch": args.batch, "stagger": args.stagger,
            "prompts_file": args.prompts_file, "prompts": []}
     B = args.batch
-    with torch.no_grad():
+    with D.no_grad():
         for g0 in range(0, len(plist), B):
             group = plist[g0:g0 + B]
             t0 = time.perf_counter()
@@ -45,11 +47,11 @@ def gen(args) -> int:
                 assert len({len(p) for p in group}) == 1, "a step group needs prompts of equal length"
                 engine.reset()
                 for i in range(len(group[0]) - 1):
-                    engine.step(torch.tensor([p[i] for p in group], device="cuda"))
-                last, produced = torch.tensor([p[-1] for p in group], device="cuda"), [[] for _ in group]
+                    D.launch(engine.step(D.tensor([p[i] for p in group])))
+                last, produced = D.tensor([p[-1] for p in group]), [[] for _ in group]
                 for _ in range(args.n):
-                    last = engine.step(last).float().argmax(-1)
-                    for j, t in enumerate(last.tolist()):
+                    last = D.argmax(engine.step(last))
+                    for j, t in enumerate(D.tolist(last)):
                         produced[j].append(int(t))
                 bursts_mean = [None] * len(group)
             else:
@@ -138,4 +140,6 @@ if __name__ == "__main__":
     parser.add_argument("--prompts-file", default=None, help="JSON list of token-id lists (default: eval/prompts.make, seeds 0..)")
     parser.add_argument("--batch", type=int, default=1, help="sequences decoded together (step: lockstep; online: submitted together)")
     parser.add_argument("--stagger", type=int, default=0, help="online: submit the next request after the previous one has this many tokens")
+    parser.add_argument("--max-batch", type=int, default=0, help="max_batch the engine is built with (default max(8, --batch); "
+                                                                   "1 for an engine that serves one sequence, e.g. on a Mac)")
     raise SystemExit(gen(parser.parse_args()))

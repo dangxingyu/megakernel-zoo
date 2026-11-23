@@ -8,7 +8,8 @@ Two processes joined by a Unix socket, the shape the general engines have (an AP
     serve_engine.py engine   --workspace WS --model-dir D --sock S [--max-batch 8] [--max-context 2048]
     serve_engine.py frontend --model-dir D --sock S --port P
 
-`engine` runs in the evaluation venv (torch) with the working directory in WS and owns the GPU:
+`engine` runs in the evaluation venv (torch; on Apple silicon MLX and NumPy, MK_DEVICE=metal, eval/_device.py) with the
+working directory in WS and owns the GPU:
   * an engine with the online contract (submit / poll): requests are handed to submit() as they arrive and every
     poll() result is forwarded: admission, batching and prefill are the engine's;
   * an engine with only the offline contract (step): a cohort adapter. Requests that arrive within --gather-ms of
@@ -39,10 +40,11 @@ from pathlib import Path
 # ---------------------------------------------------------------------------------------------- the engine process
 
 def engine_main(args) -> int:
-    import torch
-
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _device
     from _engine_runner import load_engine
+
+    D = _device.get()
 
     engine = load_engine(args.workspace, args.model_dir, args.max_batch, args.max_context)
     online = all(hasattr(engine, m) for m in ("submit", "poll"))
@@ -83,7 +85,7 @@ def engine_main(args) -> int:
                 time.sleep(0.0002)
 
     waiting: list[dict] = []
-    with torch.no_grad():
+    with D.no_grad():
         while True:
             if not waiting:
                 req = inbox.get()
@@ -102,14 +104,14 @@ def engine_main(args) -> int:
             length = len(waiting[0]["ids"])
             cohort = [r for r in waiting if len(r["ids"]) == length][:args.max_batch]
             waiting = [r for r in waiting if all(r is not c for c in cohort)]
-            ids = torch.tensor([r["ids"] for r in cohort], device="cuda")
+            ids = D.tensor([r["ids"] for r in cohort])
             engine.reset()
             for t in range(length - 1):
-                engine.step(ids[:, t])
+                D.launch(engine.step(ids[:, t]))
             token = ids[:, -1]
             for k in range(max(r["n"] for r in cohort)):
-                token = engine.step(token).argmax(-1)
-                chosen = token.tolist()  # the host copy a streaming server needs at every step
+                token = D.argmax_raw(engine.step(token))
+                chosen = D.tolist(token)  # the host copy a streaming server needs at every step
                 send([[r["rid"], [chosen[i]], k == r["n"] - 1] for i, r in enumerate(cohort) if k < r["n"]])
 
 

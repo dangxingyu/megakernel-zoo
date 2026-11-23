@@ -2,7 +2,7 @@
 """What the evaluator has to know about a checkpoint and a card, read from the checkpoint itself (config.json and
 the JSON headers of its safetensors shards; no weights are read) and from a small table of cards.
 
-    python eval/modelinfo.py MODEL_DIR [--hw h100|b200] [--batch 1 8] [--context 192]
+    python eval/modelinfo.py MODEL_DIR [--hw h100|b200|m5max] [--batch 1 8] [--context 192]
 
 Standard library only: the loop's worker and the dashboard import it too.
 
@@ -40,7 +40,8 @@ import re
 import struct
 from pathlib import Path
 
-# Peak memory bandwidth per card, GB/s, used for MBU and the bandwidth bound. H100: the figure ForgeMegakernel
+# Peak memory bandwidth per card, GB/s, used for MBU and the bandwidth bound ("hbm_gb_s" also for a Mac's unified
+# memory). H100: the figure ForgeMegakernel
 # uses (our read-rate microbenchmark, dashboard/membw.json, reaches 3085). B200: derived from NVIDIA's system
 # figures (two cards: 16 TB/s), not published per card and not measured by us.
 CARDS = {
@@ -53,6 +54,14 @@ CARDS = {
                "sms": None, "arch": "aarch64", "cards": 4,
                "hbm_source": "4 x the B200 figure (8000 GB/s per card, derived from NVIDIA's GB200 system figures, not measured); "
                              "cards are joined by NVLink (NV18 between every pair, about 777 GB/s measured peer copy)"},
+    # Apple silicon (MK_DEVICE=metal): unified memory shared by CPU and GPU. The figure is measured, not the vendor's:
+    # scripts/mac_membw.py, best read-only kernel over a 4 GB buffer (mx.sum of bfloat16: 564-568 GB/s in two runs on
+    # 2026-11-22; a hand-written uint4 read kernel 515-533, a copy 544 counting read + write). memory_gb is the whole
+    # unified memory; Metal's recommended working set (what one process should allocate on the GPU) is 40.2 GB.
+    "m5max": {"gpu": "Apple M5 Max (40-core GPU, 48 GB unified memory)", "request": "1 x M5 Max (this Mac)", "hbm_gb_s": 565.0,
+              "memory_gb": 51.5, "working_set_gb": 40.2, "sms": 40, "arch": "arm64", "apple": True, "eval_timeout_scale": 4,
+              "hbm_source": "measured with scripts/mac_membw.py (MLX, 4 GB buffer, best of 5): 565 GB/s read (mx.sum over "
+                            "bfloat16), 533 GB/s with a uint4 read kernel, 544 GB/s copy (read + write)"},
 }
 DTYPE_BYTES = {"BF16": 2, "F16": 2, "F32": 4, "F64": 8, "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1, "BOOL": 1,
                "F8_E4M3": 1, "F8_E5M2": 1, "F8_E8M0": 1}
@@ -82,6 +91,9 @@ def card_count(hw: str | None) -> int:
 
 def hw_of_gpu_name(name: str) -> str | None:
     low = name.lower()
+    if "apple" in low:  # Apple silicon: the chip's name ("Apple M5 Max") -> "m5max", when CARDS has it
+        tag = "".join(low.replace("apple", "").split())
+        return tag if tag in CARDS else None
     return "h100" if "h100" in low else "b200" if ("b200" in low or "gb200" in low) else None
 
 

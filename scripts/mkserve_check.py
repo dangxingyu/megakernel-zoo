@@ -33,7 +33,8 @@ def call(path, body=None, stream=False):
         if not line.startswith("data: ") or line == "data: [DONE]":
             continue
         obj = json.loads(line[6:])
-        if first is None and obj.get("choices") and (obj["choices"][0].get("text") or (obj["choices"][0].get("delta") or {}).get("content")):
+        if first is None and obj.get("choices") and (obj["choices"][0].get("text") or (obj["choices"][0].get("delta") or {}).get("content")
+                                                          or (obj["choices"][0].get("delta") or {}).get("reasoning_content")):
             first = time.perf_counter() - t0
         chunks.append(obj)
     return chunks, first, time.perf_counter() - t0
@@ -43,8 +44,14 @@ def report(name, ok, **facts):
     print("MK_SERVE_TEST " + json.dumps({"engine": args.engine, "check": name, "pass": bool(ok), **facts}, ensure_ascii=False), flush=True)
 
 
-def text_of(chunks, chat):
-    return "".join(((c["choices"][0].get("delta") or {}).get("content") or "") if chat else c["choices"][0].get("text", "") for c in chunks if c.get("choices"))
+def text_of(chunks, chat, field="content"):
+    return "".join(((c["choices"][0].get("delta") or {}).get(field) or "") if chat else c["choices"][0].get("text", "") for c in chunks if c.get("choices"))
+
+
+def answered(message):
+    """A chat reply that says something: its text, or for a model that always reasons first (Inkling 2 reasons even at
+    reasoning_effort "none") and ran out of max_tokens while reasoning, its reasoning."""
+    return message.get("content") or message.get("reasoning_content")
 
 
 def guard(name, fn):
@@ -58,6 +65,7 @@ health, _ = call("/health")
 mode = health.get("mode")
 models, _ = call("/v1/models")
 report("models", models["status"] == 200 and models["data"][0]["id"] == args.model, mode=mode, served=models["data"][0])
+samples = models["data"][0].get("sampling", mode == "step")
 
 
 def completion_plain():
@@ -120,9 +128,10 @@ def concurrent():
     [t.start() for t in threads]
     [t.join() for t in threads]
     wall = time.perf_counter() - t0
-    report("concurrent_mixed_lengths", all(o and o[0]["status"] == 200 and o[0]["choices"][0]["message"]["content"] for o in out),
+    report("concurrent_mixed_lengths", all(o and o[0]["status"] == 200 and answered(o[0]["choices"][0]["message"]) for o in out),
            wall_s=round(wall, 3), each_s=[round(o[1], 3) for o in out], prompt_tokens=[o[0]["usage"]["prompt_tokens"] for o in out],
-           finishes=[o[0]["choices"][0]["finish_reason"] for o in out], first=out[0][0]["choices"][0]["message"]["content"][:60])
+           finishes=[o[0]["choices"][0]["finish_reason"] for o in out], first=answered(out[0][0]["choices"][0]["message"])[:60],
+           reasoning_only=[not o[0]["choices"][0]["message"].get("content") for o in out])
 
 
 def sampling():
@@ -132,7 +141,9 @@ def sampling():
     a2, _ = call("/v1/completions", dict(body, seed=1))
     g, _ = call("/v1/completions", dict(body, temperature=0))
     ta, tb, ta2, tg = (x["choices"][0]["text"] for x in (a, b, a2, g))
-    ok = (ta == ta2 and ta != tb) if mode == "step" else (ta == tb == tg)  # native mode decodes greedily and says so
+    # a server that samples (step mode, or a native engine that draws tokens itself): reproducible per seed, different
+    # across seeds; a native engine without sampling decodes greedily and says so
+    ok = (ta == ta2 and ta != tb) if samples else (ta == tb == tg)
     report("sampling", ok, mode=mode, seed1=ta[:60], seed2=tb[:60], seed1_again_same=ta == ta2, greedy=tg[:60])
 
 
@@ -151,7 +162,8 @@ def long_prompt():
     chunks, first, total = call("/v1/chat/completions", {"messages": [{"role": "user", "content": text}], "max_tokens": 24, "temperature": 0,
                                                           "chat_template_kwargs": {"enable_thinking": False}, "stream_options": {"include_usage": True}}, stream=True)
     usage = chunks[-1].get("usage", {})
-    report("long_prompt", bool(text_of(chunks, True)), prompt_tokens=usage.get("prompt_tokens"), ttft_s=round(first or -1, 3), seconds=round(total, 3), content=text_of(chunks, True)[:80])
+    report("long_prompt", bool(text_of(chunks, True) or text_of(chunks, True, "reasoning_content")), prompt_tokens=usage.get("prompt_tokens"), ttft_s=round(first or -1, 3), seconds=round(total, 3), content=(text_of(chunks, True) or text_of(chunks, True, "reasoning_content"))[:80],
+           reasoning_only=not text_of(chunks, True))
 
 
 def over_context():
