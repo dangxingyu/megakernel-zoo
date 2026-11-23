@@ -1,0 +1,10 @@
+MK_RESULT system=omlx-oq4e-ds round=1 workload=chat tok_s=81.7 us_per_tok=12236 chunk_tok_s=8.3 tok_per_chunk=9.16 ttft_s=0.010 clean=3/3
+MK_RESULT system=llamacpp-q4-ds round=1 workload=chat tok_s=89.1 us_per_tok=11224 chunk_tok_s=85.1 tok_per_chunk=1.04 ttft_s=0.380 clean=3/3
+MK_RESULT system=omlx-oq4e round=1 workload=chat tok_s=60.5 us_per_tok=16536 chunk_tok_s=7.7 tok_per_chunk=7.57 ttft_s=0.009 clean=3/3
+MK_RESULT system=llamacpp-q4 round=1 workload=chat tok_s=41.2 us_per_tok=24300 chunk_tok_s=39.6 tok_per_chunk=1.04 ttft_s=0.359 clean=3/3
+MK_RESULT system=mlxlm-native round=1 workload=chat tok_s=34.6 us_per_tok=28885 chunk_tok_s=31.6 tok_per_chunk=1.09 ttft_s=0.517 clean=3/3
+MK_RESULT system=omlx-oq4e-ds round=2 workload=chat tok_s=81.6 us_per_tok=12249 chunk_tok_s=8.5 tok_per_chunk=9.16 ttft_s=0.011 clean=3/3
+MK_RESULT system=llamacpp-q4-ds round=2 workload=chat tok_s=88.8 us_per_tok=11258 chunk_tok_s=84.8 tok_per_chunk=1.04 ttft_s=0.380 clean=3/3
+MK_RESULT system=omlx-oq4e round=2 workload=chat tok_s=60.5 us_per_tok=16541 chunk_tok_s=7.8 tok_per_chunk=7.57 ttft_s=0.009 clean=3/3
+MK_RESULT system=llamacpp-q4 round=2 workload=chat tok_s=41.2 us_per_tok=24280 chunk_tok_s=39.5 tok_per_chunk=1.04 ttft_s=0.358 clean=3/3
+MK_RESULT system=mlxlm-native round=2 workload=chat tok_s=35.2 us_per_tok=28441 chunk_tok_s=32.3 tok_per_chunk=1.09 ttft_s=0.510 clean=3/3

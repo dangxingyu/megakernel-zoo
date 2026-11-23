@@ -1,0 +1,35 @@
+Traceback (most recent call last):
+  File "~/playground/megakernel-zoo/scripts/mac_mlxlm_layer_diff.py", line 104, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "~/playground/megakernel-zoo/scripts/mac_mlxlm_layer_diff.py", line 69, in main
+    logits_m = model(mx.array(ids))[0]
+               ^^^^^^^^^^^^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/models/inkling2/model.py", line 231, in __call__
+    hidden_states = self.model.language_model(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/models/inkling2/model.py", line 137, in __call__
+    hidden_states, block_states = self._run_loop(
+                                  ^^^^^^^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/models/inkling2/model.py", line 90, in _run_loop
+    prelude = run(self.layers[: core.start], hidden_states, None)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/models/inkling2/model.py", line 81, in run
+    hidden_states, block_states = layer(
+                                  ^^^^^^
+  File "~/playground/megakernel-zoo/scripts/mac_mlxlm_layer_diff.py", line 51, in tap
+    out = orig(self, *a, **k)
+          ^^^^^^^^^^^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/models/inkling2/layers.py", line 662, in __call__
+    hidden_states = self.mlp(
+                    ^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/models/inkling2/layers.py", line 527, in __call__
+    expert_states = self.experts(hidden_states, selected_experts)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/models/inkling2/layers.py", line 478, in __call__
+    gate_up = self.gate_up_proj(x, idx, sorted_indices=do_sort)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/playground/megakernel-zoo/.venv-mac/lib/python3.12/site-packages/mlx_lm/layers/moe.py", line 101, in __call__
+    x = mx.gather_qmm(
+        ^^^^^^^^^^^^^^
+ValueError: [gather_qmm] Global scale is only supported on the GPU.

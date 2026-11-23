@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": false,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 32.41185234339153,
+  "min": 32.372198253804214,
+  "max": 32.43267618217574
+ },
+ "decode_tok_s": {
+  "median": 31.76521748001305,
+  "min": 30.110838718423555,
+  "max": 32.129099124148446
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 32.80246347704976,
+  "min": 32.769561711646055,
+  "max": 32.82405806268016
+ },
+ "tokens_per_chunk": 1.0332996972754793,
+ "tpot_p50_ms": 30.496916035190225,
+ "tpot_p99_ms": 61.50904193054885,
+ "ttft_median_s": 0.40693133301101625,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 94.79855812503956,
+ "tok_s_by_tokens": 32.40555616835462,
+ "tok_s_by_tokens_per_repeat": [
+  32.41185234339153,
+  32.372198253804214,
+  32.43267618217574
+ ],
+ "prompts": "natural text (prompts file)",
+ "texts": [
+  [
+   "):\n        return open_read(f)\n    elif mode in ('w', 'wb'):\n        return open_write(f)\n    elif mode in ('a', 'ab'):\n        return open_append(f)\n    else:\n        raise ValueError(f'Unsupported mode: {mode}')\n\n\ndef open_read(f):\n    if hasattr(f, 'read'):\n        return f\n    elif isinstance(f, str):\n        return open_read_file(f)\n    else:\n        raise ValueError(f'Unsupported file type: {type(f)}')\n\n\ndef open_write(f):\n    if hasattr(f, 'write'):\n        return f\n    elif isinstance(f, str):\n        return open_write_file(f)\n    else:\n        raise ValueError(f'Unsupported file type: {type(f)}')\n\n\ndef open_append(f):\n    if hasattr(f, 'write'):\n        return f\n    elif isinstance(f, str):\n        return open_append_file(f)\n    else:\n        raise ValueError(f'Unsupported file type: {type(f)}')\n\n\ndef open_read_file(f):\n    return open(f, 'rb')\n\n\ndef open_write_file(f):\n    return open(f, 'wb')\n\n\ndef open_append_file(f):\n    return open(f, 'ab')\n# pragma: no cover\ndef open_read_file_error(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_write_file_error(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_append_file_error(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_read_error(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_write_error(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_append_error(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_error(f, mode=None):\n    raise ValueError(f'Unsupported mode: {mode}')\n# pragma: no cover\ndef open_read_file_error_2(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_write_file_error_2(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_append_file_error_2(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_read_error_2(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_write_error_2(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_append_error_2(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_error_2(f, mode=None):\n    raise ValueError(f'Unsupported mode: {mode}')\n# pragma: no cover\ndef open_read_file_error_3(f):\n    raise ValueError(f'Unsupported file type: {type(f)}')\n# pragma: no cover\ndef open_write_file_error_3(f):\n    raise ValueError(f'Unsupported file type: {"
+  ],
+  [
+   "day? Not the question you're searching for? + Ask your question Ask your question\n\n \nText solution\nVerified Step 1. Calculate the number of eggs Janet eats and bakes: Janet eats 3 eggs for breakfast and bakes muffins with 4 eggs. So, the total number of eggs she eats and bakes is 3 + 4 = 7 eggs. Step 2. Calculate the number of eggs Janet sells: Janet has 16 eggs per day. Subtract the number of eggs she eats and bakes from the total number of eggs to find the number of eggs she sells. So, the number of eggs she sells is 16 - 7 = 9 eggs. Step 3. Calculate the amount of money Janet makes: Janet sells each egg for$2. Multiply the number of eggs she sells by the price per egg to find the amount of money she makes. So, the amount of money she makes is 9 * $2 =$18.\n\nTherefore, Janet makes \\$18 every day.\n\nAsk your next question\nScarlett Discussed\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 9 mins ago Discuss this question LIVE 9 mins ago \nQuestion Text Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\nTopicAll Topics\nSubjectAlgebra 1\nLanguagene\nAnswer Number: 1\nNumber of Questions: 131\nN/A\nN/A\nQuestions asked by Filo students\nQuestion 1\n\n\nViews: 5,805\n\nA soccer ball is kicked from the ground with an initial velocity of 40 feet per second. The height of the ball, in feet, after t seconds is given by the function h(t) = -16t^2 + 40t. How long does it take for the ball to reach its maximum height?\n\n\nTopic:\n\nAlgebra 1\n\nQuestion 2\n\n\nViews: 5,260\n\nA soccer ball is kicked from the ground with an initial velocity of 40 feet per second. The height of the ball, in feet, after t seconds is given by the function h(t) = -16t^2 + 40t. How long does it take for the ball to reach its maximum height?\n\n\nTopic:\n\nAlgebra 1\n\nQuestion 3\n\n\nViews: 5,260\n\nA soccer ball is kicked from the ground with an initial velocity of 40 feet per second. The height of the ball, in feet, after t seconds is given by the function h(t) = -16t^2 + 40t. How long does it take for the ball to reach its maximum height?\n\n\nTopic:\n\nAlgebra 1\n\nQuestion 4\n\n\nViews: 5,260\n\nA soccer ball is kicked from the ground with an initial velocity of 40 feet per second. The height of the ball, in feet, after t seconds is given by the function h(t) = -16t^2 + 40t. How long does it take for the ball to reach its maximum height?\n\n\nTopic:\n\nAlgebra 1\n\nView more\nQuestion Text\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for \\$2 per fresh duck egg. How much in dollars does she make every day?\nTopicAll Topics\nSubjectAlgebra 1\nLanguagene\nAnswer Number: 1\nNumber of Questions: 131\nN/A\nN/A\nQuestions asked by Filo students\nQuestion 1\n\n\nViews: 5,260\n\nA soccer ball is kicked from the ground with an initial velocity of 40 feet per second. The height of the ball, in feet, after t seconds is given by the function h(t) = -16t^2 + 40t. How long does it take for the ball to reach its maximum height?\n\n\nTopic:\n\nAlgebra 1\n\nQuestion 2\n\n\nViews: 5,260\n\nA soccer ball is kicked from the ground with an initial velocity of 40 feet per second. The height of the ball, in feet, after"
+  ],
+  [
+   "the carriage into a request that she would take it.\n\nElizabeth was not a little surprised at the change in her friend's manner, and was not a little vexed at the necessity of leaving her.\n\n\"I am sure I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Elizabeth, \"if I do not see you again before I go to Netherfield.\"\n\n\"I shall be very unhappy,\" said Jane, \"if I do"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1003
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.41185234339153,
+   "decode_tok_s": 32.129099124148446,
+   "decode_tok_s_by_tokens": 32.80246347704976,
+   "tokens_per_chunk": 1.0209371884346958,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.186682083061896,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.4066989169223234
+   ],
+   "tpot_ms": {
+    "p50": 30.496916035190225,
+    "p90": 31.13395895343274,
+    "p99": 61.11349991988391,
+    "max": 65.17979106865823,
+    "mean": 31.12443321662864
+   },
+   "t_start_unix": 1795383055.1825306,
+   "wall_s": 31.59338099998422,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    941
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.372198253804214,
+   "decode_tok_s": 30.110838718423555,
+   "decode_tok_s_by_tokens": 32.769561711646055,
+   "tokens_per_chunk": 1.0882040382571732,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.217994582955725,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.4140865000663325
+   ],
+   "tpot_ms": {
+    "p50": 30.53166694007814,
+    "p90": 35.32045893371105,
+    "p99": 61.533041996881366,
+    "max": 66.75587501376867,
+    "mean": 33.21063253505928
+   },
+   "t_start_unix": 1795383087.7773347,
+   "wall_s": 31.632081083022058,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    991
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.43267618217574,
+   "decode_tok_s": 31.76521748001305,
+   "decode_tok_s_by_tokens": 32.82405806268016,
+   "tokens_per_chunk": 1.0332996972754793,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.16616470902227,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.40693133301101625
+   ],
+   "tpot_ms": {
+    "p50": 30.43783293105662,
+    "p90": 31.236457987688482,
+    "p99": 61.50904193054885,
+    "max": 65.99383393768221,
+    "mean": 31.48097445355785
+   },
+   "t_start_unix": 1795383120.4145098,
+   "wall_s": 31.573096042033285,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-mlxlm-native-r2-natural",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}

@@ -1,0 +1,280 @@
+diff --git a/engine/mk_kernels.py b/engine/mk_kernels.py
+index 91bb4fc..72aadfe 100644
+--- a/engine/mk_kernels.py
++++ b/engine/mk_kernels.py
+@@ -1015,3 +1015,224 @@ def gates2(h, msgs, downs: list, fts: list, wt, m0: int) -> list:
+     k = _gall.get(key) or _gall.setdefault(key, _make_gate_all(*key))
+     return k(inputs=[h, msgs, wt] + list(downs) + list(fts), grid=(K * G * 576, 1, 1), threadgroup=(576, 1, 1),
+              output_shapes=[(K, 2304)] * G, output_dtypes=[mx.uint16] * G)
++
++
++# ================================================================================================= merged dispatches (v3)
++# Fewer dispatches for the same arithmetic (a trivial dispatch costs 2.5-4 us in MLX): several GEMVs with their own
++# inputs in one grid, router + slot plan in one threadgroup, expert combine + short conv in one kernel. Every per-row
++# expression is the one of the kernels above, so the logits are bit-identical (tests/bitref.py).
++def _make_gemv_multi(n: int):
++    sel = "    const device ushort* wr = w0; const device ushort* xr = x0; device float* op = out0; uint nn = n; uint NN = N0;\n"
++    off = "N0"
++    for i in range(1, n):
++        sel += f"    if (n >= {off}) {{ wr = w{i}; xr = x{i}; op = out{i}; nn = n - ({off}); NN = N{i}; }}\n"
++        off += f" + N{i}"
++    src = f"""
++    uint n = thread_position_in_grid.x / 32;
++    uint lane = thread_index_in_simdgroup;
++{sel}
++    float4 acc[K];
++    for (int k = 0; k < K; k++) acc[k] = float4(0.0f);
++    wr += size_t(nn) * D;
++    for (int i = 0; i < D / 128; i++) {{
++        int idx = (i * 32 + lane) * 4;
++        float4 wf = {bf4('wr + idx')};
++        for (int k = 0; k < K; k++) {{
++            float4 xv = {hf4('xr + k * D + idx')};
++            acc[k] = fma(wf, xv, acc[k]);
++        }}
++    }}
++    for (int k = 0; k < K; k++) {{
++        float4 a = acc[k];
++        float s = simd_sum((a.x + a.y) + (a.z + a.w));
++        if (lane == 0) op[k * NN + nn] = s;
++    }}
++"""
++    return mx.fast.metal_kernel(name=f"mk_gemv_multi{n}", input_names=[f"w{i}" for i in range(n)] + [f"x{i}" for i in range(n)],
++                                output_names=[f"out{i}" for i in range(n)], source=src)
++
++
++_gm = {}
++
++
++def gemv_multi(ws: list, xs: list) -> list:
++    """Several BF16 GEMVs (same D and K, each with its own input) in one dispatch -> list of float32 [K, N_i]."""
++    n = len(ws)
++    k = _gm.get(n) or _gm.setdefault(n, _make_gemv_multi(n))
++    D, K = ws[0].shape[1], xs[0].shape[0]
++    Ns = [w.shape[0] for w in ws]
++    tot = sum(Ns)
++    return k(inputs=list(ws) + list(xs), template=[("D", D), ("K", K)] + [(f"N{i}", Ns[i]) for i in range(n)],
++             grid=(tot * 32, 1, 1), threadgroup=(256 if tot % 8 == 0 else 32, 1, 1), output_shapes=[(K, N) for N in Ns],
++             output_dtypes=[mx.float32] * n)
++
++
++def _make_gemv_small_multi(n: int):
++    sel = "    const device float* wr = w0; const device float* xr = x0; device float* op = out0;\n"
++    for i in range(1, n):
++        sel += f"    if (m == {i}) {{ wr = w{i}; xr = x{i}; op = out{i}; }}\n"
++    src = f"""
++    uint g = thread_position_in_grid.x;
++    uint m = g / (KR * N);
++    uint r = g % (KR * N);
++    uint k = r / N, nn = r % N;
++{sel}
++    float acc = 0.0f;
++    for (int d = 0; d < D; d++) acc = fma(wr[nn * D + d], xr[k * D + d], acc);
++    op[r] = acc;
++"""
++    return mx.fast.metal_kernel(name=f"mk_gemv_small_multi{n}", input_names=[f"w{i}" for i in range(n)] + [f"x{i}" for i in range(n)],
++                                output_names=[f"out{i}" for i in range(n)], source=src)
++
++
++_gsm = {}
++
++
++def gemv_small_multi(ws: list, xs: list) -> list:
++    n = len(ws)
++    k = _gsm.get(n) or _gsm.setdefault(n, _make_gemv_small_multi(n))
++    N, D = ws[0].shape
++    K = xs[0].shape[0]
++    return k(inputs=list(ws) + list(xs), template=[("D", D), ("N", N), ("KR", K)], grid=(n * K * N, 1, 1), threadgroup=(32, 1, 1),
++             output_shapes=[(K, N)] * n, output_dtypes=[mx.float32] * n)
++
++
++def gates3(h, msgs, downs: list, fgs: list, wt, m0: int) -> list:
++    """gates() with the G down-projections in one dispatch and the G forget/gain projections in one."""
++    K, QH = h.shape[0], h.shape[1]
++    G = len(downs)
++    key = (G, QH, m0)
++    kp = _gpre.get(key) or _gpre.setdefault(key, _make_gate_pre(*key))
++    kq = _gpost.get(key) or _gpost.setdefault(key, _make_gate_post(*key))
++    st = kp(inputs=[h, msgs], grid=(K * G * 576, 1, 1), threadgroup=(576, 1, 1), output_shapes=[(K, 4608)] * G,
++            output_dtypes=[mx.uint16] * G)
++    if G == 1:
++        fg = [gemv_small(fgs[0], gemv(downs[0], st[0]))]
++    else:
++        fg = gemv_small_multi(fgs, gemv_multi(downs, st))
++    return kq(inputs=[h, msgs, wt] + list(fg), grid=(K * G * 576, 1, 1), threadgroup=(576, 1, 1), output_shapes=[(K, 2304)] * G,
++              output_dtypes=[mx.uint16] * G)
++
++
++# router (top-8 of 128 per row, one simdgroup per row) and the expert slot plan (one thread per expert) in one threadgroup
++_ROUTER_PLAN = """
++    uint tid = thread_position_in_threadgroup.x;
++    uint lane = thread_index_in_simdgroup;
++    uint row = simdgroup_index_in_threadgroup;
++    threadgroup uint tidx[KR * 8];
++    threadgroup uint cnt[128];
++    if (row < KR) {
++        float sc[4];
++        float bi[4];
++        for (int i = 0; i < 4; i++) {
++            uint e = lane + 32 * i;
++            float x = logits[row * 128 + e];
++            float y = 1.0f / (1.0f + metal::precise::exp(metal::abs(x)));
++            sc[i] = x < 0 ? y : 1.0f - y;
++            bi[i] = sc[i] + bias[e];
++        }
++        float wsel[8];
++        uint esel[8];
++        for (int k = 0; k < 8; k++) {
++            float best = -INFINITY;
++            uint be = 128;
++            for (int i = 0; i < 4; i++) {
++                if (bi[i] > best) { best = bi[i]; be = lane + 32 * i; }
++            }
++            float top = simd_max(best);
++            uint win = simd_min(best == top ? be : 128u);
++            float s = 0.0f;
++            for (int i = 0; i < 4; i++) {
++                if (lane + 32 * i == win) { s = sc[i]; bi[i] = -INFINITY; }
++            }
++            wsel[k] = simd_sum(s);
++            esel[k] = win;
++        }
++        float total = 0.0f;
++        for (int k = 0; k < 8; k++) total += wsel[k];
++        if (lane == 0) {
++            for (int k = 0; k < 8; k++) {
++                tidx[row * 8 + k] = esel[k];
++                wts[row * 8 + k] = wsel[k] / (total + 1e-20f) * 8.0f;
++            }
++        }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    uint e = tid;
++    uint pairs[KR];
++    uint m = 0;
++    if (e < 128) {
++        for (uint p = 0; p < KR * 8; p++) {
++            if (tidx[p] == e && m < KR) { pairs[m] = p; m++; }
++        }
++        cnt[e] = (m + M - 1) / M;
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    if (e < 128) {
++        uint ns = (m + M - 1) / M;
++        uint off = 0, total = 0;
++        for (uint i = 0; i < 128; i++) { if (i < e) off += cnt[i]; total += cnt[i]; }
++        for (uint s = 0; s < ns; s++) {
++            slot_e[off + s] = e;
++            for (uint i = 0; i < M; i++) slot_p[(off + s) * M + i] = (s * M + i < m) ? pairs[s * M + i] : 0xFFFFFFFFu;
++        }
++        for (uint s = total + e; s < S; s += 128) {
++            slot_e[s] = 0xFFFFFFFFu;
++            for (uint i = 0; i < M; i++) slot_p[s * M + i] = 0xFFFFFFFFu;
++        }
++    }
++"""
++_router_plan = mx.fast.metal_kernel(name="mk_router_plan", input_names=["logits", "bias"], output_names=["wts", "slot_e", "slot_p"],
++                                    source=_ROUTER_PLAN)
++
++
++def router_plan(logits, bias, M: int):
++    """logits float32 [K, 128] -> (wts float32 [K, 8], slot_e uint32 [S], slot_p uint32 [S, M])."""
++    K = logits.shape[0]
++    S = min(8 * K, 128)
++    tg = max(K * 32, 128)
++    return _router_plan(inputs=[logits, bias], template=[("KR", K), ("M", M), ("S", S)], grid=(tg, 1, 1), threadgroup=(tg, 1, 1),
++                        output_shapes=[(K, 8), (S,), (S, M)], output_dtypes=[mx.float32, mx.uint32, mx.uint32])
++
++
++# weighted sum of the 8 experts of each row (combine) + the post-MLP short conv + residual + window, one kernel
++_COMB_SCONV = """
++    uint g = thread_position_in_grid.x;
++    uint row = g / (C / 4), c = (g % (C / 4)) * 4;
++    if (row < 3) *((device float4*)(win + row * C + c)) = *((const device float4*)(st + row * C + c));
++    if (row >= KR) return;
++    float4 ys[4];
++    for (int j = 0; j < 4; j++) {
++        int i = int(row) + j - 3;
++        float4 y = float4(0.0f);
++        if (i < 0) {
++            y = *((const device float4*)(st + (3 + i) * C + c));
++        } else {
++            for (int e = 0; e < 8; e++) y = fma(*((const device float4*)(o + size_t(i * 8 + e) * C + c)), float4(wts[i * 8 + e]), y);
++        }
++        ys[j] = y;
++    }
++    *((device float4*)(win + (row + 3) * C + c)) = ys[3];
++    float4 acc = float4(0.0f);
++    for (int j = 0; j < 4; j++) acc = fma(ys[j], *((const device float4*)(taps + j * C + c)), acc);
++    float4 y = (acc + ys[3]) * 0.4472135954999579f;
++    y += *((const device float4*)(add + row * C + c));
++    *((device float4*)(out + row * C + c)) = y;
++"""
++_comb_sconv = mx.fast.metal_kernel(name="mk_comb_sconv", input_names=["o", "wts", "st", "taps", "add"], output_names=["out", "win"],
++                                   source=_COMB_SCONV)
++
++
++def experts3(fmt: str, w13, s13, g13, w2, s2, g2, x16, logits, rbias, st, taps, add, M: int, RU: int = 2, RD: int = 2):
++    """Router + plan, gate/up, down, combine + short conv + residual: 4 dispatches. -> (out [K, 2304], win [K + 3, 2304])."""
++    K = x16.shape[0]
++    S = min(8 * K, 128)
++    wts, slot_e, slot_p = router_plan(logits, rbias, M)
++    ku = _up2.get((fmt, M, RU)) or _up2.setdefault((fmt, M, RU), _make_up2(fmt, M, RU))
++    kd = _down2.get((fmt, M, RD)) or _down2.setdefault((fmt, M, RD), _make_down2(fmt, M, RD))
++    h = ku(inputs=[w13, s13, g13, x16, slot_e, slot_p], grid=(S * (1152 // RU) * 32, 1, 1), threadgroup=(256, 1, 1),
++           output_shapes=[(K * 8, 1152)], output_dtypes=[mx.uint16])[0]
++    o = kd(inputs=[w2, s2, g2, h, slot_e, slot_p], grid=(S * (2304 // RD) * 32, 1, 1), threadgroup=(256, 1, 1),
++           output_shapes=[(K * 8, 2304)], output_dtypes=[mx.float32])[0]
++    return _comb_sconv(inputs=[o, wts, st, taps, add], template=[("C", 2304), ("KR", K)], grid=((K + 3) * 576, 1, 1),
++                       threadgroup=(64, 1, 1), output_shapes=[(K, 2304), (K + 3, 2304)], output_dtypes=[mx.float32, mx.float32])
+diff --git a/engine/mk_target.py b/engine/mk_target.py
+index 1cafacd..a96c0e4 100644
+--- a/engine/mk_target.py
++++ b/engine/mk_target.py
+@@ -18,6 +18,7 @@ import os
+ ROUND = os.environ.get("MK_ROUND", "0") == "1"
+ COMPILE = os.environ.get("MK_COMPILE", "1") == "1"
+ EXP2 = os.environ.get("MK_EXP2", "1") == "1"
++MERGE = os.environ.get("MK_MERGE", "1") == "1"       # merged dispatches (same arithmetic, bit-identical logits)
+ GATE2 = os.environ.get("MK_GATE2", "0") == "1"      # one fused gate kernel: correct but slower (20.7 vs 19.6 ms at K=2)
+ MSLOT = [int(v) for v in os.environ.get("MK_M", "1,2,2,2,2,2,2,2").split(",")]     # pairs per expert slot, by rows K
+ RUP, RDN = int(os.environ.get("MK_RUP", "2")), int(os.environ.get("MK_RDN", "2"))
+@@ -235,11 +236,14 @@ class Target:
+                 if GATE2:
+                     hq, hk, hv = kn.gates2(hm, msgs, L["c_down3"], L["c_ft3"], L["anw3"], 0)
+                 else:
+-                    hq, hk, hv = kn.gates(hm, msgs, L["c_down3"], L["c_fg3"], L["anw3"], 0)
+-        o = kn.gemv(L["qgrs"], hq)                                            # [K, 3072 + 3072 + 384 + 24]
++                    hq, hk, hv = (kn.gates3 if MERGE else kn.gates)(hm, msgs, L["c_down3"], L["c_fg3"], L["anw3"], 0)
++        if MERGE:
++            o, kk, vv = kn.gemv_multi([L["qgrs"], L["wk"], L["wv"]], [hq, hk, hv])
++        else:
++            o = kn.gemv(L["qgrs"], hq)                                        # [K, 3072 + 3072 + 384 + 24]
++            kk = kn.gemv(L["wk"], hk)
++            vv = kn.gemv(L["wv"], hv)
+         gate, sinks = o[:, 3072:6144], o[:, 6528:]
+-        kk = kn.gemv(L["wk"], hk)
+-        vv = kn.gemv(L["wv"], hv)
+         q, rel, knew, vnew, w0, w1 = kn.qkv_post(L["full"], o, kk, vv, cw[0], cw[1], L["k_taps"], L["v_taps"], L["q_scale"],
+                                                  L["r_scale"], self.qthr, self.rthr)
+         att16 = kn.attention_gate(q, kc_a, vc_a, kr_a, vr_a, knew, vnew, rel, L["proj"], sinks, meta[0 if L["full"] else 1],
+@@ -257,10 +261,15 @@ class Target:
+             xm = kn.mix2(srcs, L["mq2"], norm_in=True)
+             x16 = (kn.gates2(xm, msgs, L["c_down1"], L["c_ft1"], L["mnw"], 3) if GATE2 else
+                    kn.gates(xm, msgs, L["c_down1"], L["c_fg1"], L["mnw"], 3))[0]
+-        idx, wts = kn.router(kn.gemv(L["router"], x16), L["rbias"])
+-        y = kn.experts2(L["fmt"], L["w13"], L["s13"], L["g13"], L["w2"], L["s2"], L["g2"], x16, idx, wts,
+-                        MSLOT[min(K, len(MSLOT)) - 1], RUP, RDN)
+-        out, w3 = kn.sconv2(y, cw[3], L["m_conv"], add=h)
++        if MERGE:
++            out, w3 = kn.experts3(L["fmt"], L["w13"], L["s13"], L["g13"], L["w2"], L["s2"], L["g2"], x16,
++                                  kn.gemv(L["router"], x16), L["rbias"], cw[3], L["m_conv"], h,
++                                  MSLOT[min(K, len(MSLOT)) - 1], RUP, RDN)
++        else:
++            idx, wts = kn.router(kn.gemv(L["router"], x16), L["rbias"])
++            y = kn.experts2(L["fmt"], L["w13"], L["s13"], L["g13"], L["w2"], L["s2"], L["g2"], x16, idx, wts,
++                            MSLOT[min(K, len(MSLOT)) - 1], RUP, RDN)
++            out, w3 = kn.sconv2(y, cw[3], L["m_conv"], add=h)
+         knew_l.append(knew); vnew_l.append(vnew); wins_l.append([w0, w1, w2, w3])
+         return out, blocks
+ 

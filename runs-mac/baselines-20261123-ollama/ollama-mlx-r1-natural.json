@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": true,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 32.16320022393704,
+  "min": 32.03112683106463,
+  "max": 32.165695718226786
+ },
+ "decode_tok_s": {
+  "median": 32.522234991830494,
+  "min": 32.388540487658126,
+  "max": 32.52785456255608
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 32.522234991830494,
+  "min": 32.388540487658126,
+  "max": 32.52785456255608
+ },
+ "tokens_per_chunk": 1.0,
+ "tpot_p50_ms": 30.618041986599565,
+ "tpot_p99_ms": 33.825207967311144,
+ "ttft_median_s": 0.38365800003521144,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 95.64168912509922,
+ "tok_s_by_tokens": 32.11988441548567,
+ "tok_s_by_tokens_per_repeat": [
+  32.03112683106463,
+  32.165695718226786,
+  32.16320022393704
+ ],
+ "prompts": "natural text (prompts file)",
+ "texts": [
+  [
+   "):\n        return f.read()\n    elif mode in ('w', 'wb'):\n        return f.write(mode)\n    else:\n        raise ValueError('Invalid mode: {}'.format(mode))\n\n\ndef test_open_with_file_object():\n    class FakeFile:\n        def __init__(self):\n            self.mode = 'rb'\n            self.read_called = False\n            self.write_called = False\n\n        def read(self):\n            self.read_called = True\n            return 'data'\n\n        def write(self, mode):\n            self.write_called = True\n            return mode\n\n    f = FakeFile()\n    result = open(f)\n    assert result == 'data'\n    assert f.read_called is True\n    assert f.write_called is False\n\n\ndef test_open_with_mode_parameter():\n    class FakeFile:\n        def __init__(self):\n            self.mode = 'rb'\n            self.read_called = False\n            self.write_called = False\n\n        def read(self):\n            self.read_called = True\n            return 'data'\n\n        def write(self, mode):\n            self.write_called = True\n            return mode\n\n    f = FakeFile()\n    result = open(f, 'w')\n    assert result == 'w'\n    assert f.read_called is False\n    assert f.write_called is True\n\n\ndef test_open_with_invalid_mode():\n    class FakeFile:\n        def __init__(self):\n            self.mode = 'rb'\n\n    f = FakeFile()\n    try:\n        open(f, 'x')\n        assert False, 'Expected ValueError'\n    except ValueError as e:\n        assert str(e) == 'Invalid mode: x'\n    except Exception as e:\n        assert False, 'Expected ValueError, got {}'.format(e)\n    else:\n        assert False, 'Expected ValueError'\n    finally:\n        pass\n    try:\n        open(f, 'x')\n        assert False, 'Expected ValueError'\n    except ValueError as e:\n        assert str(e) == 'Invalid mode: x'\n    except Exception as e:\n        assert False, 'Expected ValueError, got {}'.format(e)\n    finally:\n        pass\n    try:\n        open(f, 'x')\n        assert False, 'Expected ValueError'\n    except ValueError as e:\n        assert str(e) == 'Invalid mode: x'\n    except Exception as e:\n        assert False, 'Expected ValueError, got {}'.format(e)\n    finally:\n        pass\n    try:\n        open(f, 'x')\n        assert False, 'Expected ValueError'\n    except ValueError as e:\n        assert str(e) == 'Invalid mode: x'\n    except Exception as e:\n        assert False, 'Expected ValueError, got {}'.format(e)\n    finally:\n        pass\n    try:\n        open(f, 'x')\n        assert False, 'Expected ValueError'\n    except ValueError as e:\n        assert str(e) == 'Invalid mode: x'\n    except Exception as e:\n        assert False, 'Expected ValueError, got {}'.format(e)\n    finally:\n        pass\n    try:\n        open(f, 'x')\n        assert False, 'Expected ValueError'\n    except ValueError as e:\n        assert str(e) == 'Invalid mode: x'\n    except Exception as e:\n        assert False, 'Expected ValueError, got {}'.format(e)\n    finally:\n        pass\n    try:\n        open(f, 'x')\n        assert False, 'Expected ValueError'\n    except ValueError as e:\n        assert str(e) == 'Invalid mode: x'\n    except Exception as e:\n        assert False, 'Expected ValueError, got {}'.format(e)\n    finally:\n        pass\n   "
+  ],
+  [
+   " day? Not the question you're searching for? + Ask your question Ask your question\n\n \nText solution\nVerified Step 1. Calculate the number of eggs Janet uses for breakfast and muffins: Janet uses 3 eggs for breakfast and 4 eggs for muffins, so she uses a total of 3 + 4 = 7 eggs per day. Step 2. Calculate the number of eggs Janet sells: Janet lays 16 eggs per day and uses 7 eggs, so she has 16 - 7 = 9 eggs left to sell. Step 3. Calculate the amount of money Janet makes from selling the eggs: Janet sells each egg for$2, so she makes 9 * $2 =$18 per day.\n\nTherefore, Janet makes $18 every day. Ask your next question Evelyn Discussed Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\n10 mins ago\nDiscuss this question LIVE\n10 mins ago\nQuestion Text\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for \\$2 per fresh duck egg. How much in dollars does she make every day?\nUpdated OnApr 29, 2024\nTopicAll Topics\nSubjectAlgebra 1\nClassHigh School\nAnswer Number: 18\nNumber of Questions: 1\nNumber of Answers: 1\nDiscussed\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 10 mins ago Discuss this question LIVE 10 mins ago \n Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make every day?\n10 mins ago\nDiscuss this question LIVE\n10 mins ago\nQuestions\nAsk your next question\nStudents who ask this question also asked\nQuestion 1\n\n\nViews: 5,312\n\nA grocery store sells 2 pounds of carrots for $1.50. How much will 5 pounds of carrots cost? \n\n Topic: Algebra 1 Question 2 \n\n Views: 5,587 A grocery store sells 2 pounds of carrots for$1.50. How much will 5 pounds of carrots cost?\n\n\nTopic:\n\nAlgebra 1\n\nQuestion 3\n\n\nViews: 5,587\n\nA grocery store sells 2 pounds of carrots for $1.50. How much will 5 pounds of carrots cost? \n\n Topic: Algebra 1 Question 4 \n\n Views: 5,587 A grocery store sells 2 pounds of carrots for$1.50. How much will 5 pounds of carrots cost?\n\n\nTopic:\n\nAlgebra 1\n\nView more\nQuestion Text\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for \\$2 per fresh duck egg. How much in dollars does she make every day?\nUpdated OnApr 29, 2024\nTopicAll Topics\nSubjectAlgebra 1\nClassHigh School\nAnswer Number: 18\nNumber of Questions: 1\nNumber of Answers: 1\nDiscussed\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day? 10 mins ago Discuss this question LIVE 10 mins ago \n\n Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for$2 per fresh duck egg. How much in dollars does she make"
+  ],
+  [
+   " the carriage into a promise to walk with her to the door.\n\n\u201cI am sure I shall not be able to go on,\u201d said Elizabeth, \u201cif you do not take me home.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cBut you must,\u201d said Elizabeth.\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Jane, \u201cI will not.\u201d\n\n\u201cI will not,\u201d said Elizabeth, \u201cI"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.03112683106463,
+   "decode_tok_s": 32.388540487658126,
+   "decode_tok_s_by_tokens": 32.388540487658126,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.585245416965336,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.38365800003521144
+   ],
+   "tpot_ms": {
+    "p50": 30.84629203658551,
+    "p90": 31.768292072229087,
+    "p99": 33.825207967311144,
+    "max": 68.11062502674758,
+    "mean": 30.875117709643533
+   },
+   "t_start_unix": 1795443372.9817495,
+   "wall_s": 31.968903417000547,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.165695718226786,
+   "decode_tok_s": 32.52785456255608,
+   "decode_tok_s_by_tokens": 32.52785456255608,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.449968458036892,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.3851893750252202
+   ],
+   "tpot_ms": {
+    "p50": 30.54945799522102,
+    "p90": 31.694749952293932,
+    "p99": 34.364250022917986,
+    "max": 81.13983296789229,
+    "mean": 30.742882168169004
+   },
+   "t_start_unix": 1795443405.9540913,
+   "wall_s": 31.835157833062112,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.16320022393704,
+   "decode_tok_s": 32.522234991830494,
+   "decode_tok_s_by_tokens": 32.522234991830494,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.455402750056237,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.382225124980323
+   ],
+   "tpot_ms": {
+    "p50": 30.618041986599565,
+    "p90": 31.698875012807548,
+    "p99": 33.424041932448745,
+    "max": 70.68229198921472,
+    "mean": 30.7481942815799
+   },
+   "t_start_unix": 1795443438.7938344,
+   "wall_s": 31.83762787503656,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-ollama-mlx-r1-natural",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}

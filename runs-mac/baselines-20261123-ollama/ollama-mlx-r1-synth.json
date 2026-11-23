@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": true,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 31.618267510463276,
+  "min": 31.210611104870196,
+  "max": 32.25114618399923
+ },
+ "decode_tok_s": {
+  "median": 31.958482173053035,
+  "min": 31.543604720855484,
+  "max": 32.603927229039684
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 31.958482173053035,
+  "min": 31.543604720855484,
+  "max": 32.603927229039684
+ },
+ "tokens_per_chunk": 1.0,
+ "tpot_p50_ms": 31.20774996932596,
+ "tpot_p99_ms": 35.18649993930012,
+ "ttft_median_s": 0.3760600419482216,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 96.94650512502994,
+ "tok_s_by_tokens": 31.68757858819257,
+ "tok_s_by_tokens_per_repeat": [
+  32.25114618399923,
+  31.618267510463276,
+  31.210611104870196
+ ],
+ "prompts": "synthetic",
+ "texts": [
+  [
+   "The river was a serene and tranquil place, with its gentle flow and lush greenery lining its banks. It was a perfect spot for a leisurely stroll or a peaceful picnic. However, as the sun began to set, the river took on a different character. The water became darker and more mysterious, reflecting the fading light of the day.\n\nAs the evening progressed, the river began to stir. The gentle flow turned into a tumultuous roar, and the water started to rise. It was as if the river was coming to life, awakening from its slumber. The lush greenery along the banks seemed to tremble, as if in fear of what was to come.\n\nSuddenly, a loud rumble was heard in the distance. It was the sound of an engine, growing louder and louder. The river began to swell, and the water started to spill over its banks. The lush greenery was submerged, and the once serene river became a raging torrent.\n\nThe engine grew louder, and the river continued to rise. The water reached the nearby town, and the streets were flooded. People scrambled to find higher ground, and the once peaceful town became a scene of chaos.\n\nAs the engine drew closer, the river reached its peak. The water was now a raging torrent, carrying with it debris and destruction. The town was completely submerged, and the once serene river had become a force of nature.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nAs the engine drew closer, the river reached its peak. The water was now a raging torrent, carrying with it debris and destruction. The town was completely submerged, and the once serene river had become a force of nature.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peaceful landscape was now a scene of devastation. The engine was now a deafening roar, and the river was a raging torrent, carrying with it the destruction of everything in its path.\n\nThe engine continued to grow louder, and the river continued to rise. The water reached the nearby mountains, and the once peace"
+  ],
+  [
+   "The river was a majestic sight, flowing through the valley with a steady and powerful current. It was a lifeline for the surrounding communities, providing water for drinking, irrigation, and transportation. The river had been a part of the landscape for centuries, shaping the terrain and influencing the lives of those who lived nearby.\nAs the river flowed, it carved out a path through the land, eroding the soil and creating a unique ecosystem. The banks of the river were lined with lush vegetation, providing a habitat for a variety of plant and animal species. Birds flocked to the river, soaring above the water and dipping their wings to catch fish.\nThe river was also a source of inspiration for artists and writers, who were drawn to its beauty and power. Its constant movement and ever-changing landscape inspired countless works of art and literature, capturing the essence of nature and the human experience.\nDespite its beauty and importance, the river was also a source of danger. Floods were a common occurrence, threatening the lives and livelihoods of those who lived nearby. The river's unpredictable nature made it a force to be reckoned with, and those who lived in its shadow had to be prepared for its whims.\nAs the river flowed on, it continued to shape the landscape and influence the lives of those who lived nearby. Its power and beauty were a constant reminder of the natural world's grandeur and the importance of preserving it for future generations.\nThe river was a complex and multifaceted entity, with many different aspects and characteristics. It was a source of life and sustenance, but also a source of danger and uncertainty. Its beauty and power were a constant reminder of the natural world's grandeur and the importance of preserving it for future generations.\nThe river was a symbol of the interconnectedness of all living things, a reminder that we are all part of a larger ecosystem and that our actions have consequences. It was a call to action, urging us to take care of the natural world and to work towards a more sustainable future.\nAs the river flowed on, it continued to shape the landscape and influence the lives of those who lived nearby. Its power and beauty were a constant reminder of the natural world's grandeur and the importance of preserving it for future generations.\nThe river was a complex and multifaceted entity, with many different aspects and characteristics. It was a source of life and sustenance, but also a source of danger and uncertainty. Its beauty and power were a constant reminder of the natural world's grandeur and the importance of preserving it for future generations.\nThe river was a symbol of the interconnectedness of all living things, a reminder that we are all part of a larger ecosystem and that our actions have consequences. It was a call to action, urging us to take care of the natural world and to work towards a more sustainable future.\nThe river was a majestic sight, flowing through the valley with a steady and powerful current. It was a lifeline for the surrounding communities, providing water for drinking, irrigation, and transportation. The river had been a part of the landscape for centuries, shaping the terrain and influencing the lives of those who lived nearby.\nAs the river flowed, it carved out a path through the land, eroding the soil and creating a unique ecosystem. The banks of the river were lined with lush vegetation, providing a habitat for a variety of plant and animal species. Birds flocked to the river, soaring above the water and dipping their wings to catch fish.\nThe river was also a source of inspiration for artists and writers, who were drawn to its beauty and power. Its constant movement and ever-changing landscape inspired countless works of art and literature, capturing the essence of nature and the human experience.\nDespite its beauty and importance, the river was also a source of danger. Floods were a common occurrence, threatening the lives and livelihoods of those who lived nearby. The river's unpredictable nature made it a force to be reckoned with, and those who lived in its shadow had to be prepared for its whims.\nAs the river flowed on, it continued to shape the landscape and influence the lives of those who lived nearby. Its power and beauty were a constant reminder of the natural world's grandeur and the importance of preserving it for future generations.\nThe river was a complex and multifaceted entity, with many different aspects and characteristics. It was a source of life and sustenance, but also a source of danger and uncertainty. Its beauty and power were a constant reminder of the natural world's grandeur and the importance of preserving it for future generations.\nThe river was a symbol of"
+  ],
+  [
+   "The garden was a lush oasis in the heart of the city, a place where nature and urban life intertwined in a harmonious dance. The air was filled with the sweet scent of blooming flowers, and the sound of birds chirping in the trees provided a soothing backdrop to the bustling city outside. As I walked through the garden, I couldn't help but feel a sense of calm wash over me, a respite from the chaos of everyday life.\n\nThe garden was divided into several sections, each with its own unique character. There was a small pond where ducks swam lazily, a vegetable patch where the soil was rich and dark, and a flower bed where vibrant blooms swayed in the gentle breeze. As I explored each section, I couldn't help but feel a sense of wonder and awe at the beauty and diversity of nature.\n\nOne of the most striking features of the garden was the river that ran through it. The river was a clear, turquoise blue, and it flowed gently through the garden, providing a sense of tranquility and serenity. As I sat by the river, I couldn't help but feel a sense of connection to the natural world, a reminder of the beauty and wonder that exists beyond the confines of the city.\n\nAs I continued to explore the garden, I couldn't help but feel a sense of nostalgia for a time when I was a child, playing in the fields and forests with my friends. I remembered the feeling of freedom and joy that came with being in nature, a feeling that was often lost in the hustle and bustle of city life. But as I sat in the garden, I realized that this feeling was still within me, waiting to be rediscovered.\n\nThe garden was a place of reflection and introspection, a place where I could escape the noise and distractions of the city and connect with my inner self. As I sat by the river, I couldn't help but feel a sense of peace and contentment, a reminder of the importance of taking time to slow down and appreciate the beauty of the world around us.\n\nAs I continued to explore the garden, I couldn't help but feel a sense of gratitude for the beauty and diversity of nature. The garden was a reminder of the importance of preserving and protecting our natural world, a world that is often taken for granted in the midst of our busy lives. As I left the garden, I couldn't help but feel a sense of hope and optimism for the future, a reminder that even in the midst of chaos and uncertainty, there is always beauty and wonder to be found.\n\nThe garden was a place of magic and wonder, a place where the boundaries between nature and urban life blurred, and where the beauty and diversity of the natural world were on full display. As I left the garden, I couldn't help but feel a sense of awe and wonder, a reminder of the importance of taking time to appreciate the beauty of the world around us. And as I walked back into the city, I couldn't help but feel a sense of hope and optimism for the future, a reminder that even in the midst of chaos and uncertainty, there is always beauty and wonder to be found.\n\nThe garden was a place of inspiration and creativity, a place where the boundaries between art and nature blurred, and where the beauty and diversity of the natural world were on full display. As I left the garden, I couldn't help but feel a sense of gratitude for the beauty and diversity of nature, a reminder of the importance of preserving and protecting our natural world. And as I walked back into the city, I couldn't help but feel a sense of hope and optimism for the future, a reminder that even in the midst of chaos and uncertainty, there is always beauty and wonder to be found.\n\nThe garden was a place of peace and tranquility, a place where the noise and distractions of the city were left behind, and where the beauty and diversity of the natural world were on full display. As I left the garden, I couldn't help but feel a sense of awe and wonder, a reminder of the importance of taking time to appreciate the beauty of the world around us. And as I walked back into the city, I couldn't help but feel a sense of hope and optimism for the future, a reminder that even in the midst of chaos and uncertainty, there is always beauty and wonder to be found.\n\nThe garden was a place of reflection and introspection, a place where I could escape the noise and distractions of the city and connect with my inner self. As I sat by the river, I couldn't help but feel a sense of peace and contentment, a reminder of the importance of taking time to slow down and appreciate the beauty of"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 32.25114618399923,
+   "decode_tok_s": 32.603927229039684,
+   "decode_tok_s_by_tokens": 32.603927229039684,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 31.376588250044733,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.3742212919751182
+   ],
+   "tpot_ms": {
+    "p50": 30.443749972619116,
+    "p90": 31.65283298585564,
+    "p99": 35.18233308568597,
+    "max": 81.68537495657802,
+    "mean": 30.67115175957452
+   },
+   "t_start_unix": 1795443239.4178138,
+   "wall_s": 31.75080954201985,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 31.618267510463276,
+   "decode_tok_s": 31.958482173053035,
+   "decode_tok_s_by_tokens": 31.958482173053035,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 32.01028116606176,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.3760600419482216
+   ],
+   "tpot_ms": {
+    "p50": 31.20774996932596,
+    "p90": 32.58787503000349,
+    "p99": 35.18649993930012,
+    "max": 69.4220419973135,
+    "mean": 31.29059742528031
+   },
+   "t_start_unix": 1795443272.173627,
+   "wall_s": 32.38634120800998,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 31.210611104870196,
+   "decode_tok_s": 31.543604720855484,
+   "decode_tok_s_by_tokens": 31.543604720855484,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 32.431296583032236,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.37805779196787626
+   ],
+   "tpot_ms": {
+    "p50": 31.507832929491997,
+    "p90": 32.940874923951924,
+    "p99": 36.71183297410607,
+    "max": 67.59624998085201,
+    "mean": 31.702147197489968
+   },
+   "t_start_unix": 1795443305.5657399,
+   "wall_s": 32.80935437500011,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-ollama-mlx-r1-synth",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}

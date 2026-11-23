@@ -1,0 +1,135 @@
+diff --git a/engine/api.py b/engine/api.py
+index a0be99a..803934d 100644
+--- a/engine/api.py
++++ b/engine/api.py
+@@ -140,6 +140,8 @@ class Engine:
+             events.append((rid, [t], n == 1))
+             if n == 1:
+                 self.active = None
++            elif spec and self.draft.prelaunch:
++                act["pre"] = self.draft._launch(self, act, n - 1)     # the GPU starts the first cycle now
+             return events
+         left = act["n"] - act["sent"]
+         if act["spec"]:
+diff --git a/engine/mk_draft.py b/engine/mk_draft.py
+index 0eeecc5..5453999 100644
+--- a/engine/mk_draft.py
++++ b/engine/mk_draft.py
+@@ -68,6 +68,7 @@ class Draft:
+         self.skip_n = int(os.environ.get("MK_SKIP_N", "0"))
+         self.ng_min = int(os.environ.get("MK_NGRAM", "5"))
+         self.ng_wide = os.environ.get("MK_WIDE", "1") == "1"
++        self.prelaunch = os.environ.get("MK_PRELAUNCH", "1") == "1"
+         w = mx.load(str(Path(model_dir) / "mtp.safetensors"))
+         u16 = lambda a: mx.contiguous(a).view(mx.uint16)  # noqa: E731
+         f32 = lambda k: w[k].astype(F32)  # noqa: E731
+@@ -246,29 +247,54 @@ class Draft:
+         mx.eval(self.kc, self.vc)
+ 
+     # ---------------------------------------------------------------------------------------------- one cycle
+-    def cycle(self, eng, act, left: int):
+-        """One draft-and-verify cycle; returns the committed tokens (1 + the accepted drafts)."""
++    def _start_verify(self, w, act):
++        """Queue the verify pass of the cycle w (anchor + w["kd"] proposals) without waiting for it."""
++        toks = mx.array(np.concatenate([[act["last"]], w["d"][:w["kd"]]]).astype(np.int32))
++        tgt, feats = self.tg.forward(toks, want_feats=True, tok_only=True)
++        if tgt.ndim == 2:
++            tgt = mx.argmax(tgt, axis=-1)
++        mx.async_eval(tgt, *feats)
++        w["tgt"], w["feats"] = tgt, feats
++
++    def _launch(self, eng, act, left: int):
++        """Start the first GPU step of the next cycle and return without waiting: the verify pass of a copy proposal
++        (or of a plain step), or the draft. Called at the end of a cycle, so that the GPU works while the host hands
++        the tokens to the server."""
+         tg = self.tg
+-        c = tg.pos
+-        anchor = mx.array([act["last"]], dtype=mx.int32)
+         nd = NB - 1
+-        t0 = time.perf_counter()
++        w = {"c": tg.pos, "left": left}
+         # copy proposals: 7 drafts, or 15 (a 16-row pass) while the previous copy cycle was accepted in full
+         wide = self.ng_wide and act.get("ng_full", False) and left - 1 >= 15
+         cont = ngram(act["hist"], self.ng_min, 15 if wide else nd) if self.ng_min > 0 else None
+         if cont is not None:
+-            d = np.asarray(cont, dtype=np.int64)
+-            kd = len(cont)
+-            eng.counters["ngram_cycles"] = eng.counters.get("ngram_cycles", 0) + 1
++            w["kind"], w["d"] = "copy", np.asarray(cont, dtype=np.int64)
++            w["kd"] = max(0, min(len(cont), left - 1))
++            self._start_verify(w, act)
+         elif act.get("skip", 0) > 0:
+             # the draft was unsure of its first token in the last cycle: one plain step without a draft
+             act["skip"] -= 1
+-            d, kd = np.zeros((0,), dtype=np.int64), 0
+-            eng.counters["plain_cycles"] = eng.counters.get("plain_cycles", 0) + 1
++            w["kind"], w["d"], w["kd"] = "plain", np.zeros((0,), dtype=np.int64), 0
++            self._start_verify(w, act)
+         else:
+-            d, p = self.propose(anchor, c, nd)
+-            mx.eval(d, p, *self._rest)
+-            d, p = np.array(d), np.array(p)
++            d, p = self.propose(mx.array([act["last"]], dtype=mx.int32), tg.pos, nd)
++            mx.async_eval(d, p, *self._rest)
++            w["kind"], w["dl"], w["pl"] = "draft", d, p
++        return w
++
++    def cycle(self, eng, act, left: int):
++        """One draft-and-verify cycle; returns the committed tokens (1 + the accepted drafts). Its first GPU step was
++        usually started at the end of the previous cycle (act["pre"])."""
++        tg = self.tg
++        nd = NB - 1
++        t0 = time.perf_counter()
++        w = act.pop("pre", None)
++        if w is not None and (w["left"] != left or w["c"] != tg.pos):
++            tg.pending, w = None, None
++        if w is None:
++            w = self._launch(eng, act, left)
++        c = tg.pos
++        if w["kind"] == "draft":
++            d, p = np.array(w["dl"]), np.array(w["pl"])
+             if len(p) < nd and np.prod(p) >= self.theta:
+                 d2, p2 = self.more()
+                 mx.eval(d2, p2)
+@@ -280,15 +306,16 @@ class Draft:
+             kd = max(self.kmin, int((cum >= self.theta).cumprod().sum()))
+             if p[0] < self.skip_low:
+                 act["skip"] = self.skip_n
++            w["d"], w["kd"] = d, max(0, min(kd, left - 1))
++            self._start_verify(w, act)
++        elif w["kind"] == "copy":
++            eng.counters["ngram_cycles"] = eng.counters.get("ngram_cycles", 0) + 1
++        else:
++            eng.counters["plain_cycles"] = eng.counters.get("plain_cycles", 0) + 1
+         t1 = time.perf_counter()
+-        kd = max(0, min(kd, left - 1))
++        d, kd, feats = w["d"], w["kd"], w["feats"]
+         K = 1 + kd
+-        toks = mx.array(np.concatenate([[act["last"]], d[:kd]]).astype(np.int32))
+-        tgt, feats = tg.forward(toks, want_feats=True, tok_only=True)
+-        if tgt.ndim == 2:
+-            tgt = mx.argmax(tgt, axis=-1)
+-        mx.eval(tgt, *feats)
+-        t = np.array(tgt)
++        t = np.array(w["tgt"])
+         a = 0
+         while a < kd and int(d[a]) == int(t[a]):
+             a += 1
+@@ -300,11 +327,15 @@ class Draft:
+         eng.counters["draft_s"] = eng.counters.get("draft_s", 0.0) + (t1 - t0)
+         eng.counters["verify_s"] = eng.counters.get("verify_s", 0.0) + (time.perf_counter() - t1)
+         eng.counters["host_syncs"] += 2
+-        act["ng_full"] = cont is not None and a == kd and kd >= nd
+-        if cont is not None:
++        copy = w["kind"] == "copy"
++        act["ng_full"] = copy and a == kd and kd >= nd
++        if copy:
+             eng.counters["ngram_tokens"] = eng.counters.get("ngram_tokens", 0) + n_acc
+             if K == 16:
+                 eng.counters["wide_cycles"] = eng.counters.get("wide_cycles", 0) + 1
+         out = [int(v) for v in t[:n_acc]]
+         act["hist"].extend(out)
++        act["last"] = out[-1]
++        if self.prelaunch and left - n_acc > 0:
++            act["pre"] = self._launch(eng, act, left - n_acc)
+         return out

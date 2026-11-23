@@ -1,0 +1,3 @@
+{"turn": 1, "input_tokens": 19683, "cache_read_input_tokens": 0, "ttft_s": 21.71, "seconds": 21.88, "output_tokens": 160, "stop_reason": "end_turn", "text": "`mkserve doctor` (e.g. `mkserve doctor Qwen/Qwen3-8B`)", "tool_calls": []}
+{"turn": 2, "input_tokens": 269, "cache_read_input_tokens": 19456, "ttft_s": 1.07, "seconds": 1.33, "output_tokens": 61, "stop_reason": "end_turn", "text": "`mkserve bench` (with `--url` to time another server)", "tool_calls": []}
+{"turn": 3, "input_tokens": 52, "cache_read_input_tokens": 19712, "ttft_s": 0.82, "seconds": 0.87, "output_tokens": 60, "stop_reason": "tool_use", "text": "", "tool_calls": [["grep", "{\"pattern\":\"--max-context\"}"]]}

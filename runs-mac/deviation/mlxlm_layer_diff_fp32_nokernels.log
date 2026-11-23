@@ -1,0 +1,10 @@
+applications: mlx-lm 48, reference 48; routers: mlx-lm 48
+{"app": 0, "rel_median": 0.001715, "rel_max": 0.086927, "pos_of_max": 19, "route_rows_differ": 1}
+{"app": 1, "rel_median": 0.00205, "rel_max": 0.060546, "pos_of_max": 29, "route_rows_differ": 2}
+{"app": 2, "rel_median": 0.002508, "rel_max": 0.036311, "pos_of_max": 45, "route_rows_differ": 1}
+{"app": 3, "rel_median": 0.002683, "rel_max": 0.035781, "pos_of_max": 29, "route_rows_differ": 2}
+{"app": 4, "rel_median": 0.002317, "rel_max": 0.033462, "pos_of_max": 39, "route_rows_differ": 3}
+{"app": 5, "rel_median": 0.002437, "rel_max": 0.050087, "pos_of_max": 39, "route_rows_differ": 1}
+{"app": 6, "rel_median": 0.003344, "rel_max": 0.087974, "pos_of_max": 16, "route_rows_differ": 4}
+{"app": 7, "rel_median": 0.005233, "rel_max": 0.069447, "pos_of_max": 16, "route_rows_differ": 0}
+{"logits_rel_median": 0.029227298558032803, "max": 0.07185177434076512, "top1": 0.953125}

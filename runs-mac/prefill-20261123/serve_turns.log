@@ -1,0 +1,4 @@
+mkserve: note: ~/playground/megakernel-zoo/mkserve/../engines/inkling-2-mini_m5max/offline-c differs from the registered source (b2b052bb25210115 != 7f0af25af0e72cfa); serving it as it is
+mkserve: engine offline-c (track C, run fable-c-m5max-2, submission s0019 (engine of s0011)), building in ~/.cache/mkserve/thinkingmachines--Inkling-2-Mini_m5max_offline-c_b2b052bb2521
+MKSERVE engine ready: mode=native max_batch=1 max_context=4096
+MKSERVE serving thinkingmachines/Inkling-2-Mini on http://127.0.0.1:18700 (engine offline-c, native mode): OpenAI /v1/chat/completions /v1/completions /v1/responses, Anthropic /v1/messages, Ollama /api/chat /api/generate

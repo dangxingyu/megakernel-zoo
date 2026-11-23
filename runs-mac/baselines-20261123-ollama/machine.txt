@@ -1,0 +1,8 @@
+Apple M5 Max
+51539607552
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+Note: No thermal warning level has been recorded
+Note: No performance warning level has been recorded
+Note: No CPU power status has been recorded

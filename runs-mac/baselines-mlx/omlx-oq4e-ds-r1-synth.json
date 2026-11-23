@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": false,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 71.26900640185484,
+  "min": 65.57986506018806,
+  "max": 82.97121458984353
+ },
+ "decode_tok_s": {
+  "median": 7.781659837633938,
+  "min": 7.751137185099359,
+  "max": 7.86637712367547
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 71.21507785415935,
+  "min": 65.53234165584004,
+  "max": 82.92331264478665
+ },
+ "tokens_per_chunk": 8.982456140350877,
+ "tpot_p50_ms": 119.2851250525564,
+ "tpot_p99_ms": 183.47204104065895,
+ "ttft_median_s": 0.003936124965548515,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 42.32427541597281,
+ "tok_s_by_tokens": 72.58245935240878,
+ "tok_s_by_tokens_per_repeat": [
+  65.57986506018806,
+  82.97121458984353,
+  71.26900640185484
+ ],
+ "prompts": "synthetic",
+ "texts": [
+  [
+   "The river was calm and peaceful, reflecting the clear blue sky above. The sun was shining brightly, casting a warm glow on the water. The air was filled with the sound of birds chirping and the gentle rustling of leaves in the nearby trees. It was a perfect day for a leisurely stroll along the riverbank.\n\nAs the person walked along the river, they couldn't help but notice the beauty of the surroundings. The water was crystal clear, revealing the sandy bottom and the small fish swimming gracefully. The trees lining the riverbank provided shade and a sense of tranquility. It was a place of peace and serenity, far away from the hustle and bustle of city life.\n\nSuddenly, a loud noise broke the silence. It was the sound of an engine, rumbling and vibrating. The person turned around and saw a large boat approaching, its engine roaring loudly. The boat was moving at a fast pace, cutting through the water with ease.\n\nThe person watched in awe as the boat passed by, leaving a trail of ripples behind. They couldn't help but wonder what the boat was doing and where it was headed. Was it a fishing boat, a leisurely cruise, or something else entirely?\n\nAs the boat continued on its way, the person couldn't help but feel a sense of longing. They wished they could be on the boat, experiencing the same sense of freedom and adventure. They imagined themselves gliding across the water, feeling the wind in their hair and the sun on their skin.\n\nBut as the boat disappeared into the distance, the person's thoughts turned to their own life. They realized that they had been so caught up in their own worries and concerns that they had forgotten to appreciate the beauty around them. They realized that they needed to take a step back and reconnect with nature, to find peace and tranquility in the midst of the chaos.\n\nThe person took a deep breath and let go of their worries. They decided to stay by the river, to immerse themselves in the beauty of the surroundings and find solace in the present moment. They sat down on a nearby bench and watched the water, letting the sound of the engine fade into the background.\n\nAs the sun began to set, casting a warm orange glow over the river, the person felt a sense of calm wash over them. They realized that life was not about the destination, but about the journey. They realized that they needed to embrace the present moment and find joy in the simple things.\n\nThe person stayed by the river until the sun had completely set, the sky turning a deep shade of blue. They felt a sense of peace and contentment, knowing that they had found a moment of tranquility in the midst of a busy world. They knew that they would return to the river again and again, to find solace and rejuvenation in its beauty.\n\nAs the person left the riverbank, they felt a sense of gratitude for the beauty of the world around them. They knew that they had been given a gift, a chance to experience the peace and serenity of nature. They knew that they would carry this experience with them, to remind them of the beauty and wonder of the world.\n\nThe person walked back to their car, feeling a sense of renewal and rejuvenation. They knew that they had found a moment of peace and tranquility, and that they would carry this experience with them for the rest of their life. They knew that they would return to the river again and again, to find solace and rejuvenation in its beauty.\n\nAs the person drove away, they couldn't help but feel a sense of gratitude for the beauty of the world around them. They knew that they had been given a gift, a chance to experience the peace and serenity of nature. They knew that they would carry this experience with them, to remind them of the beauty and wonder of the world.\n\nThe person's journey was not over, but they knew that they had found a moment of peace and tranquility in the midst of a busy world. They knew that they would return to the river again and again, to find solace and rejuvenation in its beauty. They knew that they would carry this experience with them, to remind them of the beauty and wonder of the world.\n\nThe person's journey was not over, but they knew that they had found a moment of peace and tranquility in the midst of a busy world. They knew that they would return to the river again and again, to find solace and rejuvenation in its beauty. They knew that they would carry this experience with them, to remind them of the beauty and wonder of the world.\n\nThe person's journey was not over, but they knew that they had found"
+  ],
+  [
+   "The river was a meandering stream that flowed through the valley, its waters reflecting the sunlight and creating a shimmering effect on the surface. The surrounding landscape was lush and green, with trees and bushes lining the banks of the river. The air was filled with the sounds of birds chirping and insects buzzing, creating a peaceful and serene atmosphere.\nAs the sun began to set, the sky turned a vibrant orange and pink, casting a warm glow over the landscape. The river continued to flow, its waters now reflecting the colors of the sunset. The trees and bushes along the banks of the river were now silhouetted against the bright sky, creating a picturesque scene.\nThe river was a vital source of water for the surrounding community, providing drinking water and irrigation for crops. The people who lived along the river relied on it for their livelihood, and it was a source of pride and identity for them. The river was also a place of recreation, with people coming to swim, fish, and picnic along its banks.\nDespite its beauty and importance, the river was also facing challenges. Pollution from nearby industries was affecting the water quality, and the river was becoming increasingly polluted. The surrounding community was working to address these issues, but it was a long and difficult process.\nAs the sun continued to set, the river continued to flow, its waters reflecting the colors of the sky. The surrounding landscape was now shrouded in darkness, but the river continued to flow, a constant reminder of the beauty and importance of nature.\nThe river was a vital part of the community, providing water, recreation, and a sense of identity. Despite the challenges it faced, the river continued to flow, a symbol of life and vitality. The people who lived along the river were working to protect it and ensure its continued health and vitality for generations to come.\nThe river was a complex and dynamic system, with many different species of fish and other aquatic life. The river was also home to a variety of plants, including reeds and grasses that grew along its banks. The river was a vital part of the ecosystem, providing habitat and food for many different species.\nThe river was also a source of cultural significance, with many stories and legends associated with it. The people who lived along the river had a deep connection to it, and it was a source of pride and identity for them. The river was a place of beauty and wonder, and it was a vital part of the community's identity.\nThe river was a complex and dynamic system, with many different factors affecting its health and vitality. The surrounding community was working to address these issues, but it was a long and difficult process. The river was a vital part of the ecosystem, providing habitat and food for many different species, and it was a source of cultural significance for the people who lived along it.\nThe river was a vital part of the community, providing water, recreation, and a sense of identity. Despite the challenges it faced, the river continued to flow, a symbol of life and vitality. The people who lived along the river were working to protect it and ensure its continued health and vitality for generations to come.\nThe river was a complex and dynamic system, with many different factors affecting its health and vitality. The surrounding community was working to address these issues, but it was a long and difficult process. The river was a vital part of the ecosystem, providing habitat and food for many different species, and it was a source of cultural significance for the people who lived along it.\nThe river was a vital part of the community, providing water, recreation, and a sense of identity. Despite the challenges it faced, the river continued to flow, a symbol of life and vitality. The people who lived along the river were working to protect it and ensure its continued health and vitality for generations to come.\nThe river was a complex and dynamic system, with many different factors affecting its health and vitality. The surrounding community was working to address these issues, but it was a long and difficult process. The river was a vital part of the ecosystem, providing habitat and food for many different species, and it was a source of cultural significance for the people who lived along it.\nThe river was a vital part of the community, providing water, recreation, and a sense of identity. Despite the challenges it faced, the river continued to flow, a symbol of life and vitality. The people who lived along the river were working to protect it and ensure its continued health and vitality for generations to come.\nThe river was a complex and dynamic system, with many different factors affecting its health and vitality. The surrounding community was working to address these issues, but it was a long and difficult process. The river was a vital part of the ecosystem, providing habitat and food for many"
+  ],
+  [
+   "The garden was a lush oasis in the midst of the bustling city, a place where nature thrived and the sounds of the urban clamor faded away. It was a sanctuary for those seeking solace and tranquility, a place where the beauty of the natural world could be appreciated and enjoyed.\n\nAs I walked through the garden, I was struck by the vibrant colors and scents that surrounded me. The flowers were in full bloom, their petals a riot of hues, from deep purples and blues to bright yellows and oranges. The air was filled with the sweet fragrance of blooming blossoms, a delightful contrast to the harsh, industrial scents of the city.\n\nI found myself drawn to the river that ran through the garden, its gentle flow a soothing sound that seemed to calm my mind. The river was a lifeline, providing water to the plants and animals that called the garden home. It was a reminder of the interconnectedness of all living things, a testament to the delicate balance of nature.\n\nAs I sat by the river, I couldn't help but think about the history of the garden. It had been a place of beauty and tranquility for centuries, a refuge for those seeking solace and a connection to the natural world. The garden had been carefully tended to over the years, its plants and trees nurtured and cared for by generations of gardeners.\n\nI looked up at the trees that lined the river, their branches reaching out towards the sky. They were a testament to the resilience of nature, a reminder that even in the midst of the bustling city, there was still room for beauty and tranquility.\n\nAs I sat there, I couldn't help but feel a sense of peace and contentment. The garden was a place of beauty and wonder, a reminder of the importance of nature and the need to protect it. It was a place where I could escape the stresses of the city and connect with the natural world, a place where I could find solace and tranquility.\n\nAs I continued to sit by the river, I couldn't help but think about the people who had visited the garden before me. They had all come seeking the same thing - a connection to nature, a sense of peace and tranquility. They had all found it in the garden, a place where the beauty of the natural world could be appreciated and enjoyed.\n\nAs I stood up and walked back towards the city, I couldn't help but feel a sense of gratitude for the garden. It was a place of beauty and wonder, a reminder of the importance of nature and the need to protect it. It was a place where I could find solace and tranquility, a place where I could connect with the natural world and appreciate its beauty.\n\nAs I walked back towards the city, I couldn't help but feel a sense of awe and wonder at the beauty of the garden. It was a place of beauty and tranquility, a reminder of the importance of nature and the need to protect it. It was a place where I could find solace and tranquility, a place where I could connect with the natural world and appreciate its beauty.\n\nAs I continued to walk back towards the city, I couldn't help but feel a sense of peace and contentment. The garden had been a place of beauty and wonder, a reminder of the importance of nature and the need to protect it. It was a place where I could find solace and tranquility, a place where I could connect with the natural world and appreciate its beauty.\n\nAs I walked back towards the city, I couldn't help but feel a sense of gratitude for the garden. It was a place of beauty and wonder, a reminder of the importance of nature and the need to protect it. It was a place where I could find solace and tranquility, a place where I could connect with the natural world and appreciate its beauty.\n\nAs I continued to walk back towards the city, I couldn't help but feel a sense of awe and wonder at the beauty of the garden. It was a place of beauty and tranquility, a reminder of the importance of nature and the need to protect it. It was a place where I could find solace and tranquility, a place where I could connect with the natural world and appreciate its beauty.\n\nAs I walked back towards the city, I couldn't help but feel a sense of peace and contentment. The garden had been a place of beauty and wonder, a reminder of the importance of nature and the need to protect it. It was a place where I could find solace and tranquility, a place where I could connect with the natural world and appreciate its beauty.\n\nAs I continued to walk back towards the city,"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    122
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 65.57986506018806,
+   "decode_tok_s": 7.751137185099359,
+   "decode_tok_s_by_tokens": 65.53234165584004,
+   "tokens_per_chunk": 8.39344262295082,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 15.61061262502335,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.003936124965548515
+   ],
+   "tpot_ms": {
+    "p50": 121.87145894858986,
+    "p90": 146.33550005964935,
+    "p99": 183.47204104065895,
+    "max": 278.0011249706149,
+    "mean": 129.01332747953182
+   },
+   "t_start_unix": 1795381015.9306798,
+   "wall_s": 15.614548749988899,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    97
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 82.97121458984353,
+   "decode_tok_s": 7.781659837633938,
+   "decode_tok_s_by_tokens": 82.92331264478665,
+   "tokens_per_chunk": 10.556701030927835,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 12.336699624895118,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.004930000053718686
+   ],
+   "tpot_ms": {
+    "p50": 119.2851250525564,
+    "p90": 163.70925004594028,
+    "p99": 281.4105829456821,
+    "max": 281.4105829456821,
+    "mean": 128.50728775932416
+   },
+   "t_start_unix": 1795381032.5476635,
+   "wall_s": 12.341629624948837,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    114
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 71.26900640185484,
+   "decode_tok_s": 7.86637712367547,
+   "decode_tok_s_by_tokens": 71.21507785415935,
+   "tokens_per_chunk": 8.982456140350877,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 14.364935499965213,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.003161541069857776
+   ],
+   "tpot_ms": {
+    "p50": 118.91229194588959,
+    "p90": 143.8217090908438,
+    "p99": 181.8224999587983,
+    "max": 280.10537498630583,
+    "mean": 127.1233230085417
+   },
+   "t_start_unix": 1795381045.8933563,
+   "wall_s": 14.368097041035071,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-omlx-oq4e-ds-r1-synth",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}

@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 512,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "chat",
+ "one_chunk_per_token": false,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 174,
+ "prompt_tokens_seen": [
+  43,
+  66,
+  89
+ ],
+ "e2e_tok_s": {
+  "median": 60.69654077731022,
+  "min": 59.726249881531764,
+  "max": 61.57368403693642
+ },
+ "decode_tok_s": {
+  "median": 7.80566575463176,
+  "min": 7.687923874116583,
+  "max": 7.861068711238975
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 60.45503773737131,
+  "min": 59.5786260220217,
+  "max": 61.469617817725116
+ },
+ "tokens_per_chunk": 7.565217391304348,
+ "tpot_p50_ms": 127.33866600319743,
+ "tpot_p99_ms": 202.38837506622076,
+ "ttft_median_s": 0.00931195798330009,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 572,
+ "wall_total_s": 9.40336166601628,
+ "tok_s_by_tokens": 60.82930980600334,
+ "tok_s_by_tokens_per_repeat": [
+  60.69654077731022,
+  61.57368403693642,
+  59.726249881531764
+ ],
+ "prompts": "natural text (prompts file)",
+ "texts": [
+  [
+   "2 weeks \u00d7 7 days/week = 14 days.  \n14 days \u00d7 $12/day = **$168**."
+  ],
+  [
+   "Assuming 2 parents and 1 child:\n\n- Adult tickets: 2 \u00d7 $12 = $24  \n- Child ticket: 1 \u00d7 $8 = $8  \n- Popcorns: 2 \u00d7 $3 = $6  \n\nTotal: $24 + $8 + $6 = **$38**"
+  ],
+  [
+   "**First bag:** 300 M&Ms\n\n**Second bag:** 300 + 12 = 312 M&Ms\n\n**Third bag:** 300 \u00f7 2 = 150 M&Ms\n\n**Total:** 300 + 312 + 150 = **762 M&Ms**"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    174
+   ],
+   "chunks": [
+    23
+   ],
+   "prompt_tokens": [
+    43
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 60.69654077731022,
+   "decode_tok_s": 7.687923874116583,
+   "decode_tok_s_by_tokens": 60.45503773737131,
+   "tokens_per_chunk": 7.565217391304348,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 2.861630833009258,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.005089374957606196
+   ],
+   "tpot_ms": {
+    "p50": 128.0089580686763,
+    "p90": 129.82274999376386,
+    "p99": 202.38837506622076,
+    "max": 202.38837506622076,
+    "mean": 130.0741287731481
+   },
+   "t_start_unix": 1795385458.6238244,
+   "wall_s": 2.866720207966864,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    253
+   ],
+   "chunks": [
+    33
+   ],
+   "prompt_tokens": [
+    66
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 61.57368403693642,
+   "decode_tok_s": 7.80566575463176,
+   "decode_tok_s_by_tokens": 61.469617817725116,
+   "tokens_per_chunk": 7.666666666666667,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 4.099586250027642,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.00931195798330009
+   ],
+   "tpot_ms": {
+    "p50": 127.33866600319743,
+    "p90": 128.1341250287369,
+    "p99": 197.4102919921279,
+    "max": 197.4102919921279,
+    "mean": 128.1120703133638
+   },
+   "t_start_unix": 1795385481.4925864,
+   "wall_s": 4.108898208010942,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": false,
+   "tokens_from_usage": true,
+   "tokens": [
+    145
+   ],
+   "chunks": [
+    20
+   ],
+   "prompt_tokens": [
+    89
+   ],
+   "finish": [
+    "stop"
+   ],
+   "e2e_tok_s": 59.726249881531764,
+   "decode_tok_s": 7.861068711238975,
+   "decode_tok_s_by_tokens": 59.5786260220217,
+   "tokens_per_chunk": 7.25,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 2.416974166990258,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.010769083048216999
+   ],
+   "tpot_ms": {
+    "p50": 127.2968330886215,
+    "p90": 128.46504198387265,
+    "p99": 252.76145804673433,
+    "max": 252.76145804673433,
+    "mean": 127.20916668369777
+   },
+   "t_start_unix": 1795385505.6044948,
+   "wall_s": 2.427743250038475,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-omlx-oq4e-r2-chat",
+ "extra_body": {}
+}

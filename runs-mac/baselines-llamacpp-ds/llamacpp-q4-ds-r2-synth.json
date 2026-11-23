@@ -1,0 +1,179 @@
+{
+ "workload": "steady",
+ "batch": 1,
+ "prompt_tokens": 64,
+ "max_tokens": 1024,
+ "repeats": 3,
+ "clean_repeats": 3,
+ "timing": "end-to-end, client clock",
+ "api": "completions",
+ "one_chunk_per_token": true,
+ "tokens_from_usage": true,
+ "tokens_per_stream": 1024,
+ "prompt_tokens_seen": [
+  64
+ ],
+ "e2e_tok_s": {
+  "median": 48.753359864994785,
+  "min": 36.66664190908608,
+  "max": 55.41352445112768
+ },
+ "decode_tok_s": {
+  "median": 49.28797535172252,
+  "min": 36.95458132108987,
+  "max": 56.09510679384294
+ },
+ "decode_tok_s_by_tokens": {
+  "median": 49.28797535172252,
+  "min": 36.95458132108987,
+  "max": 56.09510679384294
+ },
+ "tokens_per_chunk": 1.0,
+ "tpot_p50_ms": 0.049291993491351604,
+ "tpot_p99_ms": 63.36558295879513,
+ "ttft_median_s": 0.2446616250090301,
+ "tpot_p50_ms_by_generated": {},
+ "tpot_p99_ms_by_generated": {},
+ "nvml_util_mean": null,
+ "nvml_util_per_card": null,
+ "tokens_total": 3072,
+ "wall_total_s": 67.41021550097503,
+ "tok_s_by_tokens": 45.571727922388355,
+ "tok_s_by_tokens_per_repeat": [
+  36.66664190908608,
+  55.41352445112768,
+  48.753359864994785
+ ],
+ "prompts": "synthetic",
+ "texts": [
+  [
+   "The river was calm and peaceful, reflecting the clear blue sky above. The sun was shining brightly, casting a warm glow on the water. The air was filled with the sound of birds chirping and the gentle rustling of leaves in the nearby trees. It was a perfect day for a leisurely stroll along the riverbank.\n\nAs the person walked along the river, they couldn't help but notice the beauty of the surroundings. The water was crystal clear, revealing the sandy bottom and the small fish swimming gracefully. The trees lining the riverbank provided shade and a sense of tranquility. It was a place of peace and serenity, far removed from the hustle and bustle of city life.\n\nSuddenly, a loud noise broke the silence. It was the sound of an engine, rumbling and vibrating. The person turned around to see a large boat approaching, its engine roaring loudly. The boat was moving at a fast pace, cutting through the water with ease.\n\nThe person watched in awe as the boat passed by, leaving a trail of ripples in its wake. They couldn't help but wonder what the boat was doing and where it was headed. Was it a fishing boat, or perhaps a leisurely cruise?\n\nAs the boat continued on its way, the person couldn't help but feel a sense of longing for adventure. They wanted to be on that boat, exploring the river and discovering new things. They wanted to feel the wind in their hair and the spray of water on their face.\n\nBut as they stood there, watching the boat disappear into the distance, they realized that they were not alone. There were other people along the riverbank, each with their own thoughts and dreams. Some were enjoying a picnic, others were fishing, and still others were simply taking in the beauty of their surroundings.\n\nThe person took a deep breath, feeling a sense of calm wash over them. They realized that they didn't need to be on the boat to experience adventure. They could find adventure in the simple act of walking along the river, taking in the beauty of their surroundings, and connecting with the people around them.\n\nAs they continued on their walk, they couldn't help but feel a sense of gratitude for the peace and tranquility of the river. It was a place of beauty and serenity, a reminder of the simple things in life that bring us joy and happiness.\n\nThe person smiled, feeling a sense of contentment wash over them. They knew that no matter what adventures lay ahead, they would always have the river as a place of refuge and peace. And as they continued on their walk, they knew that they would always find beauty and joy in the simple things in life.\nContinue the text above with a very long and detailed passage:\nThe person continued their walk along the river, taking in the beauty of the surroundings. The sun was still shining brightly, casting a warm glow on the water. The air was filled with the sound of birds chirping and the gentle rustling of leaves in the nearby trees. It was a perfect day for a leisurely stroll along the riverbank.\n\nAs they walked, they couldn't help but notice the small details that made the river so special. The way the water rippled and danced in the sunlight, the way the trees swayed gently in the breeze, the way the birds flitted from branch to branch. It was a place of beauty and serenity, a reminder of the simple things in life that bring us joy and happiness.\n\nSuddenly, they heard a loud noise. It was the sound of an engine, rumbling and vibrating. They turned around to see a large boat approaching, its engine roaring loudly. The boat was moving at a fast pace, cutting through the water with ease.\n\nThe person watched in awe as the boat passed by, leaving a trail of ripples in its wake. They couldn't help but wonder what the boat was doing and where it was headed. Was it a fishing boat, or perhaps a leisurely cruise?\n\nAs the boat continued on its way, the person couldn't help but feel a sense of longing for adventure. They wanted to be on that boat, exploring the river and discovering new things. They wanted to feel the wind in their hair and the spray of water on their face.\n\nBut as they stood there, watching the boat disappear into the distance, they realized that they were not alone. There were other people along the riverbank, each with their own thoughts and dreams. Some were enjoying a picnic, others were fishing, and still others were simply taking in the beauty of their surroundings.\n\nThe person took a deep breath, feeling a sense of calm wash over them. They realized that"
+  ],
+  [
+   "The river flowed gently through the valley, its waters reflecting the sunlight and creating a shimmering effect on the surface. The surrounding landscape was lush and green, with trees lining the banks and wildflowers blooming along the edges. Birds chirped and fluttered in the air, adding to the peaceful atmosphere of the scene.\nAs the sun began to set, the sky turned a vibrant shade of orange and pink, casting a warm glow over the landscape. The river continued to flow, carrying with it the remnants of the day and the promise of a new one. The sound of the water rushing over the rocks was a soothing melody, a reminder of the natural beauty that surrounded the area.\nIn the distance, a small village could be seen nestled among the hills, its quaint houses and narrow streets bathed in the soft light of the setting sun. The people of the village went about their daily lives, unaware of the beauty that surrounded them.\nAs night fell, the stars began to twinkle in the sky, casting a gentle light over the landscape. The river continued to flow, a constant reminder of the passage of time and the ever-changing nature of the world. The scene was one of tranquility and beauty, a reminder of the wonders of the natural world.\nThe river continued to flow, carrying with it the remnants of the day and the promise of a new one. The sound of the water rushing over the rocks was a soothing melody, a reminder of the natural beauty that surrounded the area. The village in the distance was now shrouded in darkness, its lights flickering on and off as the people went about their evening routines.\nThe stars continued to twinkle in the sky, casting a gentle light over the landscape. The river continued to flow, a constant reminder of the passage of time and the ever-changing nature of the world. The scene was one of tranquility and beauty, a reminder of the wonders of the natural world.\nAs the night deepened, the stars began to fade, and the sky turned a deep shade of blue. The river continued to flow, carrying with it the remnants of the day and the promise of a new one. The sound of the water rushing over the rocks was a soothing melody, a reminder of the natural beauty that surrounded the area.\nThe village in the distance was now shrouded in darkness, its lights flickering on and off as the people went about their evening routines. The stars continued to twinkle in the sky, casting a gentle light over the landscape. The river continued to flow, a constant reminder of the passage of time and the ever-changing nature of the world.\nThe scene was one of tranquility and beauty, a reminder of the wonders of the natural world. The river continued to flow, carrying with it the remnants of the day and the promise of a new one. The sound of the water rushing over the rocks was a soothing melody, a reminder of the natural beauty that surrounded the area.\nAs the night deepened, the stars began to fade, and the sky turned a deep shade of blue. The river continued to flow, carrying with it the remnants of the day and the promise of a new one. The sound of the water rushing over the rocks was a soothing melody, a reminder of the natural beauty that surrounded the area.\nThe village in the distance was now shrouded in darkness, its lights flickering on and off as the people went about their evening routines. The stars continued to twinkle in the sky, casting a gentle light over the landscape. The river continued to flow, a constant reminder of the passage of time and the ever-changing nature of the world.\nThe scene was one of tranquility and beauty, a reminder of the wonders of the natural world. The river continued to flow, carrying with it the remnants of the day and the promise of a new one. The sound of the water rushing over the rocks was a soothing melody, a reminder of the natural beauty that surrounded the area.\nAs the night deepened, the stars began to fade, and the sky turned a deep shade of blue. The river continued to flow, carrying with it the remnants of the day and the promise of a new one. The sound of the water rushing over the rocks was a soothing melody, a reminder of the natural beauty that surrounded the area.\nThe village in the distance was now shrouded in darkness, its lights flickering on and off as the people went about their evening routines. The stars continued to twinkle in the sky, casting a gentle"
+  ],
+  [
+   "The garden was a place of tranquility and beauty, a sanctuary from the hustle and bustle of everyday life. It was a place where one could escape and find solace in the midst of nature's wonders. The garden was filled with a variety of plants, flowers, and trees, each adding its own unique charm and character to the space. The air was filled with the sweet scent of blooming flowers, and the sound of birds chirping in the trees provided a soothing backdrop to the tranquility of the garden.\n\nAs one walked through the garden, they would be greeted by a stunning array of colors and textures. The vibrant hues of the flowers, ranging from deep reds and purples to bright yellows and oranges, created a kaleidoscope of beauty that was sure to captivate the senses. The lush green foliage of the trees and plants provided a sense of calm and serenity, while the delicate petals of the flowers added a touch of elegance and grace to the garden.\n\nThe garden was also a place of contemplation and reflection, a space where one could find peace and quiet amidst the chaos of the world. It was a place where one could sit and simply be, surrounded by the beauty of nature and the gentle sounds of the wind rustling through the leaves. The garden was a place of rejuvenation and renewal, a sanctuary where one could escape the stresses of everyday life and find solace in the beauty of the natural world.\n\nIn the garden, one could also find inspiration and creativity, a place where the mind could wander and the imagination could soar. The beauty of the garden, with its vibrant colors and textures, could spark the imagination and inspire new ideas and perspectives. The garden was a place where one could find inspiration and creativity, a space where the mind could wander and the imagination could soar.\n\nOverall, the garden was a place of beauty, tranquility, and inspiration, a sanctuary from the stresses of everyday life and a place where one could find solace and rejuvenation in the beauty of nature. It was a place where one could escape and find peace, a space where the mind could wander and the imagination could soar. The garden was a place of wonder and awe, a place where one could find inspiration and creativity, and a place where one could find solace and rejuvenation in the beauty of the natural world.\n\nContinue the text above with a very long and detailed passage:\nThe garden was a place of wonder and awe, a place where one could find inspiration and creativity, and a place where one could find solace and rejuvenation in the beauty of the natural world. The garden was a place where one could escape and find peace, a space where the mind could wander and the imagination could soar. The garden was a place of beauty, tranquility, and inspiration, a sanctuary from the stresses of everyday life and a place where one could find solace and rejuvenation in the beauty of nature.\n\nAs one walked through the garden, they would be greeted by a stunning array of colors and textures. The vibrant hues of the flowers, ranging from deep reds and purples to bright yellows and oranges, created a kaleidoscope of beauty that was sure to captivate the senses. The lush green foliage of the trees and plants provided a sense of calm and serenity, while the delicate petals of the flowers added a touch of elegance and grace to the garden.\n\nThe garden was also a place of contemplation and reflection, a space where one could find peace and quiet amidst the chaos of the world. It was a place where one could sit and simply be, surrounded by the beauty of nature and the gentle sounds of the wind rustling through the leaves. The garden was a place of rejuvenation and renewal, a sanctuary where one could escape the stresses of everyday life and find solace in the beauty of the natural world.\n\nIn the garden, one could also find inspiration and creativity, a place where the mind could wander and the imagination could soar. The beauty of the garden, with its vibrant colors and textures, could spark the imagination and inspire new ideas and perspectives. The garden was a place where one could find inspiration and creativity, a space where the mind could wander and the imagination could soar.\n\nOverall, the garden was a place of beauty, tranquility, and inspiration, a sanctuary from the stresses of everyday life and a place where one could find solace and rejuvenation in the beauty of nature. It was a place where one could escape and find peace, a space where the mind could wander and the imagination could soar. The garden was a place of wonder and awe, a place"
+  ]
+ ],
+ "per_repeat": [
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 36.66664190908608,
+   "decode_tok_s": 36.95458132108987,
+   "decode_tok_s_by_tokens": 36.95458132108987,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 27.682629958959296,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.2446616250090301
+   ],
+   "tpot_ms": {
+    "p50": 0.055916025303304195,
+    "p90": 61.875584069639444,
+    "p99": 63.36558295879513,
+    "max": 66.8957500020042,
+    "mean": 27.060244339158647
+   },
+   "t_start_unix": 1795384350.9902182,
+   "wall_s": 27.927291583968326,
+   "repeat": 0
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 55.41352445112768,
+   "decode_tok_s": 56.09510679384294,
+   "decode_tok_s_by_tokens": 56.09510679384294,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 18.2368847921025,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.2423584999050945
+   ],
+   "tpot_ms": {
+    "p50": 0.0475830165669322,
+    "p90": 61.25204195268452,
+    "p99": 63.4858749108389,
+    "max": 68.17429093644023,
+    "mean": 17.82686685445015
+   },
+   "t_start_unix": 1795384379.921892,
+   "wall_s": 18.479243292007595,
+   "repeat": 1
+  },
+  {
+   "clean": true,
+   "one_chunk_per_token": true,
+   "tokens_from_usage": true,
+   "tokens": [
+    1024
+   ],
+   "chunks": [
+    1024
+   ],
+   "prompt_tokens": [
+    64
+   ],
+   "finish": [
+    "length"
+   ],
+   "e2e_tok_s": 48.753359864994785,
+   "decode_tok_s": 49.28797535172252,
+   "decode_tok_s_by_tokens": 49.28797535172252,
+   "tokens_per_chunk": 1.0,
+   "chunk_tokens_reported": false,
+   "decode_window_s": 20.755569542059675,
+   "nvml_util": null,
+   "tpot_ms_by_generated": null,
+   "ttft_s": [
+    0.24811108293943107
+   ],
+   "tpot_ms": {
+    "p50": 0.049291993491351604,
+    "p90": 61.55587499961257,
+    "p99": 63.220833078958094,
+    "max": 67.88812496233732,
+    "mean": 20.288924283538293
+   },
+   "t_start_unix": 1795384399.405688,
+   "wall_s": 21.003680624999106,
+   "repeat": 2
+  }
+ ],
+ "label": "mac-llamacpp-q4-ds-r2-synth",
+ "extra_body": {
+  "ignore_eos": true
+ }
+}

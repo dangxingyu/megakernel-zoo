@@ -1,0 +1,861 @@
+{
+ "status": "valid",
+ "quick": false,
+ "track": "c",
+ "device": "metal",
+ "batches": [
+  1
+ ],
+ "build": {
+  "rc": 0,
+  "seconds": 0.0,
+  "tail": ""
+ },
+ "gates": {
+  "finite": {
+   "pass": true
+  },
+  "numeric": {
+   "pass": true,
+   "rel_l2_single": {
+    "median": 0.0239895062590199,
+    "p99": 0.10132761077831065,
+    "max": 0.11136691821480808
+   },
+   "rel_l2_batched": {
+    "median": 0.0239895062590199,
+    "p99": 0.10132761077831065,
+    "max": 0.11136691821480808
+   },
+   "limit": {
+    "median": 0.04943304375990641,
+    "p99": 0.12070750408807955
+   },
+   "max_over_5x_bf16": false
+  },
+  "kl": {
+   "pass": true,
+   "kl": {
+    "median": 0.0007001340778930417,
+    "p99": 0.011273920388612205,
+    "max": 0.013380363359860065
+   },
+   "limit": {
+    "median": 0.0038615733999413557,
+    "p99": 0.046215845221776915
+   },
+   "hf_bf16": {
+    "median": 0.0009653933499853389,
+    "p99": 0.011553961305444229,
+    "max": 0.01295750186917806
+   }
+  },
+  "tokens": {
+   "pass": true,
+   "top1_agreement_with_float64": 1.0,
+   "hf_bf16": 0.9375
+  },
+  "batch": {
+   "pass": true,
+   "bitwise_equal": true,
+   "max_abs_logit_diff": 0.0,
+   "note": "batch 1 only (no batch of 8 on this device): the same sequence alone twice, i.e. repeatability"
+  },
+  "free_run": {
+   "pass": true,
+   "informative_only": true,
+   "mean_matching_prefix": 0.07291666666666667,
+   "sequences_identical": 0,
+   "of": 1,
+   "note": "greedy continuation against the Hugging Face BF16 one; diverges after any near-tie"
+  },
+  "generate": {
+   "pass": true,
+   "mean_matching_prefix": 1.0,
+   "sequences_identical": 1,
+   "of": 1,
+   "note": "the engine's own greedy loop against its step-by-step greedy; they differ only at exact ties",
+   "pass_lenient": true,
+   "rule": "track C: every sequence identical to the step-by-step greedy tokens"
+  },
+  "kl_long": {
+   "pass": true,
+   "kl": {
+    "median": 5.4648788770582076e-05,
+    "p99": 0.0047926158977043875,
+    "max": 0.005003420934113245
+   },
+   "limit": {
+    "median": 0.0003241575044492272,
+    "p99": 0.017674016968768275
+   },
+   "hf_bf16": {
+    "median": 8.10393761123068e-05,
+    "p99": 0.004418504242192069,
+    "max": 0.00574500891024673
+   }
+  },
+  "numeric_long": {
+   "pass": true,
+   "rel_l2": {
+    "median": 0.03500187975724033,
+    "p99": 0.3128234799277884,
+    "max": 0.380295822067948
+   },
+   "limit": {
+    "median": 0.06815476880184969,
+    "p99": 0.7621665717873211
+   },
+   "top1_agreement_with_float64": 0.9921875,
+   "hf_bf16_top1": 1.0,
+   "positions": 128,
+   "over_5x_bf16_max": 0,
+   "worst": [
+    {
+     "sequence": 0,
+     "position": 624,
+     "rel_l2": 0.380295822067948,
+     "hf_bf16": 0.38108327984809875,
+     "top1_same": true
+    },
+    {
+     "sequence": 0,
+     "position": 904,
+     "rel_l2": 0.3128234799277884,
+     "hf_bf16": 0.31775006651878357,
+     "top1_same": true
+    },
+    {
+     "sequence": 0,
+     "position": 872,
+     "rel_l2": 0.2527540251004126,
+     "hf_bf16": 0.21686923503875732,
+     "top1_same": true
+    },
+    {
+     "sequence": 0,
+     "position": 856,
+     "rel_l2": 0.20829453923362978,
+     "hf_bf16": 0.3813876509666443,
+     "top1_same": true
+    },
+    {
+     "sequence": 0,
+     "position": 792,
+     "rel_l2": 0.1612987344200142,
+     "hf_bf16": 0.14673173427581787,
+     "top1_same": true
+    }
+   ],
+   "hf_bf16_p99": 0.38108327984809875,
+   "note": "batch of 1, positions 128 to 1144 (every 8-th)"
+  },
+  "timed_steps": {
+   "pass": true,
+   "note": "logits kept during the timed run, checked against float64 afterwards"
+  },
+  "http_tokens_b1": {
+   "pass": true,
+   "mean_matching_prefix": 1.0,
+   "sequences_identical": 1,
+   "of": 1,
+   "lengths_ok": true,
+   "first_difference": [
+    null
+   ],
+   "note": "tokens streamed by the HTTP server for the reference prompts, one request at a time (batch 1), against the engine's own step-by-step greedy tokens",
+   "pass_lenient": true,
+   "rule": "track C: every sequence identical to the step-by-step greedy tokens"
+  }
+ },
+ "perf": {
+  "b1": {
+   "step_us": 13410.003089575184,
+   "step_us_min": 13184.776691559819,
+   "step_us_max": 13992.01253116189,
+   "tok_s": 74.57119833010262,
+   "mbu": 0.730785000011141,
+   "mbu_high": 0.730785000011141,
+   "bytes_per_step": {
+    "weights": 5497233174.0,
+    "weights_fixed": 3657864192,
+    "experts_low": 1839368982.0,
+    "experts_high": 1839368982.0,
+    "embedding_rows": 4608,
+    "kv": 37748736.0,
+    "state": 1916928.0,
+    "total": 5536903446.0,
+    "total_high": 5536903446.0,
+    "applications": 48,
+    "how": "every text-decoder weight outside the input embedding table once; loop: layers 6-17 run 3 passes with shared weights, 48 layer applications per token from 24 layers: their weights are counted once per pass (message gates once per pass after the first), their experts chosen anew in each pass, their K/V and convolution state kept per pass; experts: 8 of 128 per layer and token, so 0.0625 of the expert weights when all 1 sequences route alike (low) and 0.0625 when they all route apart (high); equal expert sizes assumed, real routing not measured; short-convolution state: the last 3 inputs of the K, V, attention-output and MoE-output convolutions per layer (BF16); K and V per layer type {\"full_attention\": 8, \"sliding_attention\": 40}, sliding window 1024"
+   },
+   "segments": 3,
+   "steps": 256,
+   "mean_context": 192.0,
+   "timed_steps_verified": true,
+   "probe_rel_l2_max": 0.035184626214360096,
+   "probes_checked": 18,
+   "probe_steps": [
+    64,
+    81,
+    98,
+    116,
+    168,
+    312
+   ],
+   "w1_like_step_us": 15157.44315520351,
+   "w1_like_tok_s": 65.9741877149447,
+   "w1_like_mbu": 0.6553514897268318,
+   "w1_like_steps": 1024,
+   "w1_like_generate_step_us": 13037.126383892428,
+   "w1_like_generate_tok_s": 76.704019778125,
+   "generate_step_us": 13201.249999838183,
+   "generate_tok_s": 75.7504024249414,
+   "generate_mbu": 0.7423409986239731,
+   "generate_shape_ok": true,
+   "http_step_us": 8204.84547124755,
+   "http_tok_s": 121.87919973682936
+  },
+  "timing": "step_us: step, no sampling, host-driven; wall clock around the timed steps with one final synchronize. w1_like_step_us: prompt 64, then 1024 greedy tokens with the token read on the host every step (the baselines' workload without HTTP and detokenization)",
+  "diagnostics": "step_us, generate_step_us, w1_like_* and mbu are timed inside the engine's process and are diagnostics; http_step_us is the headline's calibre"
+ },
+ "trace": {
+  "skipped": "no CUPTI / nsys on Apple silicon: profile with Metal System Trace (xctrace) or MTLCounterSampleBuffer timestamps yourself; the single_launch and gpu_never_waits milestones are not judged on this device"
+ },
+ "milestones_passed": [
+  "build",
+  "correct",
+  "device_loop",
+  "parity",
+  "h0_step"
+ ],
+ "reference": {
+  "hf_bf16_rel_l2": {
+   "median": 0.024716521879953206,
+   "p99": 0.060353752044039775,
+   "max": 0.06922641279678016
+  },
+  "hf_bf16_top1_agreement": 0.9375,
+  "tolerance_factor": 2.0,
+  "hbm_gb_s": 565.0,
+  "hw": "m5max",
+  "hbm_source": "measured with scripts/mac_membw.py (MLX, 4 GB buffer, best of 5): 565 GB/s read (mx.sum over bfloat16), 533 GB/s with a uint4 read kernel, 544 GB/s copy (read + write)",
+  "dtype": "float32",
+  "model_dir": "~/models/Inkling-2-Mini"
+ },
+ "load_seconds": 7.723071813583374,
+ "free_run_tokens": [
+  [
+   368,
+   149876,
+   220,
+   131968,
+   149879,
+   149928,
+   220,
+   51673,
+   103193,
+   150944,
+   11,
+   149876,
+   152652,
+   149879,
+   220,
+   52709,
+   150422,
+   152727,
+   149922,
+   149878,
+   151458,
+   3927,
+   82,
+   13,
+   149917,
+   168421,
+   11,
+   149961,
+   947,
+   149920,
+   150391,
+   149879,
+   150065,
+   74774,
+   149880,
+   158077,
+   11,
+   155508,
+   149882,
+   150377,
+   149876,
+   150399,
+   192111,
+   149879,
+   150029,
+   153711,
+   13,
+   149917,
+   220,
+   52709,
+   152890,
+   155364,
+   11,
+   153315,
+   149910,
+   149876,
+   189719,
+   48441,
+   180623,
+   220,
+   43216,
+   188769,
+   895,
+   4421,
+   11,
+   164479,
+   67,
+   149882,
+   152725,
+   150410,
+   150419,
+   169247,
+   177834,
+   149876,
+   158228,
+   150070,
+   48038,
+   151109,
+   149876,
+   152906,
+   794,
+   13,
+   68014,
+   1220,
+   149876,
+   151135,
+   156586,
+   150079,
+   154872,
+   11,
+   149876,
+   157307,
+   149881,
+   220,
+   52709,
+   158407
+  ]
+ ],
+ "engine_stats": {
+  "implementation": "own MLX / Metal K-row passes (engine/target.py); DSpark draft-and-verify in submit/poll",
+  "steps": 3836,
+  "spec": {
+   "cycles": 0,
+   "tokens": 0,
+   "rows": 0,
+   "host_syncs": 0,
+   "prefix_hits": 0,
+   "prefix_tokens": 0
+  },
+  "load_seconds": 4.3,
+  "peak_memory_gb": 21.16
+ },
+ "gpu_memory_used_gb": 21.159107048,
+ "gpu_memory_used_gb_per_card": null,
+ "natural_prompts": {
+  "rc": 0,
+  "source": "MK_ENV natural prompts: 48 of 64 tokens; prose from Project Gutenberg, code from the Python standard library, questions from GSM8K test\n"
+ },
+ "http": {
+  "calibre": "server end to end over HTTP: 1e6 * B / decode tokens per second, on the client's clock (prompt 64, 1024 new tokens, greedy, one SSE chunk per token, 1 warm-up + 3 repeats); the same client, workload and formula as the baselines",
+  "server_cpus": null,
+  "client_cpus": null,
+  "ok": true,
+  "startup_seconds": 9.1,
+  "contract": "online (submit/poll)",
+  "tokens_b1": {
+   "pass": true,
+   "mean_matching_prefix": 1.0,
+   "sequences_identical": 1,
+   "of": 1,
+   "lengths_ok": true,
+   "first_difference": [
+    null
+   ],
+   "note": "tokens streamed by the HTTP server for the reference prompts, one request at a time (batch 1), against the engine's own step-by-step greedy tokens"
+  },
+  "tokens_b1_seconds": 1.3,
+  "rate": "tokens",
+  "b1": {
+   "step_us": 8204.84547124755,
+   "step_us_min": 7455.503787910921,
+   "step_us_max": 9103.437927633502,
+   "rate": "tokens",
+   "decode_tok_s": {
+    "median": 121.87919973682936,
+    "min": 109.84860971748905,
+    "max": 134.12909824034926
+   },
+   "decode_tok_s_chunks": {
+    "median": 121.87919973682936,
+    "min": 109.84860971748905,
+    "max": 134.12909824034926
+   },
+   "step_us_chunks": 8204.84547124755,
+   "tokens_per_chunk": 1.0,
+   "engine_tokens_per_event": 2.7143803843605037,
+   "engine_events": {
+    "1": 707,
+    "2": 433,
+    "3": 183,
+    "4": 47,
+    "5": 15,
+    "6": 2,
+    "7": 4,
+    "8": 24,
+    "9": 2,
+    "10": 1,
+    "11": 1,
+    "16": 90
+   },
+   "e2e_tok_s": {
+    "median": 119.53243615187918,
+    "min": 107.96352224761219,
+    "max": 131.38413857551444
+   },
+   "repeats": 3,
+   "clean_repeats": 3,
+   "tokens_per_stream": 1024,
+   "one_chunk_per_token": true,
+   "tpot_p50_ms": 0.01625006552785635,
+   "tpot_p99_ms": 49.6095409616828,
+   "ttft_median_s": 0.17186799994669855,
+   "nvml_util_mean": null,
+   "nvml_util_per_card": null,
+   "client_rc": 0
+  },
+  "natural_b1": {
+   "step_us": 5173.306207205347,
+   "step_us_min": 4035.731060621588,
+   "step_us_max": 5256.873533746022,
+   "rate": "tokens",
+   "decode_tok_s": {
+    "median": 193.29998263145657,
+    "min": 190.2271366394095,
+    "max": 247.78658066624956
+   },
+   "decode_tok_s_chunks": {
+    "median": 193.29998263145657,
+    "min": 190.2271366394095,
+    "max": 247.78658066624956
+   },
+   "step_us_chunks": 5173.306207205347,
+   "tokens_per_chunk": 1.0,
+   "engine_tokens_per_event": 6.69281045751634,
+   "engine_events": {
+    "1": 214,
+    "2": 68,
+    "3": 51,
+    "4": 26,
+    "5": 14,
+    "6": 12,
+    "7": 10,
+    "8": 22,
+    "9": 1,
+    "10": 2,
+    "16": 192
+   },
+   "e2e_tok_s": {
+    "median": 187.71650873361602,
+    "min": 184.88693450061078,
+    "max": 238.53629563210623
+   },
+   "repeats": 3,
+   "clean_repeats": 3,
+   "tokens_per_stream": 1024,
+   "one_chunk_per_token": true,
+   "tpot_p50_ms": 0.00400003045797348,
+   "tpot_p99_ms": 49.259624909609556,
+   "ttft_median_s": 0.16274208296090364,
+   "nvml_util_mean": null,
+   "nvml_util_per_card": null,
+   "client_rc": 0
+  },
+  "seconds": 73.3
+ },
+ "in_process": {
+  "metric": "step_us_b1",
+  "value": 13201.249999838183,
+  "path": "generate"
+ },
+ "headline": {
+  "metric": "http_step_us_b1",
+  "value": 8204.84547124755,
+  "lower_is_better": true,
+  "path": "online (submit/poll)",
+  "b8": null,
+  "rate": "tokens",
+  "track": "c",
+  "natural_b1": 5173.306207205347,
+  "natural_b8": null,
+  "tokens_per_event": {
+   "b1": 2.7143803843605037,
+   "natural_b1": 6.69281045751634
+  }
+ },
+ "baselines": {
+  "model": "thinkingmachines/Inkling-2-Mini",
+  "gpu": "Apple M5 Max (40-core GPU, 48 GB)",
+  "hw": "m5max",
+  "track": "c",
+  "provisional": true,
+  "machine": [
+   "Apple M5 Max",
+   "51539607552"
+  ],
+  "calibre": "server end to end over HTTP, client clock (eval/client.py steady through baselines/mac/bench.sh), B=1, greedy, ignore_eos, text prompts; 1 warm-up + 3 repeats per server start, 2 starts per system in turns. b1: synthetic 64-token prompts, 1,024 new tokens, token-based decode rate; b1_natural: eval/natural_prompts.py, same rate; b1_chat: GSM8K through the chat template, 256 new tokens, end-to-end rate (see baselines/mac/summarize.py). Microseconds per token.",
+  "systems": {
+   "llamacpp-q4": {
+    "tok_s": {
+     "natural": 40.0,
+     "synth": 39.8,
+     "chat": 41.1
+    },
+    "tokens_per_chunk": {
+     "natural": 1.0,
+     "synth": 1.0,
+     "chat": 1.04
+    },
+    "per_start_tok_s": {
+     "natural": [
+      39.9,
+      40.0
+     ],
+     "synth": [
+      39.6,
+      40.0
+     ],
+     "chat": [
+      41.1,
+      41.1
+     ]
+    },
+    "starts": {
+     "natural": 2,
+     "synth": 2,
+     "chat": 2
+    },
+    "b1_natural": 25030,
+    "b1": 25130,
+    "ttft_s": {
+     "chat": 0.358
+    },
+    "tokens_per_stream": {
+     "chat": 181.0
+    },
+    "b1_chat": 24352,
+    "short": "llama.cpp master 5bacb7c, Q4_K_M (bartowski, 76d5702)",
+    "general_engine": true,
+    "flags": "llama-server -ngl 999 -fa on -c 8192 --parallel 1 --no-cache-prompt --jinja",
+    "weights": "Q4_K_M GGUF, 18.7 GB: not the checkpoint's formats"
+   },
+   "llamacpp-q4-ds": {
+    "tok_s": {
+     "natural": 61.3,
+     "synth": 48.6,
+     "chat": 80.0
+    },
+    "tokens_per_chunk": {
+     "natural": 1.0,
+     "synth": 1.0,
+     "chat": 1.04
+    },
+    "per_start_tok_s": {
+     "natural": [
+      60.1,
+      62.4
+     ],
+     "synth": [
+      48.0,
+      49.3
+     ],
+     "chat": [
+      80.1,
+      80.0
+     ]
+    },
+    "starts": {
+     "natural": 2,
+     "synth": 2,
+     "chat": 2
+    },
+    "b1_natural": 16323,
+    "b1": 20556,
+    "ttft_s": {
+     "chat": 0.38
+    },
+    "tokens_per_stream": {
+     "chat": 181.0
+    },
+    "b1_chat": 12494,
+    "short": "llama.cpp #32218 (e4b1cb5) + DSpark, Q4_K_M",
+    "general_engine": true,
+    "flags": "as llamacpp-q4 plus -md Inkling-2-Mini-DSpark-bf16.gguf -ngld 999 --spec-type draft-dspark --spec-draft-n-max 7",
+    "draft": "mtp.safetensors of the checkpoint (b85c3cf) converted by #32218: convert_hf_to_gguf.py --dspark --outtype bf16"
+   },
+   "llamacpp-q4-pr": {
+    "tok_s": {
+     "natural": 39.9,
+     "synth": 40.0
+    },
+    "tokens_per_chunk": {
+     "natural": 1.0,
+     "synth": 1.0
+    },
+    "per_start_tok_s": {
+     "natural": [
+      39.9
+     ],
+     "synth": [
+      40.0
+     ]
+    },
+    "starts": {
+     "natural": 1,
+     "synth": 1
+    },
+    "b1_natural": 25082,
+    "b1": 25016,
+    "short": "llama.cpp #32218 (e4b1cb5), Q4_K_M, no draft",
+    "general_engine": true,
+    "note": "check that #32218 leaves plain decode as master (it does: 40.0 tok/s)"
+   },
+   "mlxlm-native": {
+    "tok_s": {
+     "natural": 32.8,
+     "synth": 32.9,
+     "chat": 34.6
+    },
+    "tokens_per_chunk": {
+     "natural": 1.03,
+     "synth": 1.02,
+     "chat": 1.09
+    },
+    "per_start_tok_s": {
+     "natural": [
+      32.8
+     ],
+     "synth": [
+      32.9
+     ],
+     "chat": [
+      34.4,
+      34.8
+     ]
+    },
+    "starts": {
+     "natural": 1,
+     "synth": 1,
+     "chat": 2
+    },
+    "b1_natural": 30486,
+    "b1": 30359,
+    "ttft_s": {
+     "chat": 0.513
+    },
+    "tokens_per_stream": {
+     "chat": 175.0
+    },
+    "b1_chat": 28900,
+    "short": "mlx-lm #2086 (e2b5bbd), the checkpoint as stored (NVFP4/MXFP8/BF16)",
+    "general_engine": true,
+    "flags": "mlx_lm.server --model <checkpoint>",
+    "weights": "the checkpoint's own formats: the like-for-like (track A/C) reference",
+    "note": "no ignore_eos in mlx_lm.server: synth/natural streams may stop early (--allow-short, all streams ran >=64 tokens); one server start for synth and natural (the first start failed on the model name)"
+   },
+   "omlx-oq4e": {
+    "tok_s": {
+     "natural": 59.6,
+     "synth": 59.7,
+     "chat": 60.5
+    },
+    "tokens_per_chunk": {
+     "natural": 7.53,
+     "synth": 7.56,
+     "chat": 7.57
+    },
+    "per_start_tok_s": {
+     "natural": [
+      58.9,
+      60.3
+     ],
+     "synth": [
+      58.9,
+      60.6
+     ],
+     "chat": [
+      60.3,
+      60.7
+     ]
+    },
+    "starts": {
+     "natural": 2,
+     "synth": 2,
+     "chat": 2
+    },
+    "b1_natural": 16779,
+    "b1": 16744,
+    "ttft_s": {
+     "chat": 0.009
+    },
+    "tokens_per_stream": {
+     "chat": 174.0
+    },
+    "b1_chat": 16529,
+    "short": "oMLX v0.8.3, oQ4e (mlx-community/Inkling-2-Mini-oQ4e-mtp, 3eea042)",
+    "general_engine": true,
+    "flags": "omlx serve --max-concurrent-requests 1, mtp_enabled false",
+    "weights": "oQ4e: NVFP4 experts of layers 0-19 as stored, layers 20-23 experts MXFP8 -> affine 4-bit, attention/embeddings affine 8-bit"
+   },
+   "omlx-oq4e-ds": {
+    "tok_s": {
+     "natural": 120.4,
+     "synth": 72.6,
+     "chat": 82.4
+    },
+    "tokens_per_chunk": {
+     "natural": 14.23,
+     "synth": 9.23,
+     "chat": 9.16
+    },
+    "per_start_tok_s": {
+     "natural": [
+      119.0,
+      121.8
+     ],
+     "synth": [
+      71.2,
+      74.1
+     ],
+     "chat": [
+      82.1,
+      82.6
+     ]
+    },
+    "starts": {
+     "natural": 2,
+     "synth": 2,
+     "chat": 2
+    },
+    "b1_natural": 8307,
+    "b1": 13767,
+    "ttft_s": {
+     "chat": 0.011
+    },
+    "tokens_per_stream": {
+     "chat": 174.0
+    },
+    "b1_chat": 12141,
+    "short": "oMLX v0.8.3 + DSpark (Lightning MTP), oQ4e",
+    "general_engine": true,
+    "flags": "as omlx-oq4e with mtp_enabled true (bundled BF16 DSpark draft, block 8, adaptive depth up to 7)",
+    "note": "streams one SSE chunk per ~128 ms (9-15 tokens) without per-chunk counts: the token-based rate spreads each stream's tokens evenly over its chunks"
+   }
+  },
+  "versions": {
+   "macOS": "26.6.2",
+   "mlx": "0.32.4",
+   "llama.cpp_master": "5bacb7c (2026-11-22)",
+   "llama.cpp_pr32218": "e4b1cb5 (2026-11-22)",
+   "omlx": "v0.8.3 (mlx-lm 0.32.3.dev8, mlx-vlm 0.7.11)",
+   "mlx-lm_pr2086": "e2b5bbd",
+   "checkpoint": "thinkingmachines/Inkling-2-Mini b85c3cf"
+  },
+  "notes": [
+   "No general engine here runs the checkpoint's formats with speculation: mlx-lm #2086 has no DSpark; oMLX and llama.cpp speculate on re-quantized weights (oQ4e, Q4_K_M). A track-C engine on the checkpoint's own formats is compared with mlxlm-native (same formats) and with the fastest practical engine (omlx-oq4e-ds).",
+   "Unsloth's Inkling GGUFs (UD-*, dspark-*-Q8_0) do not load in llama.cpp master or #32218 (arch inkling2 with 48 blocks; DSpark head without markov_w2, padded vocabulary).",
+   "Memory bandwidth floor and DSpark acceptance are measured in the starter/evaluator port, not here."
+  ]
+ },
+ "speedup_natural": {
+  "llamacpp-q4": {
+   "b1": 4.838298565265357
+  },
+  "llamacpp-q4-ds": {
+   "b1": 3.1552356164932656
+  },
+  "llamacpp-q4-pr": {
+   "b1": 4.848350164362193
+  },
+  "mlxlm-native": {
+   "b1": 5.892943270502585
+  },
+  "omlx-oq4e": {
+   "b1": 3.2433804085732096
+  },
+  "omlx-oq4e-ds": {
+   "b1": 1.6057429557195095
+  }
+ },
+ "speedup": {
+  "llamacpp-q4": {
+   "b1": 3.062824289386522
+  },
+  "llamacpp-q4-ds": {
+   "b1": 2.505348829790264
+  },
+  "llamacpp-q4-pr": {
+   "b1": 3.0489300606165233
+  },
+  "mlxlm-native": {
+   "b1": 3.7001306248104027
+  },
+  "omlx-oq4e": {
+   "b1": 2.0407453203934707
+  },
+  "omlx-oq4e-ds": {
+   "b1": 1.6779109427769299
+  }
+ },
+ "speedup_calibre": "http_step_us against the baselines' HTTP numbers",
+ "speedup_in_process_diagnostic": {
+  "llamacpp-q4": {
+   "b1": 1.9036076129387776
+  },
+  "llamacpp-q4-ds": {
+   "b1": 1.5571252722470956
+  },
+  "llamacpp-q4-pr": {
+   "b1": 1.8949720670623342
+  },
+  "mlxlm-native": {
+   "b1": 2.299706467218796
+  },
+  "omlx-oq4e": {
+   "b1": 1.2683647382032188
+  },
+  "omlx-oq4e-ds": {
+   "b1": 1.0428557901841684
+  }
+ },
+ "speedup_w1_like": {
+  "llamacpp-q4": {
+   "b1": 1.9275720170242812
+  },
+  "llamacpp-q4-ds": {
+   "b1": 1.5767278305591375
+  },
+  "llamacpp-q4-pr": {
+   "b1": 1.918827758769575
+  },
+  "mlxlm-native": {
+   "b1": 2.328657336444097
+  },
+  "omlx-oq4e": {
+   "b1": 1.284332107164925
+  },
+  "omlx-oq4e-ds": {
+   "b1": 1.055984240285447
+  }
+ },
+ "seconds": 236.3,
+ "message": "valid: 8205 us/step at B=1 over HTTP (online (submit/poll)); in process 13201 us/step at B=1 (generate, MBU 0.731)"
+}
